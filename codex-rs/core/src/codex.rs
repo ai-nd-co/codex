@@ -1382,7 +1382,7 @@ impl Session {
                 )
             })?
         } else {
-            shell::default_user_shell()
+            shell::default_user_shell_with_override(config.shell_path_override.as_ref())
         };
         // Create the mutable state for the Session.
         let shell_snapshot_tx = if config.features.enabled(Feature::ShellSnapshot) {
