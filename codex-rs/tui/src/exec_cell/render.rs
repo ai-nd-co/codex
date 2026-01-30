@@ -24,7 +24,7 @@ use ratatui::style::Stylize;
 use textwrap::WordSplitter;
 use unicode_width::UnicodeWidthStr;
 
-pub(crate) const TOOL_CALL_MAX_LINES: usize = 5;
+pub(crate) const TOOL_CALL_MAX_LINES: usize = 50;
 const USER_SHELL_TOOL_CALL_MAX_LINES: usize = 50;
 const MAX_INTERACTION_PREVIEW_CHARS: usize = 80;
 
@@ -605,7 +605,7 @@ const EXEC_DISPLAY_LAYOUT: ExecDisplayLayout = ExecDisplayLayout::new(
     PrefixedBlock::new("  │ ", "  │ "),
     2,
     PrefixedBlock::new("  └ ", "    "),
-    5,
+    50,
 );
 
 #[cfg(test)]

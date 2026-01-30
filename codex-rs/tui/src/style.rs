@@ -13,7 +13,7 @@ pub fn user_message_style() -> Style {
 pub fn user_message_style_for(terminal_bg: Option<(u8, u8, u8)>) -> Style {
     match terminal_bg {
         Some(bg) => Style::default().bg(user_message_bg(bg)),
-        None => Style::default(),
+        None => Style::default().bg(best_color((32, 32, 32))),
     }
 }
 

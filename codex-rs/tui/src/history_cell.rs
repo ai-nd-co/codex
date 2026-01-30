@@ -266,7 +266,7 @@ impl HistoryCell for UserHistoryCell {
         };
 
         lines.push(Line::from("").style(style));
-        lines.extend(prefix_lines(wrapped, "› ".bold().dim(), "  ".into()));
+        lines.extend(prefix_lines(wrapped, "› ".bold(), "  ".into()));
         lines.push(Line::from("").style(style));
         lines
     }
