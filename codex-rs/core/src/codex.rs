@@ -795,7 +795,8 @@ impl Session {
             config.active_profile.clone(),
         );
 
-        let mut default_shell = shell::default_user_shell();
+        let mut default_shell =
+            shell::default_user_shell_with_override(config.shell_path_override.as_ref());
         // Create the mutable state for the Session.
         if config.features.enabled(Feature::ShellSnapshot) {
             ShellSnapshot::start_snapshotting(

@@ -146,6 +146,8 @@ pub struct Config {
     pub forced_auto_mode_downgraded_on_windows: bool,
 
     pub shell_environment_policy: ShellEnvironmentPolicy,
+    /// Optional override for which shell binary to use (e.g., Git Bash on Windows).
+    pub shell_path_override: Option<PathBuf>,
 
     /// When `true`, `AgentReasoning` events emitted by the backend will be
     /// suppressed from the frontend output. This can reduce visual noise when
@@ -775,6 +777,8 @@ pub struct ConfigToml {
 
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
+    /// Optional override for which shell binary to use.
+    pub shell_path: Option<PathBuf>,
 
     /// Sandbox mode to use.
     pub sandbox_mode: Option<SandboxMode>,
@@ -1168,6 +1172,7 @@ pub struct ConfigOverrides {
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
     pub ephemeral: Option<bool>,
+    pub shell_path: Option<PathBuf>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
 }
@@ -1257,6 +1262,7 @@ impl Config {
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
             ephemeral,
+            shell_path,
             additional_writable_roots,
         } = overrides;
 
@@ -1312,6 +1318,29 @@ impl Config {
                     current
                 }
             }
+        };
+        let shell_path_override = {
+            fn env_path(name: &str) -> Option<PathBuf> {
+                std::env::var(name)
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .map(PathBuf::from)
+            }
+
+            let candidate = shell_path
+                .or_else(|| env_path("CODEX_SHELL_PATH"))
+                .or_else(|| env_path("CODEX_GIT_BASH_PATH"))
+                .or(cfg.shell_path.clone());
+            candidate.map(|path| {
+                if path.is_absolute() {
+                    path
+                } else {
+                    let mut resolved = resolved_cwd.clone();
+                    resolved.push(path);
+                    resolved
+                }
+            })
         };
         let additional_writable_roots: Vec<AbsolutePathBuf> = additional_writable_roots
             .into_iter()
@@ -1507,6 +1536,7 @@ impl Config {
             did_user_set_custom_approval_policy_or_sandbox_mode,
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
+            shell_path_override,
             notify: cfg.notify,
             user_instructions,
             base_instructions,
@@ -3705,6 +3735,7 @@ model_verbosity = "high"
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
                 forced_auto_mode_downgraded_on_windows: false,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
+                shell_path_override: None,
                 user_instructions: None,
                 notify: None,
                 cwd: fixture.cwd(),
@@ -3788,6 +3819,7 @@ model_verbosity = "high"
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
+            shell_path_override: None,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -3886,6 +3918,7 @@ model_verbosity = "high"
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
+            shell_path_override: None,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -3970,6 +4003,7 @@ model_verbosity = "high"
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
+            shell_path_override: None,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),

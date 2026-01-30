@@ -166,7 +166,16 @@ fn get_zsh_shell(path: Option<&PathBuf>) -> Option<Shell> {
 }
 
 fn get_bash_shell(path: Option<&PathBuf>) -> Option<Shell> {
-    let shell_path = get_shell_path(ShellType::Bash, path, "bash", vec!["/bin/bash"]);
+    let mut fallback_paths = vec!["/bin/bash"];
+    if cfg!(windows) {
+        fallback_paths = vec![
+            "C:\\Program Files\\Git\\bin\\bash.exe",
+            "C:\\Program Files\\Git\\usr\\bin\\bash.exe",
+            "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
+            "C:\\Program Files (x86)\\Git\\usr\\bin\\bash.exe",
+        ];
+    }
+    let shell_path = get_shell_path(ShellType::Bash, path, "bash", fallback_paths);
 
     shell_path.map(|shell_path| Shell {
         shell_type: ShellType::Bash,
@@ -270,7 +279,9 @@ pub fn default_user_shell() -> Shell {
 
 fn default_user_shell_from_path(user_shell_path: Option<PathBuf>) -> Shell {
     if cfg!(windows) {
-        get_shell(ShellType::PowerShell, None).unwrap_or(ultimate_fallback_shell())
+        get_shell(ShellType::Bash, None)
+            .or_else(|| get_shell(ShellType::PowerShell, None))
+            .unwrap_or(ultimate_fallback_shell())
     } else {
         let user_default_shell = user_shell_path
             .and_then(|shell| detect_shell_type(&shell))
@@ -288,6 +299,12 @@ fn default_user_shell_from_path(user_shell_path: Option<PathBuf>) -> Shell {
 
         shell_with_fallback.unwrap_or(ultimate_fallback_shell())
     }
+}
+
+pub fn default_user_shell_with_override(shell_path_override: Option<&PathBuf>) -> Shell {
+    shell_path_override
+        .map(get_shell_by_model_provided_path)
+        .unwrap_or_else(default_user_shell)
 }
 
 #[cfg(test)]
@@ -510,7 +527,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn detects_powershell_as_default() {
+    async fn detects_windows_default_shell() {
         if !cfg!(windows) {
             return;
         }
@@ -518,7 +535,11 @@ mod tests {
         let powershell_shell = default_user_shell();
         let shell_path = powershell_shell.shell_path;
 
-        assert!(shell_path.ends_with("pwsh.exe") || shell_path.ends_with("powershell.exe"));
+        assert!(
+            shell_path.ends_with("bash.exe")
+                || shell_path.ends_with("pwsh.exe")
+                || shell_path.ends_with("powershell.exe")
+        );
     }
 
     #[test]
