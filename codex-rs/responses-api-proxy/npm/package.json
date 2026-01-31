@@ -2,6 +2,9 @@
   "name": "@ai-nd-co/codex-responses-api-proxy",
   "version": "0.0.0-dev",
   "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "codex-responses-api-proxy": "bin/codex-responses-api-proxy.js"
   },
