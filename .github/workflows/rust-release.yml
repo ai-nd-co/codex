@@ -363,7 +363,7 @@ jobs:
     uses: ./.github/workflows/shell-tool-mcp.yml
     with:
       release-tag: ${{ needs.tag-check.outputs.release_tag }}
-      publish: true
+      publish: false
     secrets: inherit
 
   release:
