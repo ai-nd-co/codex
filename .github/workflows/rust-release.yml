@@ -87,7 +87,7 @@ jobs:
 
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(vars.ONLY_WINDOWS_X86 == 'true' && '{"include":[{"runner":"windows-latest","target":"x86_64-pc-windows-msvc"}]}' || '{"include":[{"runner":"macos-14","target":"aarch64-apple-darwin"},{"runner":"macos-14","target":"x86_64-apple-darwin"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-musl"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"},{"runner":"ubuntu-24.04-arm","target":"aarch64-unknown-linux-musl"},{"runner":"ubuntu-24.04-arm","target":"aarch64-unknown-linux-gnu"},{"runner":"windows-latest","target":"x86_64-pc-windows-msvc"},{"runner":"windows-11-arm","target":"aarch64-pc-windows-msvc"}]}' ) }}
+      matrix: ${{ fromJson(vars.ONLY_WINDOWS_X86 == 'true' && '{"include":[{"runner":["self-hosted","Windows","X64"],"target":"x86_64-pc-windows-msvc"}]}' || '{"include":[{"runner":"macos-14","target":"aarch64-apple-darwin"},{"runner":"macos-14","target":"x86_64-apple-darwin"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-musl"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"},{"runner":"ubuntu-24.04-arm","target":"aarch64-unknown-linux-musl"},{"runner":"ubuntu-24.04-arm","target":"aarch64-unknown-linux-gnu"},{"runner":"windows-latest","target":"x86_64-pc-windows-msvc"},{"runner":"windows-11-arm","target":"aarch64-pc-windows-msvc"}]}' ) }}
 
     steps:
       - uses: actions/checkout@v6
@@ -381,7 +381,7 @@ jobs:
 
           # On tag pushes, GITHUB_SHA may be a tag object for annotated tags;
           # peel it to the underlying commit.
-          commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          commit="$(git rev-parse "${RELEASE_TAG}^{commit}")"
           notes_path="${RUNNER_TEMP}/release-notes.md"
 
           # Use the commit message for the commit the tag points at (not the
