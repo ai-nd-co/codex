@@ -365,6 +365,7 @@ jobs:
 
   release:
     needs:
+      - tag-check
       - build
       - shell-tool-mcp
     name: release
