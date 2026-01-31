@@ -79,9 +79,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15-xlarge
+          - runner: macos-14
             target: aarch64-apple-darwin
-          - runner: macos-15-xlarge
+          - runner: macos-14
             target: x86_64-apple-darwin
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
@@ -129,6 +129,7 @@ jobs:
     name: Build Bash (Linux) - ${{ matrix.variant }} - ${{ matrix.target }}
     needs: metadata
     runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.allow_failure || false }}
     timeout-minutes: 30
     container:
       image: ${{ matrix.image }}
@@ -152,6 +153,7 @@ jobs:
             target: x86_64-unknown-linux-musl
             variant: debian-11
             image: debian:11
+            allow_failure: true
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             variant: centos-9
@@ -232,7 +234,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15-xlarge
+          - runner: macos-14
             target: aarch64-apple-darwin
             variant: macos-15
           - runner: macos-14

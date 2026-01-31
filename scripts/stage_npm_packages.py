@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 BUILD_SCRIPT = REPO_ROOT / "codex-cli" / "scripts" / "build_npm_package.py"
 INSTALL_NATIVE_DEPS = REPO_ROOT / "codex-cli" / "scripts" / "install_native_deps.py"
 WORKFLOW_NAME = ".github/workflows/rust-release.yml"
-GITHUB_REPO = "openai/codex"
+GITHUB_REPO = "ai-nd-co/codex"
 
 _SPEC = importlib.util.spec_from_file_location("codex_build_npm_package", BUILD_SCRIPT)
 if _SPEC is None or _SPEC.loader is None:
@@ -41,6 +41,15 @@ def parse_args() -> argparse.Namespace:
         action="append",
         required=True,
         help="Package name to stage. May be provided multiple times.",
+    )
+    parser.add_argument(
+        "--target",
+        dest="targets",
+        action="append",
+        help=(
+            "Limit native binaries to specific target triples (repeatable). "
+            "Defaults to all supported targets."
+        ),
     )
     parser.add_argument(
         "--workflow-url",
@@ -104,13 +113,23 @@ def install_native_components(
     workflow_url: str,
     components: set[str],
     vendor_root: Path,
+    targets: list[str] | None,
 ) -> None:
     if not components:
         return
 
-    cmd = [str(INSTALL_NATIVE_DEPS), "--workflow-url", workflow_url]
+    cmd = [
+        str(INSTALL_NATIVE_DEPS),
+        "--workflow-url",
+        workflow_url,
+        "--repo",
+        GITHUB_REPO,
+    ]
     for component in sorted(components):
         cmd.extend(["--component", component])
+    if targets:
+        for target in targets:
+            cmd.extend(["--target", target])
     cmd.append(str(vendor_root))
     run_command(cmd)
 
@@ -130,6 +149,7 @@ def main() -> int:
 
     packages = list(args.packages)
     native_components = collect_native_components(packages)
+    targets = args.targets
 
     vendor_temp_root: Path | None = None
     vendor_src: Path | None = None
@@ -143,7 +163,7 @@ def main() -> int:
                 args.release_version, args.workflow_url
             )
             vendor_temp_root = Path(tempfile.mkdtemp(prefix="npm-native-", dir=runner_temp))
-            install_native_components(workflow_url, native_components, vendor_temp_root)
+            install_native_components(workflow_url, native_components, vendor_temp_root, targets)
             vendor_src = vendor_temp_root / "vendor"
 
         if resolved_head_sha:

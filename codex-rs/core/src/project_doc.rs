@@ -27,6 +27,10 @@ pub(crate) const HIERARCHICAL_AGENTS_MESSAGE: &str =
 
 /// Default filename scanned for project-level docs.
 pub const DEFAULT_PROJECT_DOC_FILENAME: &str = "AGENTS.md";
+/// Fallback project doc filename used by cloud-style agents.
+pub const CLOUD_PROJECT_DOC_FILENAME: &str = "CODE.md";
+/// Alternate cloud-style doc filename.
+pub const CLOUD_PROJECT_DOC_FILENAME_ALT: &str = "CLAUDE.md";
 /// Preferred local override for project-level docs.
 pub const LOCAL_PROJECT_DOC_FILENAME: &str = "AGENTS.override.md";
 
@@ -217,9 +221,11 @@ pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBu
 
 fn candidate_filenames<'a>(config: &'a Config) -> Vec<&'a str> {
     let mut names: Vec<&'a str> =
-        Vec::with_capacity(2 + config.project_doc_fallback_filenames.len());
+        Vec::with_capacity(4 + config.project_doc_fallback_filenames.len());
     names.push(LOCAL_PROJECT_DOC_FILENAME);
     names.push(DEFAULT_PROJECT_DOC_FILENAME);
+    names.push(CLOUD_PROJECT_DOC_FILENAME);
+    names.push(CLOUD_PROJECT_DOC_FILENAME_ALT);
     for candidate in &config.project_doc_fallback_filenames {
         let candidate = candidate.as_str();
         if candidate.is_empty() {
@@ -462,6 +468,38 @@ mod tests {
             .expect("fallback doc expected");
 
         assert_eq!(res, "example instructions");
+    }
+
+    #[tokio::test]
+    async fn uses_code_md_when_agents_missing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join(CLOUD_PROJECT_DOC_FILENAME), "cloud doc").unwrap();
+
+        let cfg = make_config(&tmp, 4096, None).await;
+
+        let res = get_user_instructions(&cfg, None)
+            .await
+            .expect("cloud doc expected");
+
+        assert_eq!(res, "cloud doc");
+    }
+
+    #[tokio::test]
+    async fn uses_claude_md_when_agents_missing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            tmp.path().join(CLOUD_PROJECT_DOC_FILENAME_ALT),
+            "claude doc",
+        )
+        .unwrap();
+
+        let cfg = make_config(&tmp, 4096, None).await;
+
+        let res = get_user_instructions(&cfg, None)
+            .await
+            .expect("claude doc expected");
+
+        assert_eq!(res, "claude doc");
     }
 
     /// AGENTS.md remains preferred when both AGENTS.md and fallbacks are present.

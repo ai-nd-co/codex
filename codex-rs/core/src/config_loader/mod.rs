@@ -79,8 +79,8 @@ const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
 /// - system    `/etc/codex/config.toml`
 /// - user      `${CODEX_HOME}/config.toml`
 /// - cwd       `${PWD}/config.toml` (loaded but disabled when the directory is untrusted)
-/// - tree      parent directories up to root looking for `./.codex/config.toml` (loaded but disabled when untrusted)
-/// - repo      `$(git rev-parse --show-toplevel)/.codex/config.toml` (loaded but disabled when untrusted)
+    /// - tree      parent directories up to root looking for `./.codex/config.toml` or `./.claude/config.toml` (loaded but disabled when untrusted)
+    /// - repo      `$(git rev-parse --show-toplevel)/.codex/config.toml` or `./.claude/config.toml` (loaded but disabled when untrusted)
 /// - runtime   e.g., --config flags, model selector in UI
 ///
 /// (*) Only available on macOS via managed device profiles.
@@ -678,67 +678,69 @@ async fn load_project_layers(
 
     let mut layers = Vec::new();
     for dir in dirs {
-        let dot_codex = dir.join(".codex");
-        if !tokio::fs::metadata(&dot_codex)
-            .await
-            .map(|meta| meta.is_dir())
-            .unwrap_or(false)
-        {
-            continue;
-        }
+        let dot_folders = [dir.join(".claude"), dir.join(".codex")];
+        for dot_folder in dot_folders {
+            if !tokio::fs::metadata(&dot_folder)
+                .await
+                .map(|meta| meta.is_dir())
+                .unwrap_or(false)
+            {
+                continue;
+            }
 
-        let layer_dir = AbsolutePathBuf::from_absolute_path(dir)?;
-        let decision = trust_context.decision_for_dir(&layer_dir);
-        let dot_codex_abs = AbsolutePathBuf::from_absolute_path(&dot_codex)?;
-        let config_file = dot_codex_abs.join(CONFIG_TOML_FILE)?;
-        match tokio::fs::read_to_string(&config_file).await {
-            Ok(contents) => {
-                let config: TomlValue = match toml::from_str(&contents) {
-                    Ok(config) => config,
-                    Err(e) => {
-                        if decision.is_trusted() {
-                            let config_file_display = config_file.as_path().display();
-                            return Err(io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                format!(
-                                    "Error parsing project config file {config_file_display}: {e}"
-                                ),
+            let layer_dir = AbsolutePathBuf::from_absolute_path(dir)?;
+            let decision = trust_context.decision_for_dir(&layer_dir);
+            let dot_codex_abs = AbsolutePathBuf::from_absolute_path(&dot_folder)?;
+            let config_file = dot_codex_abs.join(CONFIG_TOML_FILE)?;
+            match tokio::fs::read_to_string(&config_file).await {
+                Ok(contents) => {
+                    let config: TomlValue = match toml::from_str(&contents) {
+                        Ok(config) => config,
+                        Err(e) => {
+                            if decision.is_trusted() {
+                                let config_file_display = config_file.as_path().display();
+                                return Err(io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    format!(
+                                        "Error parsing project config file {config_file_display}: {e}"
+                                    ),
+                                ));
+                            }
+                            layers.push(project_layer_entry(
+                                trust_context,
+                                &dot_codex_abs,
+                                &layer_dir,
+                                TomlValue::Table(toml::map::Map::new()),
+                                true,
                             ));
+                            continue;
                         }
+                    };
+                    let config =
+                        resolve_relative_paths_in_config_toml(config, dot_codex_abs.as_path())?;
+                    let entry =
+                        project_layer_entry(trust_context, &dot_codex_abs, &layer_dir, config, true);
+                    layers.push(entry);
+                }
+                Err(err) => {
+                    if err.kind() == io::ErrorKind::NotFound {
+                        // If there is no config.toml file, record an empty entry
+                        // for this project layer, as this may still have subfolders
+                        // that are significant in the overall ConfigLayerStack.
                         layers.push(project_layer_entry(
                             trust_context,
                             &dot_codex_abs,
                             &layer_dir,
                             TomlValue::Table(toml::map::Map::new()),
-                            true,
+                            false,
                         ));
-                        continue;
+                    } else {
+                        let config_file_display = config_file.as_path().display();
+                        return Err(io::Error::new(
+                            err.kind(),
+                            format!("Failed to read project config file {config_file_display}: {err}"),
+                        ));
                     }
-                };
-                let config =
-                    resolve_relative_paths_in_config_toml(config, dot_codex_abs.as_path())?;
-                let entry =
-                    project_layer_entry(trust_context, &dot_codex_abs, &layer_dir, config, true);
-                layers.push(entry);
-            }
-            Err(err) => {
-                if err.kind() == io::ErrorKind::NotFound {
-                    // If there is no config.toml file, record an empty entry
-                    // for this project layer, as this may still have subfolders
-                    // that are significant in the overall ConfigLayerStack.
-                    layers.push(project_layer_entry(
-                        trust_context,
-                        &dot_codex_abs,
-                        &layer_dir,
-                        TomlValue::Table(toml::map::Map::new()),
-                        false,
-                    ));
-                } else {
-                    let config_file_display = config_file.as_path().display();
-                    return Err(io::Error::new(
-                        err.kind(),
-                        format!("Failed to read project config file {config_file_display}: {err}"),
-                    ));
                 }
             }
         }
