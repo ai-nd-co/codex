@@ -15,8 +15,6 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    outputs:
-      release_tag: ${{ steps.release_tag.outputs.tag }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -45,20 +43,3 @@ jobs:
             -p @semantic-release/git \
             -p conventional-changelog-conventionalcommits \
             semantic-release
-
-      - name: Capture release tag
-        id: release_tag
-        shell: bash
-        run: |
-          if [[ -f .release_tag ]]; then
-            tag="$(cat .release_tag)"
-            echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          fi
-
-  rust-release:
-    needs: release
-    if: ${{ needs.release.outputs.release_tag != '' }}
-    uses: ./.github/workflows/rust-release.yml
-    with:
-      tag: ${{ needs.release.outputs.release_tag }}
-    secrets: inherit

@@ -5,7 +5,7 @@ module.exports = {
     ["@semantic-release/commit-analyzer", { preset: "conventionalcommits" }],
     ["@semantic-release/release-notes-generator", { preset: "conventionalcommits" }],
     ["@semantic-release/exec", {
-      prepareCmd: "python3 scripts/bump_rust_version.py ${nextRelease.version} && echo ${nextRelease.gitTag} > .release_tag",
+      prepareCmd: "python3 scripts/bump_rust_version.py ${nextRelease.version}",
     }],
     ["@semantic-release/git", {
       assets: ["codex-rs/Cargo.toml"],
