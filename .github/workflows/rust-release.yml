@@ -15,9 +15,15 @@ on:
       tag:
         description: "Release tag (e.g. rust-v1.2.3)"
         required: true
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag (e.g. rust-v1.2.3)"
+        required: true
+        type: string
 
 env:
-  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.event_name == 'workflow_call' && inputs.tag || github.ref_name }}
 
 concurrency:
   group: ${{ github.workflow }}
@@ -39,7 +45,7 @@ jobs:
           echo "::group::Tag validation"
 
           tag_name="${RELEASE_TAG}"
-          if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
+          if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" && "${GITHUB_EVENT_NAME}" != "workflow_call" ]]; then
             # 1. Must be a tag and match the regex
             [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
               || { echo "❌  Not a tag push"; exit 1; }
