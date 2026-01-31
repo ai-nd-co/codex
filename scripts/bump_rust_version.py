@@ -24,7 +24,7 @@ def main() -> int:
         print(f"version field not found in {cargo_toml}", file=sys.stderr)
         return 1
 
-    updated = pattern.sub(rf'\1{version}\2', text, count=1)
+    updated = pattern.sub(lambda match: f"{match.group(1)}{version}{match.group(2)}", text, count=1)
     cargo_toml.write_text(updated, encoding="utf-8")
     print(f"Updated {cargo_toml} to version {version}")
     return 0
