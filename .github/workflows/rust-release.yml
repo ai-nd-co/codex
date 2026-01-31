@@ -26,6 +26,8 @@ concurrency:
 jobs:
   tag-check:
     runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ env.RELEASE_TAG }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -354,7 +356,7 @@ jobs:
     needs: tag-check
     uses: ./.github/workflows/shell-tool-mcp.yml
     with:
-      release-tag: ${{ env.RELEASE_TAG }}
+      release-tag: ${{ needs.tag-check.outputs.release_tag }}
       publish: true
     secrets: inherit
 
@@ -369,7 +371,7 @@ jobs:
       actions: read
     outputs:
       version: ${{ steps.release_name.outputs.name }}
-      tag: ${{ env.RELEASE_TAG }}
+      tag: ${{ needs.tag-check.outputs.release_tag }}
       should_publish_npm: ${{ steps.npm_publish_settings.outputs.should_publish }}
       npm_tag: ${{ steps.npm_publish_settings.outputs.npm_tag }}
 
