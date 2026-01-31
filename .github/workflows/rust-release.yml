@@ -10,6 +10,14 @@ on:
   push:
     tags:
       - "rust-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. rust-v1.2.3)"
+        required: true
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
 
 concurrency:
   group: ${{ github.workflow }}
@@ -20,6 +28,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - uses: dtolnay/rust-toolchain@1.92
 
       - name: Validate tag matches Cargo.toml version
@@ -28,14 +38,17 @@ jobs:
           set -euo pipefail
           echo "::group::Tag validation"
 
-          # 1. Must be a tag and match the regex
-          [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
-            || { echo "❌  Not a tag push"; exit 1; }
-          [[ "${GITHUB_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]] \
-            || { echo "❌  Tag '${GITHUB_REF_NAME}' doesn't match expected format"; exit 1; }
+          tag_name="${RELEASE_TAG}"
+          if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
+            # 1. Must be a tag and match the regex
+            [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
+              || { echo "❌  Not a tag push"; exit 1; }
+          fi
+          [[ "${tag_name}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]] \
+            || { echo "❌  Tag '${tag_name}' doesn't match expected format"; exit 1; }
 
           # 2. Extract versions
-          tag_ver="${GITHUB_REF_NAME#rust-v}"
+          tag_ver="${tag_name#rust-v}"
           cargo_ver="$(grep -m1 '^version' codex-rs/Cargo.toml \
                         | sed -E 's/version *= *"([^"]+)".*/\1/')"
 
@@ -90,6 +103,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - uses: dtolnay/rust-toolchain@1.92
         with:
           targets: ${{ matrix.target }}
@@ -339,7 +354,7 @@ jobs:
     needs: tag-check
     uses: ./.github/workflows/shell-tool-mcp.yml
     with:
-      release-tag: ${{ github.ref_name }}
+      release-tag: ${{ env.RELEASE_TAG }}
       publish: true
     secrets: inherit
 
@@ -354,13 +369,15 @@ jobs:
       actions: read
     outputs:
       version: ${{ steps.release_name.outputs.name }}
-      tag: ${{ github.ref_name }}
+      tag: ${{ env.RELEASE_TAG }}
       should_publish_npm: ${{ steps.npm_publish_settings.outputs.should_publish }}
       npm_tag: ${{ steps.npm_publish_settings.outputs.npm_tag }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Generate release notes from tag commit message
         id: release_notes
@@ -406,7 +423,7 @@ jobs:
         run: |
           # Extract the version from the tag name, which is in the format
           # "rust-v0.1.0".
-          version="${GITHUB_REF_NAME#rust-v}"
+          version="${RELEASE_TAG#rust-v}"
           echo "name=${version}" >> $GITHUB_OUTPUT
 
       - name: Determine npm publish settings
@@ -457,7 +474,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ steps.release_name.outputs.name }}
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ env.RELEASE_TAG }}
           body_path: ${{ steps.release_notes.outputs.path }}
           files: dist/**
           # Mark as prerelease only when the version has a suffix after x.y.z
@@ -468,7 +485,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag: ${{ github.ref_name }}
+          tag: ${{ env.RELEASE_TAG }}
           config: .github/dotslash-config.json
 
       - name: Trigger developers.openai.com deploy
@@ -480,7 +497,7 @@ jobs:
           DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL: ${{ secrets.DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL }}
         run: |
           if ! curl -sS -f -o /dev/null -X POST "$DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL"; then
-            echo "::warning title=developers.openai.com deploy hook failed::Vercel deploy hook POST failed for ${GITHUB_REF_NAME}"
+            echo "::warning title=developers.openai.com deploy hook failed::Vercel deploy hook POST failed for ${RELEASE_TAG}"
             exit 1
           fi
 
