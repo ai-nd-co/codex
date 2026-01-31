@@ -89,22 +89,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14
-            target: aarch64-apple-darwin
-          - runner: macos-14
-            target: x86_64-apple-darwin
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-musl
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-          - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-musl
-          - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
-          - runner: windows-11-arm
-            target: aarch64-pc-windows-msvc
 
     steps:
       - uses: actions/checkout@v6
@@ -357,6 +343,7 @@ jobs:
   shell-tool-mcp:
     name: shell-tool-mcp
     needs: tag-check
+    if: ${{ vars.ONLY_WINDOWS_X86 != 'true' }}
     permissions:
       contents: read
       id-token: write
@@ -370,7 +357,6 @@ jobs:
     needs:
       - tag-check
       - build
-      - shell-tool-mcp
     name: release
     runs-on: ubuntu-latest
     permissions:
@@ -457,21 +443,26 @@ jobs:
           fi
 
       - name: Setup pnpm
+        if: ${{ vars.ONLY_WINDOWS_X86 != 'true' }}
         uses: pnpm/action-setup@v4
         with:
           run_install: false
 
       - name: Setup Node.js for npm packaging
+        if: ${{ vars.ONLY_WINDOWS_X86 != 'true' }}
         uses: actions/setup-node@v6
         with:
           node-version: 22
 
       - name: Install dependencies
+        if: ${{ vars.ONLY_WINDOWS_X86 != 'true' }}
         run: pnpm install --frozen-lockfile
 
       # stage_npm_packages.py requires DotSlash when staging releases.
-      - uses: facebook/install-dotslash@v2
+      - if: ${{ vars.ONLY_WINDOWS_X86 != 'true' }}
+        uses: facebook/install-dotslash@v2
       - name: Stage npm packages
+        if: ${{ vars.ONLY_WINDOWS_X86 != 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -517,7 +508,7 @@ jobs:
   # npm docs: https://docs.npmjs.com/trusted-publishers
   publish-npm:
     # Publish to npm for stable releases and alpha pre-releases with numeric suffixes.
-    if: ${{ needs.release.outputs.should_publish_npm == 'true' }}
+    if: ${{ vars.ONLY_WINDOWS_X86 != 'true' && needs.release.outputs.should_publish_npm == 'true' }}
     name: publish-npm
     needs: release
     runs-on: ubuntu-latest
