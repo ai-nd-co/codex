@@ -3029,19 +3029,38 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
 }
 
 #[tokio::test]
+#[cfg_attr(target_os = "windows", serial)]
 async fn approvals_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    chat.config.notices.hide_full_access_warning = None;
-    chat.open_approvals_popup();
-
-    let popup = render_bottom_popup(&chat, 80);
     #[cfg(target_os = "windows")]
-    insta::with_settings!({ snapshot_suffix => "windows" }, {
-        assert_snapshot!("approvals_selection_popup", popup);
-    });
+    {
+        let was_sandbox_enabled = codex_core::get_platform_sandbox().is_some();
+        let was_elevated_enabled = codex_core::is_windows_elevated_sandbox_enabled();
+
+        set_windows_sandbox_enabled(false);
+        set_windows_elevated_sandbox_enabled(false);
+
+        chat.config.notices.hide_full_access_warning = None;
+        chat.open_approvals_popup();
+
+        let popup = render_bottom_popup(&chat, 80);
+        insta::with_settings!({ snapshot_suffix => "windows" }, {
+            assert_snapshot!("approvals_selection_popup", popup);
+        });
+
+        set_windows_sandbox_enabled(was_sandbox_enabled);
+        set_windows_elevated_sandbox_enabled(was_elevated_enabled);
+        return;
+    }
     #[cfg(not(target_os = "windows"))]
-    assert_snapshot!("approvals_selection_popup", popup);
+    {
+        chat.config.notices.hide_full_access_warning = None;
+        chat.open_approvals_popup();
+
+        let popup = render_bottom_popup(&chat, 80);
+        assert_snapshot!("approvals_selection_popup", popup);
+    }
 }
 
 #[cfg(target_os = "windows")]

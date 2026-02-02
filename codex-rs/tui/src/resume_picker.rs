@@ -20,6 +20,8 @@ use crossterm::event::KeyEventKind;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
+use ratatui::style::Style;
 use ratatui::style::Stylize as _;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -157,7 +159,7 @@ async fn run_session_picker(
                 &request.codex_home,
                 PAGE_SIZE,
                 request.cursor.as_ref(),
-                ThreadSortKey::CreatedAt,
+                ThreadSortKey::UpdatedAt,
                 INTERACTIVE_SESSION_SOURCES,
                 Some(provider_filter.as_slice()),
                 request.default_provider.as_str(),
@@ -928,7 +930,25 @@ fn render_list(
         }
         spans.push(preview.into());
 
-        let line: Line = spans.into();
+        let mut line: Line = spans.into();
+        if is_sel {
+            let highlight = Style::default().add_modifier(Modifier::REVERSED);
+            line.spans = line
+                .spans
+                .into_iter()
+                .map(|span| span.patch_style(highlight))
+                .collect();
+            let line_width = line
+                .spans
+                .iter()
+                .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+                .sum::<usize>();
+            let target_width = area.width as usize;
+            if line_width < target_width {
+                line.spans
+                    .push(Span::from(" ".repeat(target_width - line_width)).patch_style(highlight));
+            }
+        }
         let rect = Rect::new(area.x, y, area.width, 1);
         frame.render_widget_ref(line, rect);
         y = y.saturating_add(1);
@@ -1423,7 +1443,7 @@ mod tests {
             &state.codex_home,
             PAGE_SIZE,
             None,
-            ThreadSortKey::CreatedAt,
+            ThreadSortKey::UpdatedAt,
             INTERACTIVE_SESSION_SOURCES,
             Some(&[String::from("openai")]),
             "openai",

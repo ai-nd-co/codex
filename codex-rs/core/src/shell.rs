@@ -121,6 +121,17 @@ fn file_exists(path: &PathBuf) -> Option<PathBuf> {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn is_wsl_bash_path(path: &PathBuf) -> bool {
+    let normalized = path
+        .to_string_lossy()
+        .to_lowercase()
+        .replace('/', "\\");
+    normalized.ends_with("\\windows\\system32\\bash.exe")
+        || normalized.ends_with("\\windows\\sysnative\\bash.exe")
+        || normalized.ends_with("\\windows\\syswow64\\bash.exe")
+}
+
 fn get_shell_path(
     shell_type: ShellType,
     provided_path: Option<&PathBuf>,
@@ -165,17 +176,45 @@ fn get_zsh_shell(path: Option<&PathBuf>) -> Option<Shell> {
     })
 }
 
+#[cfg(target_os = "windows")]
 fn get_bash_shell(path: Option<&PathBuf>) -> Option<Shell> {
-    let mut fallback_paths = vec!["/bin/bash"];
-    if cfg!(windows) {
-        fallback_paths = vec![
-            "C:\\Program Files\\Git\\bin\\bash.exe",
-            "C:\\Program Files\\Git\\usr\\bin\\bash.exe",
-            "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
-            "C:\\Program Files (x86)\\Git\\usr\\bin\\bash.exe",
-        ];
+    fn make_shell(shell_path: PathBuf) -> Shell {
+        Shell {
+            shell_type: ShellType::Bash,
+            shell_path,
+            shell_snapshot: empty_shell_snapshot_receiver(),
+        }
     }
-    let shell_path = get_shell_path(ShellType::Bash, path, "bash", fallback_paths);
+
+    if let Some(path) = path.and_then(file_exists) {
+        return Some(make_shell(path));
+    }
+
+    // Prefer Git Bash installs over the WSL shim.
+    let fallback_paths = vec![
+        "C:\\Program Files\\Git\\bin\\bash.exe",
+        "C:\\Program Files\\Git\\usr\\bin\\bash.exe",
+        "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
+        "C:\\Program Files (x86)\\Git\\usr\\bin\\bash.exe",
+    ];
+    for candidate in fallback_paths {
+        if let Some(path) = file_exists(&PathBuf::from(candidate)) {
+            return Some(make_shell(path));
+        }
+    }
+
+    if let Ok(path) = which::which("bash") {
+        if !is_wsl_bash_path(&path) {
+            return Some(make_shell(path));
+        }
+    }
+
+    None
+}
+
+#[cfg(not(target_os = "windows"))]
+fn get_bash_shell(path: Option<&PathBuf>) -> Option<Shell> {
+    let shell_path = get_shell_path(ShellType::Bash, path, "bash", vec!["/bin/bash"]);
 
     shell_path.map(|shell_path| Shell {
         shell_type: ShellType::Bash,

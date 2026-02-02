@@ -13,6 +13,19 @@ If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="http
 
 ### Installing and running Codex CLI
 
+#### ai-nd-co fork notes (this repo)
+
+- Windows prefers **Git Bash** and skips the WSL `bash.exe` shim by default.
+- Packages from this fork are published under the **@ai-nd-co** scope.
+
+Install from this fork with:
+
+```shell
+npm install -g @ai-nd-co/codex
+```
+
+See [Git Bash on Windows](./docs/windows-git-bash-shell.md) for details.
+
 Install globally with your preferred package manager:
 
 ```shell
