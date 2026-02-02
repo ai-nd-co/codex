@@ -19,8 +19,8 @@ jobs:
   tag-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.92
+      - uses: ai-nd-co/checkout@v6
+      - uses: ai-nd-co/rust-toolchain@1.92
       - name: Validate tag matches Cargo.toml version
         shell: bash
         run: |
@@ -78,7 +78,7 @@ jobs:
             target: x86_64-pc-windows-msvc
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: ai-nd-co/checkout@v6
       - name: Install UBSan runtime (musl)
         if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
         shell: bash
@@ -88,7 +88,7 @@ jobs:
             sudo apt-get update -y
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libubsan1
           fi
-      - uses: dtolnay/rust-toolchain@1.93
+      - uses: ai-nd-co/rust-toolchain@1.93
         with:
           targets: ${{ matrix.target }}
 
@@ -103,7 +103,7 @@ jobs:
           echo "${cargo_home}/bin" >> "$GITHUB_PATH"
           : > "${cargo_home}/config.toml"
 
-      - uses: actions/cache@v5
+      - uses: ai-nd-co/cache@v5
         with:
           path: |
             ~/.cargo/bin/
@@ -119,7 +119,7 @@ jobs:
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install Zig
-        uses: mlugg/setup-zig@v2
+        uses: ai-nd-co/setup-zig@v2
         with:
           version: 0.14.0
 
@@ -392,7 +392,7 @@ jobs:
             zstd "${zstd_args[@]}" "$dest/$base"
           done
 
-      - uses: actions/upload-artifact@v6
+      - uses: ai-nd-co/upload-artifact@v6
         with:
           name: ${{ matrix.target }}
           # Upload the per-binary .zst files as well as the new .tar.gz
@@ -426,7 +426,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: ai-nd-co/checkout@v6
 
       - name: Generate release notes from tag commit message
         id: release_notes
@@ -448,7 +448,7 @@ jobs:
 
           echo "path=${notes_path}" >> "${GITHUB_OUTPUT}"
 
-      - uses: actions/download-artifact@v7
+      - uses: ai-nd-co/download-artifact@v7
         with:
           path: dist
 
@@ -495,12 +495,12 @@ jobs:
           fi
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: ai-nd-co/action-setup@v4
         with:
           run_install: false
 
       - name: Setup Node.js for npm packaging
-        uses: actions/setup-node@v6
+        uses: ai-nd-co/setup-node@v6
         with:
           node-version: 22
 
@@ -508,7 +508,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # stage_npm_packages.py requires DotSlash when staging releases.
-      - uses: facebook/install-dotslash@v2
+      - uses: ai-nd-co/install-dotslash@v2
       - name: Stage npm packages
         env:
           GH_TOKEN: ${{ github.token }}
@@ -520,7 +520,7 @@ jobs:
             --package codex-sdk
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: ai-nd-co/action-gh-release@v2
         with:
           name: ${{ steps.release_name.outputs.name }}
           tag_name: ${{ github.ref_name }}
@@ -530,7 +530,7 @@ jobs:
           # (e.g. -alpha, -beta). Otherwise publish a normal release.
           prerelease: ${{ contains(steps.release_name.outputs.name, '-') }}
 
-      - uses: facebook/dotslash-publish-release@v2
+      - uses: ai-nd-co/dotslash-publish-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -565,7 +565,7 @@ jobs:
 
     steps:
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: ai-nd-co/setup-node@v6
         with:
           node-version: 22
           registry-url: "https://registry.npmjs.org"

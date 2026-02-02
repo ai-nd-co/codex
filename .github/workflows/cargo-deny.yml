@@ -14,13 +14,13 @@ jobs:
         working-directory: ./codex-rs
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: ai-nd-co/checkout@v6
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: ai-nd-co/rust-toolchain@stable
 
       - name: Run cargo-deny
-        uses: EmbarkStudios/cargo-deny-action@v2
+        uses: ai-nd-co/cargo-deny-action@v2
         with:
           rust-version: stable
           manifest-path: ./codex-rs/Cargo.toml

@@ -17,7 +17,7 @@ jobs:
     outputs:
       codex_output: ${{ steps.codex.outputs.final-message }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: ai-nd-co/checkout@v6
 
       - name: Prepare Codex inputs
         env:
@@ -43,7 +43,7 @@ jobs:
             > "$CURRENT_ISSUE_FILE"
 
       - id: codex
-        uses: openai/codex-action@main
+        uses: ai-nd-co/codex-action@main
         with:
           openai-api-key: ${{ secrets.CODEX_OPENAI_API_KEY }}
           allow-users: "*"
@@ -87,7 +87,7 @@ jobs:
       issues: write
     steps:
       - name: Comment on issue
-        uses: actions/github-script@v8
+        uses: ai-nd-co/github-script@v8
         env:
           CODEX_OUTPUT: ${{ needs.gather-duplicates.outputs.codex_output }}
         with:

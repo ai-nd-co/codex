@@ -45,12 +45,12 @@ jobs:
     name: Local Bazel build on ${{ matrix.os }} for ${{ matrix.target }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: ai-nd-co/checkout@v6
 
       # Some integration tests rely on DotSlash being installed.
       # See https://github.com/openai/codex/pull/7617.
       - name: Install DotSlash
-        uses: facebook/install-dotslash@v2
+        uses: ai-nd-co/install-dotslash@v2
 
       - name: Make DotSlash available in PATH (Unix)
         if: runner.os != 'Windows'
@@ -63,7 +63,7 @@ jobs:
 
       # Install Bazel via Bazelisk
       - name: Set up Bazel
-        uses: bazelbuild/setup-bazelisk@v3
+        uses: ai-nd-co/setup-bazelisk@v3
 
       # TODO(mbolin): Bring this back once we have caching working. Currently,
       # we never seem to get a cache hit but we still end up paying the cost of
@@ -81,7 +81,7 @@ jobs:
       # previously built artifacts to minimize build time. The more precise you are with
       # hashFiles sources the less work bazel will have to do.
       # - name: Mount bazel caches
-      #   uses: actions/cache@v5
+      #   uses: ai-nd-co/cache@v5
       #   with:
       #     path: |
       #       ~/.cache/bazel-repo-cache

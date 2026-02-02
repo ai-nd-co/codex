@@ -91,15 +91,15 @@ jobs:
             install_musl: true
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: ai-nd-co/checkout@v6
 
-      - uses: dtolnay/rust-toolchain@1.92
+      - uses: ai-nd-co/rust-toolchain@1.92
         with:
           targets: ${{ matrix.target }}
 
       - if: ${{ matrix.install_musl }}
         name: Install Zig
-        uses: mlugg/setup-zig@v2
+        uses: ai-nd-co/setup-zig@v2
         with:
           version: 0.14.0
 
@@ -119,7 +119,7 @@ jobs:
           cp "target/${{ matrix.target }}/release/codex-exec-mcp-server" "$dest/"
           cp "target/${{ matrix.target }}/release/codex-execve-wrapper" "$dest/"
 
-      - uses: actions/upload-artifact@v6
+      - uses: ai-nd-co/upload-artifact@v6
         with:
           name: shell-tool-mcp-rust-${{ matrix.target }}
           path: artifacts/**
@@ -200,7 +200,7 @@ jobs:
           fi
 
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: ai-nd-co/checkout@v6
 
       - name: Build patched Bash
         shell: bash
@@ -219,7 +219,7 @@ jobs:
           mkdir -p "$dest"
           cp bash "$dest/bash"
 
-      - uses: actions/upload-artifact@v6
+      - uses: ai-nd-co/upload-artifact@v6
         with:
           name: shell-tool-mcp-bash-${{ matrix.target }}-${{ matrix.variant }}
           path: artifacts/**
@@ -242,7 +242,7 @@ jobs:
             variant: macos-14
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: ai-nd-co/checkout@v6
 
       - name: Build patched Bash
         shell: bash
@@ -261,7 +261,7 @@ jobs:
           mkdir -p "$dest"
           cp bash "$dest/bash"
 
-      - uses: actions/upload-artifact@v6
+      - uses: ai-nd-co/upload-artifact@v6
         with:
           name: shell-tool-mcp-bash-${{ matrix.target }}-${{ matrix.variant }}
           path: artifacts/**
@@ -279,16 +279,16 @@ jobs:
       PACKAGE_VERSION: ${{ needs.metadata.outputs.version }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: ai-nd-co/checkout@v6
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: ai-nd-co/action-setup@v4
         with:
           version: 10.8.1
           run_install: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: ai-nd-co/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -299,7 +299,7 @@ jobs:
         run: pnpm --filter @ai-nd-co/codex-shell-tool-mcp run build
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v7
+        uses: ai-nd-co/download-artifact@v7
         with:
           path: artifacts
 
@@ -360,7 +360,7 @@ jobs:
           filename=$(PACK_INFO="$pack_info" node -e 'const data = JSON.parse(process.env.PACK_INFO); console.log(data[0].filename);')
           mv "dist/npm/${filename}" "dist/npm/codex-shell-tool-mcp-npm-${PACKAGE_VERSION}.tgz"
 
-      - uses: actions/upload-artifact@v6
+      - uses: ai-nd-co/upload-artifact@v6
         with:
           name: codex-shell-tool-mcp-npm
           path: dist/npm/codex-shell-tool-mcp-npm-${{ env.PACKAGE_VERSION }}.tgz
@@ -378,13 +378,13 @@ jobs:
       contents: read
     steps:
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: ai-nd-co/action-setup@v4
         with:
           version: 10.8.1
           run_install: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: ai-nd-co/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
           registry-url: https://registry.npmjs.org
@@ -394,7 +394,7 @@ jobs:
         run: npm install -g npm@latest
 
       - name: Download npm tarball
-        uses: actions/download-artifact@v7
+        uses: ai-nd-co/download-artifact@v7
         with:
           name: codex-shell-tool-mcp-npm
           path: dist/npm
