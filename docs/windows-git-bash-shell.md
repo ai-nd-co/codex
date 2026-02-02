@@ -12,7 +12,7 @@ explicitly point Codex at it.
 
 Use one of the following options (highest priority first):
 
-1) Config overrides
+1. Config overrides
 
 Add to `~/.codex/config.toml`:
 
@@ -20,7 +20,7 @@ Add to `~/.codex/config.toml`:
 shell_path = "C:\\Program Files\\Git\\bin\\bash.exe"
 ```
 
-2) Environment variables
+2. Environment variables
 
 - `CODEX_SHELL_PATH` (absolute path to the shell binary)
 - `CODEX_GIT_BASH_PATH` (absolute path to Git Bash)

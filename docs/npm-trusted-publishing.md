@@ -25,6 +25,7 @@ This repo is set up to publish npm packages via GitHub Actions using **Trusted P
 4. (Recommended) Under **Publishing access**, select **Require two-factor authentication and disallow tokens** to enforce tokenless publishing.
 
 Notes:
+
 - npm trusted publishing currently supports **GitHub-hosted runners only** (self-hosted runners are not supported).
 - Trusted publishing requires **npm CLI >= 11.5.1**.
 - The workflow filename must match exactly (including `.yml`) and the file must live in `.github/workflows/`.

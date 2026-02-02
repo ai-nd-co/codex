@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 jobs:
   test:
-    if: ${{ secrets.BUILDBUDDY_API_KEY != '' }}
+    if: ${{ vars.RUN_BAZEL == 'true' }}
     strategy:
       fail-fast: false
       matrix:
