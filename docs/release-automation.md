@@ -27,3 +27,10 @@ Use Conventional Commits so semantic-release can determine the version bump:
 
 Npm publishing is still handled by `rust-release.yml` using OIDC trusted publishing.
 See `docs/npm-trusted-publishing.md` for setup.
+
+## Fork toggles
+
+These repo variables control optional CI steps for forks:
+
+- `RUN_BAZEL=true` to enable the Bazel workflow (requires a BuildBuddy API key).
+- `RUN_NPM_STAGE=true` to enable the npm staging step in `ci.yml`.
