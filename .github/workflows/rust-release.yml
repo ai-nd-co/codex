@@ -7,6 +7,12 @@
 
 name: rust-release
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to release (optional; use the workflow ref by default).
+        required: false
+        type: string
   push:
     tags:
       - "rust-v*.*.*"
