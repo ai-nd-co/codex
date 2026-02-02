@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   tag-check:
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: ubuntu-latest
     steps:
       - uses: ai-nd-co/checkout@v6
       - uses: ai-nd-co/rust-toolchain@1.92
@@ -63,7 +63,7 @@ jobs:
   build:
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
-    runs-on: ${{ matrix.runs_on }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -76,8 +76,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: windows-self-hosted
-            runs_on: [self-hosted, Windows, X64]
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: windows-latest
             target: x86_64-pc-windows-msvc
 
     steps:
