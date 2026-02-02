@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   tag-check:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
     steps:
       - uses: ai-nd-co/checkout@v6
       - uses: ai-nd-co/rust-toolchain@1.92
@@ -63,7 +63,7 @@ jobs:
   build:
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -76,11 +76,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-musl
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-          - runner: windows-latest
+          - runner: windows-self-hosted
+            runs_on: [self-hosted, Windows, X64]
             target: x86_64-pc-windows-msvc
 
     steps:
@@ -390,12 +387,19 @@ jobs:
             fi
 
             # Also create .zst (existing behaviour) *and* remove the original
-            # uncompressed binary to keep the directory small.
-            zstd_args=(-T0 -19)
-            if [[ "${keep_originals}" == false ]]; then
-              zstd_args+=(--rm)
+            # uncompressed binary to keep the directory small when zstd exists.
+            if command -v zstd >/dev/null 2>&1; then
+              zstd_args=(-T0 -19)
+              if [[ "${keep_originals}" == false ]]; then
+                zstd_args+=(--rm)
+              fi
+              zstd "${zstd_args[@]}" "$dest/$base"
+            else
+              echo "warning: zstd not found; skipping .zst for $base"
+              if [[ "${keep_originals}" == false ]]; then
+                rm -f "$dest/$base"
+              fi
             fi
-            zstd "${zstd_args[@]}" "$dest/$base"
           done
 
       - uses: ai-nd-co/upload-artifact@v6
