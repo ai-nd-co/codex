@@ -537,7 +537,10 @@ jobs:
             --release-version "${{ steps.release_name.outputs.name }}" \
             --package codex \
             --package codex-responses-api-proxy \
-            --package codex-sdk
+            --package codex-sdk \
+            --target x86_64-unknown-linux-gnu \
+            --target x86_64-unknown-linux-musl \
+            --target x86_64-pc-windows-msvc
 
       - name: Create GitHub Release
         uses: ai-nd-co/action-gh-release@v2
