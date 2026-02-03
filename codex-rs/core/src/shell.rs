@@ -123,10 +123,7 @@ fn file_exists(path: &PathBuf) -> Option<PathBuf> {
 
 #[cfg(target_os = "windows")]
 fn is_wsl_bash_path(path: &PathBuf) -> bool {
-    let normalized = path
-        .to_string_lossy()
-        .to_lowercase()
-        .replace('/', "\\");
+    let normalized = path.to_string_lossy().to_lowercase().replace('/', "\\");
     normalized.ends_with("\\windows\\system32\\bash.exe")
         || normalized.ends_with("\\windows\\sysnative\\bash.exe")
         || normalized.ends_with("\\windows\\syswow64\\bash.exe")

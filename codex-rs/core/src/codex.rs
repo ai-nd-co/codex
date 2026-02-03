@@ -2219,6 +2219,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::Compact => {
                 handlers::compact(&sess, sub.id.clone()).await;
             }
+            Op::SmartCompact => {
+                handlers::smart_compact(&sess, sub.id.clone()).await;
+            }
             Op::ThreadRollback { num_turns } => {
                 handlers::thread_rollback(&sess, sub.id.clone(), num_turns).await;
             }
@@ -2268,6 +2271,7 @@ mod handlers {
     use crate::review_prompts::resolve_review_request;
     use crate::tasks::CompactTask;
     use crate::tasks::RegularTask;
+    use crate::tasks::SmartCompactTask;
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandTask;
     use codex_protocol::custom_prompts::CustomPrompt;
@@ -2688,6 +2692,36 @@ mod handlers {
                 text_elements: Vec::new(),
             }],
             CompactTask,
+        )
+        .await;
+    }
+
+    pub async fn smart_compact(sess: &Arc<Session>, sub_id: String) {
+        let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+        if turn_context
+            .client
+            .config()
+            .features
+            .enabled(Feature::DisableCompaction)
+        {
+            sess.send_event_raw(Event {
+                id: turn_context.sub_id.clone(),
+                msg: EventMsg::Warning(WarningEvent {
+                    message: "Compaction is disabled in experimental settings.".to_string(),
+                }),
+            })
+            .await;
+            return;
+        }
+
+        sess.spawn_task(
+            Arc::clone(&turn_context),
+            vec![UserInput::Text {
+                text: turn_context.compact_prompt().to_string(),
+                // Compaction prompt is synthesized; no UI element ranges to preserve.
+                text_elements: Vec::new(),
+            }],
+            SmartCompactTask,
         )
         .await;
     }

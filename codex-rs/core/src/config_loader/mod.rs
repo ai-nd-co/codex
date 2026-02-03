@@ -79,8 +79,8 @@ const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
 /// - system    `/etc/codex/config.toml`
 /// - user      `${CODEX_HOME}/config.toml`
 /// - cwd       `${PWD}/config.toml` (loaded but disabled when the directory is untrusted)
-    /// - tree      parent directories up to root looking for `./.codex/config.toml` or `./.claude/config.toml` (loaded but disabled when untrusted)
-    /// - repo      `$(git rev-parse --show-toplevel)/.codex/config.toml` or `./.claude/config.toml` (loaded but disabled when untrusted)
+/// - tree      parent directories up to root looking for `./.codex/config.toml` or `./.claude/config.toml` (loaded but disabled when untrusted)
+/// - repo      `$(git rev-parse --show-toplevel)/.codex/config.toml` or `./.claude/config.toml` (loaded but disabled when untrusted)
 /// - runtime   e.g., --config flags, model selector in UI
 ///
 /// (*) Only available on macOS via managed device profiles.
@@ -718,8 +718,13 @@ async fn load_project_layers(
                     };
                     let config =
                         resolve_relative_paths_in_config_toml(config, dot_codex_abs.as_path())?;
-                    let entry =
-                        project_layer_entry(trust_context, &dot_codex_abs, &layer_dir, config, true);
+                    let entry = project_layer_entry(
+                        trust_context,
+                        &dot_codex_abs,
+                        &layer_dir,
+                        config,
+                        true,
+                    );
                     layers.push(entry);
                 }
                 Err(err) => {
@@ -738,7 +743,9 @@ async fn load_project_layers(
                         let config_file_display = config_file.as_path().display();
                         return Err(io::Error::new(
                             err.kind(),
-                            format!("Failed to read project config file {config_file_display}: {err}"),
+                            format!(
+                                "Failed to read project config file {config_file_display}: {err}"
+                            ),
                         ));
                     }
                 }
