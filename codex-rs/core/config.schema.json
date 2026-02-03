@@ -156,10 +156,19 @@
             "connectors": {
               "type": "boolean"
             },
+            "disable_compaction": {
+              "type": "boolean"
+            },
+            "disable_system_prompt": {
+              "type": "boolean"
+            },
             "elevated_windows_sandbox": {
               "type": "boolean"
             },
             "enable_experimental_windows_sandbox": {
+              "type": "boolean"
+            },
+            "enable_markdown_tables": {
               "type": "boolean"
             },
             "enable_request_compression": {
