@@ -3556,6 +3556,10 @@ impl ChatWidget {
                 self.clear_token_usage();
                 self.app_event_tx.send(AppEvent::CodexOp(Op::Compact));
             }
+            SlashCommand::SmartCompact => {
+                self.clear_token_usage();
+                self.app_event_tx.send(AppEvent::CodexOp(Op::SmartCompact));
+            }
             SlashCommand::Review => {
                 self.open_review_popup();
             }

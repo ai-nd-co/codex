@@ -367,6 +367,10 @@ pub enum Op {
     /// involve the model.
     SetThreadName { name: String },
 
+    /// Request the agent to summarize the first half of the conversation and
+    /// retain the most recent half verbatim.
+    SmartCompact,
+
     /// Request Codex to undo a turn (turn are stacked so it is the same effect as CMD + Z).
     Undo,
 

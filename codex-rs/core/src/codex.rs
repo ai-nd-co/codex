@@ -3779,6 +3779,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::UpdateMemories => {
                 handlers::update_memories(&sess, &config, sub.id.clone()).await;
             }
+            Op::SmartCompact => {
+                handlers::smart_compact(&sess, sub.id.clone()).await;
+            }
             Op::ThreadRollback { num_turns } => {
                 handlers::thread_rollback(&sess, sub.id.clone(), num_turns).await;
             }
@@ -3823,6 +3826,7 @@ mod handlers {
     use crate::review_prompts::resolve_review_request;
     use crate::rollout::session_index;
     use crate::tasks::CompactTask;
+    use crate::tasks::SmartCompactTask;
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandMode;
     use crate::tasks::UserShellCommandTask;
@@ -4386,6 +4390,21 @@ mod handlers {
                 message: "Memory update triggered.".to_string(),
             }),
         })
+        .await;
+    }
+
+    pub async fn smart_compact(sess: &Arc<Session>, sub_id: String) {
+        let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+
+        sess.spawn_task(
+            Arc::clone(&turn_context),
+            vec![UserInput::Text {
+                text: turn_context.compact_prompt().to_string(),
+                // Compaction prompt is synthesized; no UI element ranges to preserve.
+                text_elements: Vec::new(),
+            }],
+            SmartCompactTask,
+        )
         .await;
     }
 
