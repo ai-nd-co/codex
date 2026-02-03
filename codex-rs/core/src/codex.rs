@@ -2261,6 +2261,7 @@ mod handlers {
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
 
+    use crate::features::Feature;
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
     use crate::mcp::effective_mcp_servers;
