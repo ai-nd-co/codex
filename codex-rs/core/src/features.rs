@@ -111,6 +111,12 @@ pub enum Feature {
     Connectors,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
+    /// Disable base/system prompt instructions.
+    DisableSystemPrompt,
+    /// Enable markdown table rendering in the TUI.
+    EnableMarkdownTables,
+    /// Disable automatic and manual compaction.
+    DisableCompaction,
     /// Enable collaboration modes (Plan, Code, Pair Programming, Execute).
     CollaborationModes,
     /// Use the Responses API WebSocket transport for OpenAI by default.
@@ -456,6 +462,36 @@ pub const FEATURES: &[FeatureSpec] = &[
             name: "Steer conversation",
             menu_description: "Enter submits immediately; Tab queues messages when a task is running.",
             announcement: "NEW! Try Steer mode: Enter submits immediately, Tab queues. Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::DisableSystemPrompt,
+        key: "disable_system_prompt",
+        stage: Stage::Experimental {
+            name: "Disable system prompt",
+            menu_description: "Send empty base instructions to the model.",
+            announcement: "NEW! Disable the system prompt (advanced). Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::EnableMarkdownTables,
+        key: "enable_markdown_tables",
+        stage: Stage::Experimental {
+            name: "Render markdown tables",
+            menu_description: "Render markdown tables with aligned columns.",
+            announcement: "NEW! Render markdown tables in the TUI. Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::DisableCompaction,
+        key: "disable_compaction",
+        stage: Stage::Experimental {
+            name: "Disable compaction",
+            menu_description: "Skip automatic and manual context compaction.",
+            announcement: "NEW! Disable compaction (advanced). Enable in /experimental!",
         },
         default_enabled: false,
     },

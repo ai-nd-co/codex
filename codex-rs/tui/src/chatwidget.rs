@@ -4639,6 +4639,9 @@ impl ChatWidget {
         } else {
             self.config.features.disable(feature);
         }
+        if feature == Feature::EnableMarkdownTables {
+            crate::markdown_render::set_tables_enabled(enabled);
+        }
         if feature == Feature::Steer {
             self.bottom_pane.set_steer_enabled(enabled);
         }

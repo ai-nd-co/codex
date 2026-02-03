@@ -17,6 +17,7 @@ use tokio_util::sync::CancellationToken;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex_delegate::run_codex_thread_one_shot;
+use crate::features::Feature;
 use crate::review_format::format_review_findings_block;
 use crate::review_format::render_review_output_text;
 use crate::state::TaskKind;
@@ -88,8 +89,12 @@ async fn start_review_conversation(
     // re-enable blocked tools (web search, view image).
     sub_agent_config.web_search_mode = Some(WebSearchMode::Disabled);
 
-    // Set explicit review rubric for the sub-agent
-    sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
+    // Set explicit review rubric for the sub-agent unless system prompts are disabled.
+    if config.features.enabled(Feature::DisableSystemPrompt) {
+        sub_agent_config.base_instructions = Some(String::new());
+    } else {
+        sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
+    }
 
     let model = config
         .review_model

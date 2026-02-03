@@ -1,6 +1,7 @@
 use crate::render::line_utils::line_to_static;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
+use pulldown_cmark::Alignment as CmarkAlignment;
 use pulldown_cmark::CodeBlockKind;
 use pulldown_cmark::CowStr;
 use pulldown_cmark::Event;
@@ -13,6 +14,8 @@ use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 struct MarkdownStyles {
     h1: Style,
@@ -54,6 +57,16 @@ impl Default for MarkdownStyles {
     }
 }
 
+static TABLES_ENABLED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn set_tables_enabled(enabled: bool) {
+    TABLES_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+fn tables_enabled() -> bool {
+    TABLES_ENABLED.load(Ordering::Relaxed)
+}
+
 #[derive(Clone, Debug)]
 struct IndentContext {
     prefix: Vec<Span<'static>>,
@@ -71,6 +84,70 @@ impl IndentContext {
     }
 }
 
+#[derive(Clone, Debug)]
+struct TableState {
+    alignments: Vec<CmarkAlignment>,
+    rows: Vec<Vec<String>>,
+    current_row: Vec<String>,
+    current_cell: String,
+    header_rows: usize,
+    in_head: bool,
+}
+
+impl TableState {
+    fn new(alignments: Vec<CmarkAlignment>) -> Self {
+        Self {
+            alignments,
+            rows: Vec::new(),
+            current_row: Vec::new(),
+            current_cell: String::new(),
+            header_rows: 0,
+            in_head: false,
+        }
+    }
+
+    fn start_row(&mut self) {
+        self.current_row = Vec::new();
+        self.current_cell.clear();
+    }
+
+    fn end_row(&mut self) {
+        if !self.current_cell.is_empty() {
+            self.current_row.push(self.current_cell.trim().to_string());
+            self.current_cell.clear();
+        }
+        if !self.current_row.is_empty() {
+            self.rows.push(std::mem::take(&mut self.current_row));
+            if self.in_head {
+                self.header_rows = self.header_rows.saturating_add(1);
+            }
+        }
+    }
+
+    fn start_cell(&mut self) {
+        self.current_cell.clear();
+    }
+
+    fn end_cell(&mut self) {
+        self.current_row.push(self.current_cell.trim().to_string());
+        self.current_cell.clear();
+    }
+
+    fn push_text(&mut self, text: &str) {
+        if !self.current_cell.is_empty() {
+            self.current_cell.push_str(text);
+            return;
+        }
+        self.current_cell = text.to_string();
+    }
+
+    fn push_space(&mut self) {
+        if !self.current_cell.ends_with(' ') {
+            self.current_cell.push(' ');
+        }
+    }
+}
+
 pub fn render_markdown_text(input: &str) -> Text<'static> {
     render_markdown_text_with_width(input, None)
 }
@@ -78,8 +155,11 @@ pub fn render_markdown_text(input: &str) -> Text<'static> {
 pub(crate) fn render_markdown_text_with_width(input: &str, width: Option<usize>) -> Text<'static> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
+    if tables_enabled() {
+        options.insert(Options::ENABLE_TABLES);
+    }
     let parser = Parser::new_ext(input, options);
-    let mut w = Writer::new(parser, width);
+    let mut w = Writer::new(parser, width, tables_enabled());
     w.run();
     w.text
 }
@@ -100,6 +180,8 @@ where
     in_paragraph: bool,
     in_code_block: bool,
     wrap_width: Option<usize>,
+    tables_enabled: bool,
+    table_state: Option<TableState>,
     current_line_content: Option<Line<'static>>,
     current_initial_indent: Vec<Span<'static>>,
     current_subsequent_indent: Vec<Span<'static>>,
@@ -111,7 +193,7 @@ impl<'a, I> Writer<'a, I>
 where
     I: Iterator<Item = Event<'a>>,
 {
-    fn new(iter: I, wrap_width: Option<usize>) -> Self {
+    fn new(iter: I, wrap_width: Option<usize>, tables_enabled: bool) -> Self {
         Self {
             iter,
             text: Text::default(),
@@ -125,6 +207,8 @@ where
             in_paragraph: false,
             in_code_block: false,
             wrap_width,
+            tables_enabled,
+            table_state: None,
             current_line_content: None,
             current_initial_indent: Vec::new(),
             current_subsequent_indent: Vec::new(),
@@ -141,6 +225,9 @@ where
     }
 
     fn handle_event(&mut self, event: Event<'a>) {
+        if self.table_state.is_some() && self.handle_table_event(&event) {
+            return;
+        }
         match event {
             Event::Start(tag) => self.start_tag(tag),
             Event::End(tag) => self.end_tag(tag),
@@ -185,9 +272,13 @@ where
             Tag::Strong => self.push_inline_style(self.styles.strong),
             Tag::Strikethrough => self.push_inline_style(self.styles.strikethrough),
             Tag::Link { dest_url, .. } => self.push_link(dest_url.to_string()),
+            Tag::Table(alignments) => {
+                if self.tables_enabled {
+                    self.start_table(alignments);
+                }
+            }
             Tag::HtmlBlock
             | Tag::FootnoteDefinition(_)
-            | Tag::Table(_)
             | Tag::TableHead
             | Tag::TableRow
             | Tag::TableCell
@@ -257,6 +348,95 @@ where
     fn end_heading(&mut self) {
         self.needs_newline = true;
         self.pop_inline_style();
+    }
+
+    fn start_table(&mut self, alignments: Vec<CmarkAlignment>) {
+        if self.needs_newline {
+            self.push_blank_line();
+        }
+        self.flush_current_line();
+        self.in_paragraph = false;
+        self.table_state = Some(TableState::new(alignments));
+        self.needs_newline = false;
+    }
+
+    fn handle_table_event(&mut self, event: &Event<'a>) -> bool {
+        let Some(table) = self.table_state.as_mut() else {
+            return false;
+        };
+        match event {
+            Event::Start(Tag::TableHead) => {
+                table.in_head = true;
+            }
+            Event::End(TagEnd::TableHead) => {
+                table.in_head = false;
+            }
+            Event::Start(Tag::TableRow) => {
+                table.start_row();
+            }
+            Event::End(TagEnd::TableRow) => {
+                table.end_row();
+            }
+            Event::Start(Tag::TableCell) => {
+                table.start_cell();
+            }
+            Event::End(TagEnd::TableCell) => {
+                table.end_cell();
+            }
+            Event::End(TagEnd::Table) => {
+                self.finish_table();
+            }
+            Event::Text(text) => {
+                table.push_text(text.as_ref());
+            }
+            Event::Code(code) => {
+                table.push_text(code.as_ref());
+            }
+            Event::SoftBreak | Event::HardBreak => {
+                table.push_space();
+            }
+            _ => {}
+        }
+        true
+    }
+
+    fn finish_table(&mut self) {
+        let Some(table) = self.table_state.take() else {
+            return;
+        };
+        self.render_table(table);
+        self.needs_newline = true;
+    }
+
+    fn render_table(&mut self, table: TableState) {
+        if table.rows.is_empty() {
+            return;
+        }
+
+        let mut column_count = table.alignments.len();
+        for row in &table.rows {
+            column_count = column_count.max(row.len());
+        }
+        if column_count == 0 {
+            return;
+        }
+
+        let mut widths = vec![0usize; column_count];
+        for row in &table.rows {
+            for (idx, cell) in row.iter().enumerate() {
+                widths[idx] = widths[idx].max(cell.chars().count());
+            }
+        }
+
+        for (idx, row) in table.rows.iter().enumerate() {
+            let line = format_table_row(row, &widths, &table.alignments);
+            self.push_line(Line::from(line));
+            if table.header_rows > 0 && idx + 1 == table.header_rows {
+                let separator = format_table_separator(&widths, &table.alignments);
+                self.push_line(Line::from(separator));
+            }
+        }
+        self.flush_current_line();
     }
 
     fn start_blockquote(&mut self) {
@@ -533,6 +713,52 @@ where
         }
 
         prefix
+    }
+}
+
+fn format_table_row(row: &[String], widths: &[usize], alignments: &[CmarkAlignment]) -> String {
+    let mut line = String::new();
+    line.push('|');
+    for (idx, width) in widths.iter().enumerate() {
+        let cell = row.get(idx).map(String::as_str).unwrap_or("");
+        let alignment = alignments.get(idx).copied().unwrap_or(CmarkAlignment::Left);
+        let padded = pad_table_cell(cell, *width, alignment);
+        line.push(' ');
+        line.push_str(&padded);
+        line.push(' ');
+        line.push('|');
+    }
+    line
+}
+
+fn format_table_separator(widths: &[usize], _alignments: &[CmarkAlignment]) -> String {
+    let mut line = String::new();
+    line.push('|');
+    for width in widths {
+        let count = (*width).max(1);
+        line.push(' ');
+        line.push_str(&"-".repeat(count));
+        line.push(' ');
+        line.push('|');
+    }
+    line
+}
+
+fn pad_table_cell(cell: &str, width: usize, alignment: CmarkAlignment) -> String {
+    let cell_len = cell.chars().count();
+    if cell_len >= width {
+        return cell.to_string();
+    }
+
+    let pad = width.saturating_sub(cell_len);
+    match alignment {
+        CmarkAlignment::None | CmarkAlignment::Left => format!("{cell}{}", " ".repeat(pad)),
+        CmarkAlignment::Right => format!("{}{}", " ".repeat(pad), cell),
+        CmarkAlignment::Center => {
+            let left = pad / 2;
+            let right = pad - left;
+            format!("{}{}{}", " ".repeat(left), cell, " ".repeat(right))
+        }
     }
 }
 

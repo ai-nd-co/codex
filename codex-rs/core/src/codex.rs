@@ -2663,6 +2663,21 @@ mod handlers {
 
     pub async fn compact(sess: &Arc<Session>, sub_id: String) {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+        if turn_context
+            .client
+            .config()
+            .features
+            .enabled(Feature::DisableCompaction)
+        {
+            sess.send_event_raw(Event {
+                id: turn_context.sub_id.clone(),
+                msg: EventMsg::Warning(WarningEvent {
+                    message: "Compaction is disabled in experimental settings.".to_string(),
+                }),
+            })
+            .await;
+            return;
+        }
 
         sess.spawn_task(
             Arc::clone(&turn_context),
@@ -2960,7 +2975,12 @@ pub(crate) async fn run_turn(
     let model_info = turn_context.client.get_model_info();
     let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or(i64::MAX);
     let total_usage_tokens = sess.get_total_token_usage().await;
-    if total_usage_tokens >= auto_compact_limit {
+    let compaction_disabled = turn_context
+        .client
+        .config()
+        .features
+        .enabled(Feature::DisableCompaction);
+    if !compaction_disabled && total_usage_tokens >= auto_compact_limit {
         run_auto_compact(&sess, &turn_context).await;
     }
     let event = EventMsg::TurnStarted(TurnStartedEvent {
@@ -3050,7 +3070,7 @@ pub(crate) async fn run_turn(
                 let token_limit_reached = total_usage_tokens >= auto_compact_limit;
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
-                if token_limit_reached && needs_follow_up {
+                if !compaction_disabled && token_limit_reached && needs_follow_up {
                     run_auto_compact(&sess, &turn_context).await;
                     continue;
                 }

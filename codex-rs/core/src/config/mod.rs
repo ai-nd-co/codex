@@ -1485,7 +1485,10 @@ impl Config {
             .or(cfg.model_instructions_file.as_ref());
         let file_base_instructions =
             Self::try_read_non_empty_file(model_instructions_path, "model instructions file")?;
-        let base_instructions = base_instructions.or(file_base_instructions);
+        let mut base_instructions = base_instructions.or(file_base_instructions);
+        if features.enabled(Feature::DisableSystemPrompt) {
+            base_instructions = Some(String::new());
+        }
         let developer_instructions = developer_instructions.or(cfg.developer_instructions);
         let model_personality = model_personality
             .or(config_profile.model_personality)
