@@ -2698,22 +2698,6 @@ mod handlers {
 
     pub async fn smart_compact(sess: &Arc<Session>, sub_id: String) {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
-        if turn_context
-            .client
-            .config()
-            .features
-            .enabled(Feature::DisableCompaction)
-        {
-            sess.send_event_raw(Event {
-                id: turn_context.sub_id.clone(),
-                msg: EventMsg::Warning(WarningEvent {
-                    message: "Compaction is disabled in experimental settings.".to_string(),
-                }),
-            })
-            .await;
-            return;
-        }
-
         sess.spawn_task(
             Arc::clone(&turn_context),
             vec![UserInput::Text {
