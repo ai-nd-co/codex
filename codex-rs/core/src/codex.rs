@@ -4395,7 +4395,6 @@ mod handlers {
 
     pub async fn smart_compact(sess: &Arc<Session>, sub_id: String) {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
-
         sess.spawn_task(
             Arc::clone(&turn_context),
             vec![UserInput::Text {
