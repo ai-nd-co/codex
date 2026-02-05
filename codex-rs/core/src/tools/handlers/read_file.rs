@@ -1,3 +1,4 @@
+use codex_protocol::models::FunctionCallOutputBody;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -181,66 +182,10 @@ impl ToolHandler for ReadFileHandler {
                 indentation::read_block(&path, offset, limit, indentation).await
             }
         };
-        let duration = start.elapsed();
-
-        match collected {
-            Ok(collected) => {
-                let content = collected.join("\n");
-                invocation
-                    .session
-                    .send_event(
-                        invocation.turn.as_ref(),
-                        EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-                            call_id: invocation.call_id.clone(),
-                            process_id: None,
-                            turn_id: invocation.turn.sub_id.clone(),
-                            command,
-                            cwd,
-                            parsed_cmd,
-                            source: ExecCommandSource::Agent,
-                            interaction_input: None,
-                            stdout: content.clone(),
-                            stderr: String::new(),
-                            aggregated_output: content.clone(),
-                            exit_code: 0,
-                            duration,
-                            formatted_output: content.clone(),
-                        }),
-                    )
-                    .await;
-                Ok(ToolOutput::Function {
-                    content,
-                    content_items: None,
-                    success: Some(true),
-                })
-            }
-            Err(err) => {
-                let message = err.to_string();
-                invocation
-                    .session
-                    .send_event(
-                        invocation.turn.as_ref(),
-                        EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-                            call_id: invocation.call_id.clone(),
-                            process_id: None,
-                            turn_id: invocation.turn.sub_id.clone(),
-                            command,
-                            cwd,
-                            parsed_cmd,
-                            source: ExecCommandSource::Agent,
-                            interaction_input: None,
-                            stdout: String::new(),
-                            stderr: message.clone(),
-                            aggregated_output: message.clone(),
-                            exit_code: -1,
-                            duration,
-                            formatted_output: message,
-                        }),
-                    )
-                    .await;
-                Err(err)
-            }
-        }
+        Ok(ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(collected.join("\n")),
+            success: Some(true),
+        })
     }
 }
 

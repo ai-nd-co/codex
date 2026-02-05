@@ -25,8 +25,8 @@ jobs:
   tag-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: ai-nd-co/checkout@v6
-      - uses: ai-nd-co/rust-toolchain@1.92
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.92
       - name: Validate tag matches Cargo.toml version
         shell: bash
         run: |
@@ -71,6 +71,8 @@ jobs:
     defaults:
       run:
         working-directory: codex-rs
+    env:
+      CODEX_BWRAP_ENABLE_FFI: ${{ contains(matrix.target, 'unknown-linux') && '1' || '0' }}
 
     strategy:
       fail-fast: false
@@ -84,7 +86,14 @@ jobs:
             target: x86_64-pc-windows-msvc
 
     steps:
-      - uses: ai-nd-co/checkout@v6
+      - uses: actions/checkout@v6
+      - name: Install Linux bwrap build dependencies
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
       - name: Install UBSan runtime (musl)
         if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
         shell: bash
@@ -94,7 +103,7 @@ jobs:
             sudo apt-get update -y
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libubsan1
           fi
-      - uses: ai-nd-co/rust-toolchain@1.93
+      - uses: dtolnay/rust-toolchain@1.93
         with:
           targets: ${{ matrix.target }}
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
@@ -113,7 +122,7 @@ jobs:
           echo "${cargo_home}/bin" >> "$GITHUB_PATH"
           : > "${cargo_home}/config.toml"
 
-      - uses: ai-nd-co/cache@v5
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/bin/
