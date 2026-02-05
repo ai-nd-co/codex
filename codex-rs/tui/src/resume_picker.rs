@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
@@ -25,6 +26,7 @@ use ratatui::style::Style;
 use ratatui::style::Stylize as _;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use tokio::io::AsyncBufReadExt;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -36,8 +38,12 @@ use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
+use codex_protocol::items::AgentMessageContent;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::user_input::UserInput;
 
 const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
@@ -95,6 +101,12 @@ enum BackgroundEvent {
         request_token: usize,
         search_token: Option<usize>,
         page: std::io::Result<ThreadsPage>,
+    },
+    MessageScanCompleted {
+        path: PathBuf,
+        message_count: Option<usize>,
+        search_token: Option<usize>,
+        matched: Option<bool>,
     },
 }
 
@@ -177,6 +189,7 @@ async fn run_session_picker(
         codex_home.to_path_buf(),
         alt.tui.frame_requester(),
         page_loader,
+        bg_tx.clone(),
         default_provider.clone(),
         show_all,
         filter_cwd,
@@ -243,14 +256,17 @@ impl Drop for AltScreenGuard<'_> {
 struct PickerState {
     codex_home: PathBuf,
     requester: FrameRequester,
+    background_tx: mpsc::UnboundedSender<BackgroundEvent>,
     pagination: PaginationState,
     all_rows: Vec<Row>,
     filtered_rows: Vec<Row>,
     seen_paths: HashSet<PathBuf>,
+    message_count_pending: HashSet<PathBuf>,
     selected: usize,
     scroll_top: usize,
     query: String,
     search_state: SearchState,
+    search_cache: Option<SearchCache>,
     next_request_token: usize,
     next_search_token: usize,
     page_loader: PageLoader,
@@ -291,6 +307,13 @@ enum LoadTrigger {
     Search { token: usize },
 }
 
+struct SearchCache {
+    token: usize,
+    tokens: Vec<String>,
+    matches: HashMap<PathBuf, bool>,
+    pending: HashSet<PathBuf>,
+}
+
 impl LoadingState {
     fn is_pending(&self) -> bool {
         matches!(self, LoadingState::Pending(_))
@@ -318,6 +341,7 @@ struct Row {
     updated_at: Option<DateTime<Utc>>,
     cwd: Option<PathBuf>,
     git_branch: Option<String>,
+    message_count: Option<usize>,
 }
 
 impl PickerState {
@@ -325,6 +349,7 @@ impl PickerState {
         codex_home: PathBuf,
         requester: FrameRequester,
         page_loader: PageLoader,
+        background_tx: mpsc::UnboundedSender<BackgroundEvent>,
         default_provider: String,
         show_all: bool,
         filter_cwd: Option<PathBuf>,
@@ -333,6 +358,7 @@ impl PickerState {
         Self {
             codex_home,
             requester,
+            background_tx,
             pagination: PaginationState {
                 next_cursor: None,
                 num_scanned_files: 0,
@@ -342,10 +368,12 @@ impl PickerState {
             all_rows: Vec::new(),
             filtered_rows: Vec::new(),
             seen_paths: HashSet::new(),
+            message_count_pending: HashSet::new(),
             selected: 0,
             scroll_top: 0,
             query: String::new(),
             search_state: SearchState::Idle,
+            search_cache: None,
             next_request_token: 0,
             next_search_token: 0,
             page_loader,
@@ -436,7 +464,9 @@ impl PickerState {
         self.all_rows.clear();
         self.filtered_rows.clear();
         self.seen_paths.clear();
+        self.message_count_pending.clear();
         self.search_state = SearchState::Idle;
+        self.search_cache = None;
         self.selected = 0;
 
         let request_token = self.allocate_request_token();
@@ -475,6 +505,28 @@ impl PickerState {
                 let completed_token = pending.search_token.or(search_token);
                 self.continue_search_if_token_matches(completed_token);
             }
+            BackgroundEvent::MessageScanCompleted {
+                path,
+                message_count,
+                search_token,
+                matched,
+            } => {
+                self.message_count_pending.remove(&path);
+                if let Some(count) = message_count {
+                    self.set_message_count(&path, count);
+                }
+                if let Some(token) = search_token
+                    && let Some(cache) = self.search_cache.as_mut()
+                    && cache.token == token
+                {
+                    cache.pending.remove(&path);
+                    if let Some(matched) = matched {
+                        cache.matches.insert(path.clone(), matched);
+                    }
+                }
+                self.apply_filter();
+                self.continue_search_if_token_matches(search_token);
+            }
         }
         Ok(())
     }
@@ -501,12 +553,15 @@ impl PickerState {
         }
 
         let rows = rows_from_items(page.items);
+        let mut newly_added = Vec::new();
         for row in rows {
             if self.seen_paths.insert(row.path.clone()) {
+                newly_added.push(row.clone());
                 self.all_rows.push(row);
             }
         }
 
+        self.queue_scans_for_rows(&newly_added);
         self.apply_filter();
     }
 
@@ -518,9 +573,8 @@ impl PickerState {
         if self.query.is_empty() {
             self.filtered_rows = base_iter.cloned().collect();
         } else {
-            let q = self.query.to_lowercase();
             self.filtered_rows = base_iter
-                .filter(|r| r.preview.to_lowercase().contains(&q))
+                .filter(|r| self.row_matches_query(r))
                 .cloned()
                 .collect();
         }
@@ -547,28 +601,126 @@ impl PickerState {
         paths_match(row_cwd, filter_cwd)
     }
 
+    fn row_matches_query(&self, row: &Row) -> bool {
+        if self.query.is_empty() {
+            return true;
+        }
+        let Some(cache) = self.search_cache.as_ref() else {
+            return false;
+        };
+        cache.matches.get(&row.path).copied().unwrap_or(false)
+    }
+
+    fn search_pending(&self) -> bool {
+        self.search_cache
+            .as_ref()
+            .is_some_and(|cache| !cache.pending.is_empty())
+    }
+
+    fn queue_scans_for_rows(&mut self, rows: &[Row]) {
+        if let Some(cache) = self.search_cache.as_ref() {
+            let token = cache.token;
+            let tokens = cache.tokens.clone();
+            let mut to_scan = Vec::new();
+            for row in rows.iter().filter(|row| self.row_matches_filter(row)) {
+                if cache.matches.contains_key(&row.path) || cache.pending.contains(&row.path) {
+                    continue;
+                }
+                to_scan.push(row.path.clone());
+            }
+            for path in to_scan {
+                if self.spawn_message_scan(path.clone(), Some(token), tokens.clone())
+                    && let Some(cache) = self.search_cache.as_mut()
+                    && cache.token == token
+                {
+                    cache.pending.insert(path);
+                }
+            }
+            return;
+        }
+
+        let mut to_scan = Vec::new();
+        for row in rows.iter().filter(|row| self.row_matches_filter(row)) {
+            if row.message_count.is_some() || self.message_count_pending.contains(&row.path) {
+                continue;
+            }
+            to_scan.push(row.path.clone());
+        }
+        for path in to_scan {
+            if self.spawn_message_scan(path.clone(), None, Vec::new()) {
+                self.message_count_pending.insert(path);
+            }
+        }
+    }
+
+    fn spawn_message_scan(
+        &self,
+        path: PathBuf,
+        search_token: Option<usize>,
+        tokens: Vec<String>,
+    ) -> bool {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return false;
+        };
+        let tx = self.background_tx.clone();
+        handle.spawn(async move {
+            let result = scan_rollout_messages(&path, &tokens).await;
+            let (message_count, matched) = match result {
+                Ok((count, matched)) => (Some(count), Some(matched)),
+                Err(_) => (None, Some(false)),
+            };
+            let matched = if search_token.is_some() {
+                matched
+            } else {
+                None
+            };
+            let _ = tx.send(BackgroundEvent::MessageScanCompleted {
+                path,
+                message_count,
+                search_token,
+                matched,
+            });
+        });
+        true
+    }
+
+    fn set_message_count(&mut self, path: &Path, count: usize) {
+        if let Some(row) = self.all_rows.iter_mut().find(|row| row.path == path) {
+            row.message_count = Some(count);
+        }
+    }
+
     fn set_query(&mut self, new_query: String) {
         if self.query == new_query {
             return;
         }
         self.query = new_query;
         self.selected = 0;
-        self.apply_filter();
-        if self.query.is_empty() {
-            self.search_state = SearchState::Idle;
+        self.search_state = SearchState::Idle;
+        self.search_cache = None;
+
+        let tokens = tokenize_query(&self.query);
+        if tokens.is_empty() {
+            self.query.clear();
+            self.apply_filter();
+            let rows = self.all_rows.clone();
+            self.queue_scans_for_rows(&rows);
             return;
         }
-        if !self.filtered_rows.is_empty() {
-            self.search_state = SearchState::Idle;
-            return;
-        }
-        if self.pagination.reached_scan_cap || self.pagination.next_cursor.is_none() {
-            self.search_state = SearchState::Idle;
-            return;
-        }
+
         let token = self.allocate_search_token();
         self.search_state = SearchState::Active { token };
-        self.load_more_if_needed(LoadTrigger::Search { token });
+        self.search_cache = Some(SearchCache {
+            token,
+            tokens,
+            matches: HashMap::new(),
+            pending: HashSet::new(),
+        });
+
+        let rows = self.all_rows.clone();
+        self.queue_scans_for_rows(&rows);
+        self.apply_filter();
+        self.continue_search_if_needed();
     }
 
     fn continue_search_if_needed(&mut self) {
@@ -577,6 +729,9 @@ impl PickerState {
         };
         if !self.filtered_rows.is_empty() {
             self.search_state = SearchState::Idle;
+            return;
+        }
+        if self.search_pending() {
             return;
         }
         if self.pagination.reached_scan_cap || self.pagination.next_cursor.is_none() {
@@ -727,6 +882,7 @@ fn head_to_row(item: &ThreadItem) -> Row {
         updated_at,
         cwd,
         git_branch,
+        message_count: None,
     }
 }
 
@@ -772,6 +928,107 @@ fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
             Some(TurnItem::UserMessage(user)) => Some(user.message()),
             _ => None,
         })
+}
+
+fn tokenize_query(query: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+    query
+        .split_whitespace()
+        .filter_map(|token| {
+            let token = token.to_lowercase();
+            if token.is_empty() || !seen.insert(token.clone()) {
+                None
+            } else {
+                Some(token)
+            }
+        })
+        .collect()
+}
+
+async fn scan_rollout_messages(path: &Path, tokens: &[String]) -> std::io::Result<(usize, bool)> {
+    let file = tokio::fs::File::open(path).await?;
+    let reader = tokio::io::BufReader::new(file);
+    let mut lines = reader.lines();
+    let mut message_count = 0usize;
+    let mut hits = vec![false; tokens.len()];
+
+    while let Some(line) = lines.next_line().await? {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) else {
+            continue;
+        };
+        let RolloutItem::ResponseItem(item) = rollout_line.item else {
+            continue;
+        };
+        let Some(turn_item) = codex_core::parse_turn_item(&item) else {
+            continue;
+        };
+        match turn_item {
+            TurnItem::UserMessage(user) => {
+                message_count += 1;
+                if !tokens.is_empty() {
+                    track_tokens_in_user_message(&user, tokens, &mut hits);
+                }
+            }
+            TurnItem::AgentMessage(agent) => {
+                message_count += 1;
+                if !tokens.is_empty() {
+                    track_tokens_in_agent_message(&agent, tokens, &mut hits);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let matched = tokens.is_empty() || hits.iter().all(|hit| *hit);
+    Ok((message_count, matched))
+}
+
+fn track_tokens_in_user_message(
+    message: &codex_protocol::items::UserMessageItem,
+    tokens: &[String],
+    hits: &mut [bool],
+) {
+    if hits.iter().all(|hit| *hit) {
+        return;
+    }
+    for input in &message.content {
+        if let UserInput::Text { text, .. } = input {
+            update_token_hits(text, tokens, hits);
+            if hits.iter().all(|hit| *hit) {
+                return;
+            }
+        }
+    }
+}
+
+fn track_tokens_in_agent_message(
+    message: &codex_protocol::items::AgentMessageItem,
+    tokens: &[String],
+    hits: &mut [bool],
+) {
+    if hits.iter().all(|hit| *hit) {
+        return;
+    }
+    for content in &message.content {
+        let AgentMessageContent::Text { text } = content;
+        update_token_hits(text, tokens, hits);
+        if hits.iter().all(|hit| *hit) {
+            return;
+        }
+    }
+}
+
+fn update_token_hits(text: &str, tokens: &[String], hits: &mut [bool]) {
+    let lower = text.to_lowercase();
+    for (idx, token) in tokens.iter().enumerate() {
+        if !hits[idx] && lower.contains(token) {
+            hits[idx] = true;
+        }
+    }
 }
 
 fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
@@ -851,10 +1108,11 @@ fn render_list(
     let mut y = area.y;
 
     let max_updated_width = metrics.max_updated_width;
+    let max_messages_width = metrics.max_messages_width;
     let max_branch_width = metrics.max_branch_width;
     let max_cwd_width = metrics.max_cwd_width;
 
-    for (idx, (row, (updated_label, branch_label, cwd_label))) in rows[start..end]
+    for (idx, (row, (updated_label, messages_label, branch_label, cwd_label))) in rows[start..end]
         .iter()
         .zip(labels[start..end].iter())
         .enumerate()
@@ -866,6 +1124,17 @@ fn render_list(
             None
         } else {
             Some(Span::from(format!("{updated_label:<max_updated_width$}")).dim())
+        };
+        let messages_span = if max_messages_width == 0 {
+            None
+        } else {
+            let label = format!("{messages_label:>max_messages_width$}");
+            let span = Span::from(label);
+            if row.message_count.is_none() {
+                Some(span.dim())
+            } else {
+                Some(span)
+            }
         };
         let branch_span = if max_branch_width == 0 {
             None
@@ -901,13 +1170,19 @@ fn render_list(
         if max_updated_width > 0 {
             preview_width = preview_width.saturating_sub(max_updated_width + 2);
         }
+        if max_messages_width > 0 {
+            preview_width = preview_width.saturating_sub(max_messages_width + 2);
+        }
         if max_branch_width > 0 {
             preview_width = preview_width.saturating_sub(max_branch_width + 2);
         }
         if max_cwd_width > 0 {
             preview_width = preview_width.saturating_sub(max_cwd_width + 2);
         }
-        let add_leading_gap = max_updated_width == 0 && max_branch_width == 0 && max_cwd_width == 0;
+        let add_leading_gap = max_updated_width == 0
+            && max_messages_width == 0
+            && max_branch_width == 0
+            && max_cwd_width == 0;
         if add_leading_gap {
             preview_width = preview_width.saturating_sub(2);
         }
@@ -915,6 +1190,10 @@ fn render_list(
         let mut spans: Vec<Span> = vec![marker];
         if let Some(updated) = updated_span {
             spans.push(updated);
+            spans.push("  ".into());
+        }
+        if let Some(messages) = messages_span {
+            spans.push(messages);
             spans.push("  ".into());
         }
         if let Some(branch) = branch_span {
@@ -964,6 +1243,7 @@ fn render_list(
 fn render_empty_state_line(state: &PickerState) -> Line<'static> {
     if !state.query.is_empty() {
         if state.search_state.is_active()
+            || state.search_pending()
             || (state.pagination.loading.is_pending() && state.pagination.next_cursor.is_some())
         {
             return vec!["Searching…".italic().dim()].into();
@@ -1032,6 +1312,12 @@ fn format_updated_label(row: &Row) -> String {
     }
 }
 
+fn format_message_count_label(row: &Row) -> String {
+    row.message_count
+        .map(|count| count.to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
 fn render_column_headers(
     frame: &mut crate::custom_terminal::Frame,
     area: Rect,
@@ -1047,6 +1333,15 @@ fn render_column_headers(
             "{text:<width$}",
             text = "Updated",
             width = metrics.max_updated_width
+        );
+        spans.push(Span::from(label).bold());
+        spans.push("  ".into());
+    }
+    if metrics.max_messages_width > 0 {
+        let label = format!(
+            "{text:<width$}",
+            text = "Msgs",
+            width = metrics.max_messages_width
         );
         spans.push(Span::from(label).bold());
         spans.push("  ".into());
@@ -1075,9 +1370,10 @@ fn render_column_headers(
 
 struct ColumnMetrics {
     max_updated_width: usize,
+    max_messages_width: usize,
     max_branch_width: usize,
     max_cwd_width: usize,
-    labels: Vec<(String, String, String)>,
+    labels: Vec<(String, String, String, String)>,
 }
 
 fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
@@ -1100,8 +1396,9 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
         format!("…{tail}")
     }
 
-    let mut labels: Vec<(String, String, String)> = Vec::with_capacity(rows.len());
+    let mut labels: Vec<(String, String, String, String)> = Vec::with_capacity(rows.len());
     let mut max_updated_width = UnicodeWidthStr::width("Updated");
+    let mut max_messages_width = UnicodeWidthStr::width("Msgs");
     let mut max_branch_width = UnicodeWidthStr::width("Branch");
     let mut max_cwd_width = if include_cwd {
         UnicodeWidthStr::width("CWD")
@@ -1111,6 +1408,7 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
 
     for row in rows {
         let updated = format_updated_label(row);
+        let messages = format_message_count_label(row);
         let branch_raw = row.git_branch.clone().unwrap_or_default();
         let branch = right_elide(&branch_raw, 24);
         let cwd = if include_cwd {
@@ -1124,13 +1422,15 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
             String::new()
         };
         max_updated_width = max_updated_width.max(UnicodeWidthStr::width(updated.as_str()));
+        max_messages_width = max_messages_width.max(UnicodeWidthStr::width(messages.as_str()));
         max_branch_width = max_branch_width.max(UnicodeWidthStr::width(branch.as_str()));
         max_cwd_width = max_cwd_width.max(UnicodeWidthStr::width(cwd.as_str()));
-        labels.push((updated, branch, cwd));
+        labels.push((updated, messages, branch, cwd));
     }
 
     ColumnMetrics {
         max_updated_width,
+        max_messages_width,
         max_branch_width,
         max_cwd_width,
         labels,
@@ -1280,10 +1580,12 @@ mod tests {
         use ratatui::layout::Layout;
 
         let loader: PageLoader = Arc::new(|_| {});
+        let (bg_tx, _bg_rx) = mpsc::unbounded_channel();
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            bg_tx,
             String::from("openai"),
             true,
             None,
@@ -1299,6 +1601,7 @@ mod tests {
                 updated_at: Some(now - Duration::seconds(42)),
                 cwd: None,
                 git_branch: None,
+                message_count: Some(12),
             },
             Row {
                 path: PathBuf::from("/tmp/b.jsonl"),
@@ -1307,6 +1610,7 @@ mod tests {
                 updated_at: Some(now - Duration::minutes(35)),
                 cwd: None,
                 git_branch: None,
+                message_count: Some(7),
             },
             Row {
                 path: PathBuf::from("/tmp/c.jsonl"),
@@ -1315,6 +1619,7 @@ mod tests {
                 updated_at: Some(now - Duration::hours(2)),
                 cwd: None,
                 git_branch: None,
+                message_count: Some(3),
             },
         ];
         state.all_rows = rows.clone();
@@ -1429,10 +1734,12 @@ mod tests {
         );
 
         let loader: PageLoader = Arc::new(|_| {});
+        let (bg_tx, _bg_rx) = mpsc::unbounded_channel();
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            bg_tx,
             String::from("openai"),
             true,
             None,
@@ -1511,10 +1818,12 @@ mod tests {
     #[test]
     fn pageless_scrolling_deduplicates_and_keeps_order() {
         let loader: PageLoader = Arc::new(|_| {});
+        let (bg_tx, _bg_rx) = mpsc::unbounded_channel();
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            bg_tx,
             String::from("openai"),
             true,
             None,
@@ -1579,11 +1888,13 @@ mod tests {
         let loader: PageLoader = Arc::new(move |req: PageLoadRequest| {
             request_sink.lock().unwrap().push(req);
         });
+        let (bg_tx, _bg_rx) = mpsc::unbounded_channel();
 
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            bg_tx,
             String::from("openai"),
             true,
             None,
@@ -1612,10 +1923,12 @@ mod tests {
     #[tokio::test]
     async fn page_navigation_uses_view_rows() {
         let loader: PageLoader = Arc::new(|_| {});
+        let (bg_tx, _bg_rx) = mpsc::unbounded_channel();
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            bg_tx,
             String::from("openai"),
             true,
             None,
@@ -1657,10 +1970,12 @@ mod tests {
     #[tokio::test]
     async fn up_at_bottom_does_not_scroll_when_visible() {
         let loader: PageLoader = Arc::new(|_| {});
+        let (bg_tx, _bg_rx) = mpsc::unbounded_channel();
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            bg_tx,
             String::from("openai"),
             true,
             None,
@@ -1701,11 +2016,13 @@ mod tests {
         let loader: PageLoader = Arc::new(move |req: PageLoadRequest| {
             request_sink.lock().unwrap().push(req);
         });
+        let (bg_tx, _bg_rx) = mpsc::unbounded_channel();
 
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            bg_tx,
             String::from("openai"),
             true,
             None,
@@ -1772,6 +2089,16 @@ mod tests {
                     7,
                     false,
                 )),
+            })
+            .unwrap();
+
+        let search_token = state.search_state.active_token();
+        state
+            .handle_background_event(BackgroundEvent::MessageScanCompleted {
+                path: PathBuf::from("/tmp/match.jsonl"),
+                message_count: Some(2),
+                search_token,
+                matched: Some(true),
             })
             .unwrap();
 
