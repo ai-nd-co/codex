@@ -44,6 +44,7 @@ pub(crate) struct FooterProps {
     pub(crate) quit_shortcut_key: KeyBinding,
     pub(crate) context_window_percent: Option<i64>,
     pub(crate) context_window_used_tokens: Option<i64>,
+    pub(crate) context_window_total_tokens: Option<i64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -206,6 +207,7 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
             let mut line = context_window_line(
                 props.context_window_percent,
                 props.context_window_used_tokens,
+                props.context_window_total_tokens,
             );
             line.push_span(" · ".dim());
             line.extend(vec![
@@ -233,6 +235,7 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
             let mut line = context_window_line(
                 props.context_window_percent,
                 props.context_window_used_tokens,
+                props.context_window_total_tokens,
             );
             if props.is_task_running && props.steer_enabled {
                 line.push_span(" · ".dim());
@@ -396,15 +399,39 @@ fn build_columns(entries: Vec<Line<'static>>) -> Vec<Line<'static>> {
         .collect()
 }
 
-fn context_window_line(percent: Option<i64>, used_tokens: Option<i64>) -> Line<'static> {
+fn context_window_line(
+    percent: Option<i64>,
+    used_tokens: Option<i64>,
+    total_tokens: Option<i64>,
+) -> Line<'static> {
+    if let Some(tokens) = used_tokens {
+        let used_fmt = format_tokens_compact(tokens);
+        if let Some(total) = total_tokens {
+            let total_fmt = format_tokens_compact(total);
+            let mut line = Line::from(vec![
+                Span::from(format!("{used_fmt} / {total_fmt} tokens")).dim(),
+            ]);
+            if let Some(percent) = percent {
+                let percent = percent.clamp(0, 100);
+                line.push_span(" · ".dim());
+                line.push_span(Span::from(format!("{percent}% context left")).dim());
+            }
+            return line;
+        }
+        if let Some(percent) = percent {
+            let percent = percent.clamp(0, 100);
+            return Line::from(vec![
+                Span::from(format!("{used_fmt} tokens")).dim(),
+                Span::from(" · ").dim(),
+                Span::from(format!("{percent}% context left")).dim(),
+            ]);
+        }
+        return Line::from(vec![Span::from(format!("{used_fmt} tokens")).dim()]);
+    }
+
     if let Some(percent) = percent {
         let percent = percent.clamp(0, 100);
         return Line::from(vec![Span::from(format!("{percent}% context left")).dim()]);
-    }
-
-    if let Some(tokens) = used_tokens {
-        let used_fmt = format_tokens_compact(tokens);
-        return Line::from(vec![Span::from(format!("{used_fmt} used")).dim()]);
     }
 
     Line::from(vec![Span::from("100% context left").dim()])
@@ -664,6 +691,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
             },
         );
 
@@ -679,6 +707,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
             },
         );
 
@@ -694,6 +723,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
             },
         );
 
@@ -709,6 +739,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
             },
         );
 
@@ -724,6 +755,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
             },
         );
 
@@ -739,6 +771,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
             },
         );
 
@@ -754,6 +787,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
             },
         );
 
@@ -768,7 +802,8 @@ mod tests {
                 collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: Some(72),
-                context_window_used_tokens: None,
+                context_window_used_tokens: Some(144_000),
+                context_window_total_tokens: Some(200_000),
             },
         );
 
@@ -784,6 +819,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: Some(123_456),
+                context_window_total_tokens: None,
             },
         );
 
@@ -799,6 +835,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
             },
         );
 
@@ -814,6 +851,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
             },
         );
 
@@ -827,6 +865,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
             context_window_used_tokens: None,
+            context_window_total_tokens: None,
         };
 
         snapshot_footer_with_indicator(
@@ -853,6 +892,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
             context_window_used_tokens: None,
+            context_window_total_tokens: None,
         };
 
         snapshot_footer_with_indicator(

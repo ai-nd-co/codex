@@ -981,7 +981,7 @@ impl ChatWidget {
         match info {
             Some(info) => self.apply_token_info(info),
             None => {
-                self.bottom_pane.set_context_window(None, None);
+                self.bottom_pane.set_context_window(None, None, None);
                 self.token_info = None;
             }
         }
@@ -989,8 +989,10 @@ impl ChatWidget {
 
     fn apply_token_info(&mut self, info: TokenUsageInfo) {
         let percent = self.context_remaining_percent(&info);
-        let used_tokens = self.context_used_tokens(&info, percent.is_some());
-        self.bottom_pane.set_context_window(percent, used_tokens);
+        let used_tokens = self.context_used_tokens(&info);
+        let total_tokens = self.context_total_tokens(&info);
+        self.bottom_pane
+            .set_context_window(percent, used_tokens, total_tokens);
         self.token_info = Some(info);
     }
 
@@ -1001,12 +1003,12 @@ impl ChatWidget {
         })
     }
 
-    fn context_used_tokens(&self, info: &TokenUsageInfo, percent_known: bool) -> Option<i64> {
-        if percent_known {
-            return None;
-        }
+    fn context_used_tokens(&self, info: &TokenUsageInfo) -> Option<i64> {
+        Some(info.last_token_usage.tokens_in_context_window())
+    }
 
-        Some(info.total_token_usage.tokens_in_context_window())
+    fn context_total_tokens(&self, info: &TokenUsageInfo) -> Option<i64> {
+        info.model_context_window
     }
 
     fn restore_pre_review_token_info(&mut self) {
@@ -1014,7 +1016,7 @@ impl ChatWidget {
             match saved {
                 Some(info) => self.apply_token_info(info),
                 None => {
-                    self.bottom_pane.set_context_window(None, None);
+                    self.bottom_pane.set_context_window(None, None, None);
                     self.token_info = None;
                 }
             }

@@ -2,4 +2,4 @@
 source: tui/src/bottom_pane/footer.rs
 expression: terminal.backend()
 ---
-"  72% context left · ? for shortcuts                                            "
+"  144K / 200K tokens · 72% context left · ? for shortcuts                       "
