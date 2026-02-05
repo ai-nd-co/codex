@@ -610,6 +610,8 @@ impl PickerState {
         self.all_rows.clear();
         self.filtered_rows.clear();
         self.seen_paths.clear();
+        self.message_count_pending.clear();
+        self.search_cache = None;
         self.selected = 0;
 
         let search_token = if self.query.is_empty() {
@@ -804,6 +806,19 @@ impl PickerState {
             return false;
         };
         paths_match(row_cwd, filter_cwd)
+    }
+
+    fn row_matches_query(&self, row: &Row) -> bool {
+        if self.query.is_empty() {
+            return true;
+        }
+        if row.matches_query(&self.query.to_lowercase()) {
+            return true;
+        }
+        let Some(cache) = self.search_cache.as_ref() else {
+            return false;
+        };
+        cache.matches.get(&row.path).copied().unwrap_or(false)
     }
 
     fn search_pending(&self) -> bool {
@@ -2520,10 +2535,12 @@ mod tests {
     #[tokio::test]
     async fn enter_on_row_without_resolvable_thread_id_shows_inline_error() {
         let loader: PageLoader = Arc::new(|_| {});
+        let (bg_tx, _bg_rx) = mpsc::unbounded_channel();
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            bg_tx,
             String::from("openai"),
             true,
             None,
@@ -2693,6 +2710,16 @@ mod tests {
                 matched: Some(true),
             })
             .await
+            .unwrap();
+
+        let search_token = state.search_state.active_token();
+        state
+            .handle_background_event(BackgroundEvent::MessageScanCompleted {
+                path: PathBuf::from("/tmp/match.jsonl"),
+                message_count: Some(2),
+                search_token,
+                matched: Some(true),
+            })
             .unwrap();
 
         assert!(!state.filtered_rows.is_empty());
