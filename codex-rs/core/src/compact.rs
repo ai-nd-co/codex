@@ -32,6 +32,7 @@ use tracing::error;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
+pub const SMART_COMPACT_PROMPT: &str = include_str!("../templates/smart_compact/prompt.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 const SMART_COMPACT_RATIO: f64 = 0.5;
 
