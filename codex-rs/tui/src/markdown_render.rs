@@ -22,6 +22,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use unicode_width::UnicodeWidthStr;
 
+use crate::render::highlight::HighlightLanguage;
+
 struct MarkdownStyles {
     h1: Style,
     h2: Style,
@@ -370,6 +372,13 @@ where
     current_subsequent_indent: Vec<Span<'static>>,
     current_line_style: Style,
     current_line_in_code_block: bool,
+    buffered_code_block: Option<BufferedCodeBlock>,
+}
+
+#[derive(Clone, Debug)]
+struct BufferedCodeBlock {
+    lang: HighlightLanguage,
+    lines: Vec<String>,
 }
 
 impl<'a, I> Writer<'a, I>
@@ -397,6 +406,7 @@ where
             current_subsequent_indent: Vec::new(),
             current_line_style: Style::default(),
             current_line_in_code_block: false,
+            buffered_code_block: None,
         }
     }
 
@@ -682,6 +692,15 @@ where
     }
 
     fn text(&mut self, text: CowStr<'a>) {
+        if let Some(buffer) = self.buffered_code_block.as_mut() {
+            for line in text.lines() {
+                buffer.lines.push(line.to_string());
+            }
+            // Code blocks always continue until TagEnd::CodeBlock.
+            self.needs_newline = false;
+            self.pending_marker_line = false;
+            return;
+        }
         if self.pending_marker_line {
             self.push_line(Line::default());
         }
@@ -746,10 +765,18 @@ where
     }
 
     fn hard_break(&mut self) {
+        if let Some(buffer) = self.buffered_code_block.as_mut() {
+            buffer.lines.push(String::new());
+            return;
+        }
         self.push_line(Line::default());
     }
 
     fn soft_break(&mut self) {
+        if let Some(buffer) = self.buffered_code_block.as_mut() {
+            buffer.lines.push(String::new());
+            return;
+        }
         self.push_line(Line::default());
     }
 
@@ -802,12 +829,19 @@ where
         self.needs_newline = false;
     }
 
-    fn start_codeblock(&mut self, _lang: Option<String>, indent: Option<Span<'static>>) {
+    fn start_codeblock(&mut self, lang: Option<String>, indent: Option<Span<'static>>) {
         self.flush_current_line();
         if !self.text.lines.is_empty() {
             self.push_blank_line();
         }
         self.in_code_block = true;
+        self.buffered_code_block = lang
+            .as_deref()
+            .and_then(HighlightLanguage::from_fence_info)
+            .map(|lang| BufferedCodeBlock {
+                lang,
+                lines: Vec::new(),
+            });
         self.indent_stack.push(IndentContext::new(
             vec![indent.unwrap_or_default()],
             None,
@@ -817,6 +851,12 @@ where
     }
 
     fn end_codeblock(&mut self) {
+        if let Some(buffer) = self.buffered_code_block.take() {
+            let source = buffer.lines.join("\n");
+            for line in crate::render::highlight::highlight_to_lines(buffer.lang, &source) {
+                self.push_line(line);
+            }
+        }
         self.needs_newline = true;
         self.in_code_block = false;
         self.indent_stack.pop();

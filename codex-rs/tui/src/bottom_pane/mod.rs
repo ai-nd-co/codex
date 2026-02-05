@@ -571,12 +571,11 @@ impl BottomPane {
         self.context_window_percent = percent;
         self.context_window_used_tokens = used_tokens;
         self.context_window_total_tokens = total_tokens;
-        self.composer
-            .set_context_window(
-                percent,
-                self.context_window_used_tokens,
-                self.context_window_total_tokens,
-            );
+        self.composer.set_context_window(
+            percent,
+            self.context_window_used_tokens,
+            self.context_window_total_tokens,
+        );
         self.request_redraw();
     }
 

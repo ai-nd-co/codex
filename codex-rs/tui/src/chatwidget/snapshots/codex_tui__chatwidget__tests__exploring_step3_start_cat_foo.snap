@@ -4,4 +4,5 @@ expression: active_blob(&chat)
 ---
 • Exploring
   └ List ls -la
-    Read foo.txt
+    Read foo.txt (cat foo.txt)
+

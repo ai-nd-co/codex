@@ -5,3 +5,4 @@ expression: active_blob(&chat)
 • Explored
   └ List ls -la
     Read foo.txt
+        hello from foo
