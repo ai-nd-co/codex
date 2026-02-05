@@ -3390,6 +3390,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            false,
         );
         // Mark call complete so markers are ✓
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
@@ -3417,6 +3418,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            false,
         );
         // Call 1: Search only
         cell.complete_call("c1", CommandOutput::default(), Duration::from_millis(1));
@@ -3486,8 +3488,45 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            false,
         );
         cell.complete_call("c1", CommandOutput::default(), Duration::from_millis(1));
+        let lines = cell.display_lines(80);
+        let rendered = render_lines(&lines).join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn verbose_tool_calls_show_output() {
+        let call_id = "c1".to_string();
+        let mut cell = ExecCell::new(
+            ExecCall {
+                call_id: call_id.clone(),
+                command: vec!["bash".into(), "-lc".into(), "rg foo src".into()],
+                parsed: vec![ParsedCommand::Search {
+                    query: Some("foo".into()),
+                    path: Some("src".into()),
+                    cmd: "rg foo src".into(),
+                }],
+                output: None,
+                source: ExecCommandSource::Agent,
+                start_time: Some(Instant::now()),
+                duration: None,
+                interaction_input: None,
+            },
+            true,
+            true,
+        );
+        cell.complete_call(
+            &call_id,
+            CommandOutput {
+                exit_code: 0,
+                aggregated_output: "src/lib.rs:1: foo\nsrc/lib.rs:2: bar".into(),
+                formatted_output: "src/lib.rs:1: foo\nsrc/lib.rs:2: bar".into(),
+            },
+            Duration::from_millis(1),
+        );
+
         let lines = cell.display_lines(80);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
@@ -3510,6 +3549,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            false,
         );
         // Mark call complete so it renders as "Ran"
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
@@ -3536,6 +3576,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            false,
         );
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         // Wide enough that it fits inline
@@ -3560,6 +3601,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            false,
         );
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(24);
@@ -3583,6 +3625,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            false,
         );
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(80);
@@ -3607,6 +3650,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            false,
         );
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(28);
@@ -3631,6 +3675,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            false,
         );
         let stderr: String = (1..=10)
             .map(|n| n.to_string())
@@ -3681,6 +3726,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            false,
         );
 
         let stderr = "error: first line on stderr\nerror: second line on stderr".to_string();

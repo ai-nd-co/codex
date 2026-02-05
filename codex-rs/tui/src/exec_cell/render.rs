@@ -12,6 +12,7 @@ use crate::shimmer::shimmer_spans;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
 use crate::wrapping::adaptive_wrap_lines;
+use crate::wrapping::word_wrap_line;
 use codex_ansi_escape::ansi_escape_line;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::ExecCommandSource;
@@ -44,6 +45,7 @@ pub(crate) fn new_active_exec_command(
     source: ExecCommandSource,
     interaction_input: Option<String>,
     animations_enabled: bool,
+    verbose_tool_calls: bool,
 ) -> ExecCell {
     ExecCell::new(
         ExecCall {
@@ -57,6 +59,7 @@ pub(crate) fn new_active_exec_command(
             interaction_input,
         },
         animations_enabled,
+        verbose_tool_calls,
     )
 }
 
@@ -266,14 +269,16 @@ impl ExecCell {
             },
         ]));
 
+        let verbose_tool_calls = self.verbose_tool_calls();
         let mut calls = self.calls.clone();
         let mut out_indented = Vec::new();
         while !calls.is_empty() {
             let mut call = calls.remove(0);
-            if call
-                .parsed
-                .iter()
-                .all(|parsed| matches!(parsed, ParsedCommand::Read { .. }))
+            if !verbose_tool_calls
+                && call
+                    .parsed
+                    .iter()
+                    .all(|parsed| matches!(parsed, ParsedCommand::Read { .. }))
             {
                 while let Some(next) = calls.first() {
                     if next
@@ -346,6 +351,46 @@ impl ExecCell {
                         .subsequent_indent(subsequent_indent),
                 );
                 push_owned_lines(&wrapped, &mut out_indented);
+            }
+
+            if verbose_tool_calls {
+                if let Some(output) = call.output.as_ref() {
+                    let raw_output = output_lines(
+                        Some(output),
+                        OutputLinesParams {
+                            line_limit: TOOL_CALL_MAX_LINES,
+                            only_err: false,
+                            include_angle_pipe: false,
+                            include_prefix: false,
+                        },
+                    );
+                    let output_preview: Vec<Line<'static>> = if raw_output.lines.is_empty() {
+                        vec![Line::from("(no output)".dim())]
+                    } else {
+                        let output_wrap_width = width.max(1) as usize;
+                        let output_opts = RtOptions::new(output_wrap_width)
+                            .word_splitter(WordSplitter::NoHyphenation);
+                        let mut wrapped_output: Vec<Line<'static>> = Vec::new();
+                        for line in &raw_output.lines {
+                            push_owned_lines(
+                                &word_wrap_line(line, output_opts.clone()),
+                                &mut wrapped_output,
+                            );
+                        }
+                        Self::truncate_lines_middle(
+                            &wrapped_output,
+                            TOOL_CALL_MAX_LINES,
+                            width,
+                            raw_output.omitted,
+                            None,
+                        )
+                    };
+
+                    if !output_preview.is_empty() {
+                        let prefixed = prefix_lines(output_preview, "    ".dim(), "    ".into());
+                        out_indented.extend(prefixed);
+                    }
+                }
             }
         }
 
@@ -758,7 +803,7 @@ mod tests {
             interaction_input: None,
         };
 
-        let cell = ExecCell::new(call, false);
+        let cell = ExecCell::new(call, false, false);
 
         // Use a narrow width so each logical line wraps into many on-screen lines.
         let lines = cell.command_display_lines(width);

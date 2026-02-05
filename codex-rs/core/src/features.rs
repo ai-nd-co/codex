@@ -735,9 +735,9 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::VerboseToolCalls,
         key: "verbose_tool_calls",
         stage: Stage::Experimental {
-            name: "Verbose Tool Calls",
-            menu_description: "Show detailed tool call parameters and output in exec cells.",
-            announcement: "NEW: Verbose Tool Calls shows full tool call details. Enable in /experimental.",
+            name: "Verbose tool calls",
+            menu_description: "Show output for Search, Read, and List tool calls.",
+            announcement: "NEW! Show verbose tool call output. Enable in /experimental!",
         },
         default_enabled: false,
     },
