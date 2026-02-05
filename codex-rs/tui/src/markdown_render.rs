@@ -65,6 +65,7 @@ impl Default for MarkdownStyles {
 static TABLES_ENABLED: AtomicBool = AtomicBool::new(false);
 const UTF8_TABLE_PRESET: &str = "││──├─┼┤│─┼├┤┬┴┌┐└┘";
 const TABLE_MAX_WIDTH_FALLBACK: usize = 160;
+const TABLE_MIN_WIDTH: usize = 10;
 
 pub(crate) fn set_tables_enabled(enabled: bool) {
     TABLES_ENABLED.store(enabled, Ordering::Relaxed);
@@ -632,14 +633,17 @@ where
 
         // Hard cap the rendered table width to avoid terminal overflow. We prefer the
         // current markdown wrap width (computed from the TUI layout). If it's unavailable,
-        // use a conservative fallback.
-        let max_width = self.wrap_width.unwrap_or(TABLE_MAX_WIDTH_FALLBACK);
+        // use the terminal width. If that fails too, fall back to a conservative constant.
+        let max_width = self
+            .wrap_width
+            .or_else(terminal_width_cols)
+            .unwrap_or(TABLE_MAX_WIDTH_FALLBACK);
         let prefix_width: usize = self
             .prefix_spans(self.pending_marker_line)
             .iter()
             .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
             .sum();
-        let available_width = max_width.saturating_sub(prefix_width).max(10);
+        let available_width = max_width.saturating_sub(prefix_width).max(TABLE_MIN_WIDTH);
         table_output.set_width(available_width.min(u16::MAX as usize) as u16);
 
         if let Some(header) = header {
@@ -958,6 +962,13 @@ fn line_to_plain_string(line: &Line<'_>) -> String {
 fn is_box_table_line(text: &str) -> bool {
     let trimmed = text.trim_start();
     matches!(trimmed.chars().next(), Some('┌' | '├' | '└' | '│'))
+}
+
+fn terminal_width_cols() -> Option<usize> {
+    match crossterm::terminal::size() {
+        Ok((cols, _rows)) => Some(cols as usize),
+        Err(_) => None,
+    }
 }
 
 #[cfg(test)]
