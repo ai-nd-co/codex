@@ -69,6 +69,7 @@ pub(crate) struct FooterProps {
     pub(crate) context_window_used_tokens: Option<i64>,
     pub(crate) status_line_value: Option<Line<'static>>,
     pub(crate) status_line_enabled: bool,
+    pub(crate) context_window_total_tokens: Option<i64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -775,15 +776,39 @@ fn build_columns(entries: Vec<Line<'static>>) -> Vec<Line<'static>> {
         .collect()
 }
 
-pub(crate) fn context_window_line(percent: Option<i64>, used_tokens: Option<i64>) -> Line<'static> {
+pub(crate) fn context_window_line(
+    percent: Option<i64>,
+    used_tokens: Option<i64>,
+    total_tokens: Option<i64>,
+) -> Line<'static> {
+    if let Some(tokens) = used_tokens {
+        let used_fmt = format_tokens_compact(tokens);
+        if let Some(total) = total_tokens {
+            let total_fmt = format_tokens_compact(total);
+            let mut line = Line::from(vec![
+                Span::from(format!("{used_fmt} / {total_fmt} tokens")).dim(),
+            ]);
+            if let Some(percent) = percent {
+                let percent = percent.clamp(0, 100);
+                line.push_span(" · ".dim());
+                line.push_span(Span::from(format!("{percent}% context left")).dim());
+            }
+            return line;
+        }
+        if let Some(percent) = percent {
+            let percent = percent.clamp(0, 100);
+            return Line::from(vec![
+                Span::from(format!("{used_fmt} tokens")).dim(),
+                Span::from(" · ").dim(),
+                Span::from(format!("{percent}% context left")).dim(),
+            ]);
+        }
+        return Line::from(vec![Span::from(format!("{used_fmt} tokens")).dim()]);
+    }
+
     if let Some(percent) = percent {
         let percent = percent.clamp(0, 100);
         return Line::from(vec![Span::from(format!("{percent}% context left")).dim()]);
-    }
-
-    if let Some(tokens) = used_tokens {
-        let used_fmt = format_tokens_compact(tokens);
-        return Line::from(vec![Span::from(format!("{used_fmt} used")).dim()]);
     }
 
     Line::from(vec![Span::from("100% context left").dim()])
@@ -1071,6 +1096,7 @@ mod tests {
                     Some(context_window_line(
                         props.context_window_percent,
                         props.context_window_used_tokens,
+                        props.context_window_total_tokens,
                     ))
                 };
                 let right_width = right_line
@@ -1195,6 +1221,7 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                context_window_total_tokens: None,
             },
         );
 
@@ -1212,6 +1239,7 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                context_window_total_tokens: None,
             },
         );
 
@@ -1229,6 +1257,7 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                context_window_total_tokens: None,
             },
         );
 
@@ -1246,6 +1275,7 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                context_window_total_tokens: None,
             },
         );
 
@@ -1263,6 +1293,7 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                context_window_total_tokens: None,
             },
         );
 
@@ -1280,6 +1311,7 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                context_window_total_tokens: None,
             },
         );
 
@@ -1297,6 +1329,7 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                context_window_total_tokens: None,
             },
         );
 
@@ -1311,9 +1344,10 @@ mod tests {
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: Some(72),
-                context_window_used_tokens: None,
+                context_window_used_tokens: Some(144_000),
                 status_line_value: None,
                 status_line_enabled: false,
+                context_window_total_tokens: Some(200_000),
             },
         );
 
@@ -1331,6 +1365,7 @@ mod tests {
                 context_window_used_tokens: Some(123_456),
                 status_line_value: None,
                 status_line_enabled: false,
+                context_window_total_tokens: None,
             },
         );
 
@@ -1348,6 +1383,7 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
+                context_window_total_tokens: None,
             },
         );
 
@@ -1363,6 +1399,7 @@ mod tests {
             context_window_used_tokens: None,
             status_line_value: None,
             status_line_enabled: false,
+            context_window_total_tokens: None,
         };
 
         snapshot_footer_with_mode_indicator(
@@ -1391,6 +1428,7 @@ mod tests {
             context_window_used_tokens: None,
             status_line_value: None,
             status_line_enabled: false,
+            context_window_total_tokens: None,
         };
 
         snapshot_footer_with_mode_indicator(
