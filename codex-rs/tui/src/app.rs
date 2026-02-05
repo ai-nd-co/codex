@@ -7,6 +7,7 @@ use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event::WindowsSandboxFallbackReason;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
+use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
@@ -42,13 +43,11 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config_loader::ConfigLayerStackOrdering;
-#[cfg(target_os = "windows")]
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_core::protocol::AskForApproval;
-use codex_core::protocol::DeprecationNoticeEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::FinalOutput;
@@ -58,9 +57,14 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
+#[cfg(target_os = "windows")]
+use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::OtelManager;
+use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::Personality;
+#[cfg(target_os = "windows")]
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
@@ -99,11 +103,17 @@ use toml::Value as TomlValue;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
+/// Baseline cadence for periodic stream commit animation ticks.
+///
+/// Smooth-mode streaming drains one line per tick, so this interval controls
+/// perceived typing speed for non-backlogged output.
+const COMMIT_ANIMATION_TICK: Duration = tui::TARGET_FRAME_INTERVAL;
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub thread_id: Option<ThreadId>,
+    pub thread_name: Option<String>,
     pub update_action: Option<UpdateAction>,
     pub exit_reason: ExitReason,
 }
@@ -113,6 +123,7 @@ impl AppExitInfo {
         Self {
             token_usage: TokenUsage::default(),
             thread_id: None,
+            thread_name: None,
             update_action: None,
             exit_reason: ExitReason::Fatal(message.into()),
         }
@@ -131,13 +142,17 @@ pub enum ExitReason {
     Fatal(String),
 }
 
-fn session_summary(token_usage: TokenUsage, thread_id: Option<ThreadId>) -> Option<SessionSummary> {
+fn session_summary(
+    token_usage: TokenUsage,
+    thread_id: Option<ThreadId>,
+    thread_name: Option<String>,
+) -> Option<SessionSummary> {
     if token_usage.is_zero() {
         return None;
     }
 
     let usage_line = FinalOutput::from(token_usage).to_string();
-    let resume_command = thread_id.map(|thread_id| format!("codex resume {thread_id}"));
+    let resume_command = codex_core::util::resume_command(thread_name.as_deref(), thread_id);
     Some(SessionSummary {
         usage_line,
         resume_command,
@@ -172,15 +187,6 @@ fn emit_skill_load_warnings(app_event_tx: &AppEventSender, errors: &[SkillErrorI
             crate::history_cell::new_warning_event(format!("{path}: {message}")),
         )));
     }
-}
-
-fn emit_deprecation_notice(app_event_tx: &AppEventSender, notice: Option<DeprecationNoticeEvent>) {
-    let Some(DeprecationNoticeEvent { summary, details }) = notice else {
-        return;
-    };
-    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-        crate::history_cell::new_deprecation_notice(summary, details),
-    )));
 }
 
 fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) {
@@ -492,6 +498,7 @@ async fn handle_model_migration_prompt_if_needed(
                 return Some(AppExitInfo {
                     token_usage: TokenUsage::default(),
                     thread_id: None,
+                    thread_name: None,
                     update_action: None,
                     exit_reason: ExitReason::UserRequested,
                 });
@@ -529,6 +536,8 @@ pub(crate) struct App {
 
     /// Controls the animation thread that sends CommitTick events.
     pub(crate) commit_anim_running: Arc<AtomicBool>,
+    // Shared across ChatWidget instances so invalid status-line config warnings only emit once.
+    status_line_invalid_items_warned: Arc<AtomicBool>,
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
@@ -538,6 +547,7 @@ pub(crate) struct App {
     /// transcript cells.
     pub(crate) backtrack_render_pending: bool,
     pub(crate) feedback: codex_feedback::CodexFeedback,
+    feedback_audience: FeedbackAudience,
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
 
@@ -596,7 +606,9 @@ impl App {
             models_manager: self.server.get_models_manager(),
             feedback: self.feedback.clone(),
             is_first_run: false,
+            feedback_audience: self.feedback_audience,
             model: Some(self.chat_widget.current_model().to_string()),
+            status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
             otel_manager: self.otel_manager.clone(),
         }
     }
@@ -898,6 +910,7 @@ impl App {
         for event in snapshot.events {
             self.handle_codex_event_replay(event);
         }
+        self.refresh_status_line();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -913,13 +926,12 @@ impl App {
         session_selection: SessionSelection,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
-        ollama_chat_support_notice: Option<DeprecationNoticeEvent>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
-        emit_deprecation_notice(&app_event_tx, ollama_chat_support_notice);
         emit_project_config_warnings(&app_event_tx, &config);
+        tui.set_notification_method(config.tui_notification_method);
 
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
@@ -953,17 +965,40 @@ impl App {
 
         let auth = auth_manager.auth().await;
         let auth_ref = auth.as_ref();
+        // Determine who should see internal Slack routing. We treat
+        // `@openai.com` emails as employees and default to `External` when the
+        // email is unavailable (for example, API key auth).
+        let feedback_audience = if auth_ref
+            .and_then(CodexAuth::get_account_email)
+            .is_some_and(|email| email.ends_with("@openai.com"))
+        {
+            FeedbackAudience::OpenAiEmployee
+        } else {
+            FeedbackAudience::External
+        };
+        let auth_mode = auth_ref
+            .map(CodexAuth::auth_mode)
+            .map(TelemetryAuthMode::from);
         let otel_manager = OtelManager::new(
             ThreadId::new(),
             model.as_str(),
             model.as_str(),
             auth_ref.and_then(CodexAuth::get_account_id),
             auth_ref.and_then(CodexAuth::get_account_email),
-            auth_ref.map(|auth| auth.mode),
+            auth_mode,
             config.otel.log_user_prompt,
             codex_core::terminal::user_agent(),
             SessionSource::Cli,
         );
+        if config
+            .tui_status_line
+            .as_ref()
+            .is_some_and(|cmd| !cmd.is_empty())
+        {
+            otel_manager.counter("codex.status_line", 1, &[]);
+        }
+
+        let status_line_invalid_items_warned = Arc::new(AtomicBool::new(false));
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let mut chat_widget = match session_selection {
@@ -983,7 +1018,9 @@ impl App {
                     models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
+                    feedback_audience,
                     model: Some(model.clone()),
+                    status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new(init, thread_manager.clone())
@@ -1011,12 +1048,15 @@ impl App {
                     models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
+                    feedback_audience,
                     model: config.model.clone(),
+                    status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
             }
             SessionSelection::Fork(path) => {
+                otel_manager.counter("codex.thread.fork", 1, &[("source", "cli_subcommand")]);
                 let forked = thread_manager
                     .fork_thread(usize::MAX, config.clone(), path.clone())
                     .await
@@ -1039,7 +1079,9 @@ impl App {
                     models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
+                    feedback_audience,
                     model: config.model.clone(),
+                    status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
@@ -1071,9 +1113,11 @@ impl App {
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
+            status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
             feedback: feedback.clone(),
+            feedback_audience,
             pending_update_action: None,
             suppress_shutdown_complete: false,
             windows_sandbox: WindowsSandboxState::default(),
@@ -1088,7 +1132,8 @@ impl App {
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
         {
-            let should_check = codex_core::get_platform_sandbox().is_some()
+            let should_check = WindowsSandboxLevel::from_config(&app.config)
+                != WindowsSandboxLevel::Disabled
                 && matches!(
                     app.config.sandbox_policy.get(),
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
@@ -1124,6 +1169,7 @@ impl App {
                 return Ok(AppExitInfo {
                     token_usage: app.token_usage(),
                     thread_id: app.chat_widget.thread_id(),
+                    thread_name: app.chat_widget.thread_name(),
                     update_action: app.pending_update_action,
                     exit_reason,
                 });
@@ -1185,6 +1231,7 @@ impl App {
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
             thread_id: app.chat_widget.thread_id(),
+            thread_name: app.chat_widget.thread_name(),
             update_action: app.pending_update_action,
             exit_reason,
         })
@@ -1195,6 +1242,13 @@ impl App {
         tui: &mut tui::Tui,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
+        if matches!(event, TuiEvent::Draw) {
+            let size = tui.terminal.size()?;
+            if size != tui.terminal.last_known_screen_size {
+                self.refresh_status_line();
+            }
+        }
+
         if self.overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
@@ -1246,8 +1300,11 @@ impl App {
         match event {
             AppEvent::NewSession => {
                 let model = self.chat_widget.current_model().to_string();
-                let summary =
-                    session_summary(self.chat_widget.token_usage(), self.chat_widget.thread_id());
+                let summary = session_summary(
+                    self.chat_widget.token_usage(),
+                    self.chat_widget.thread_id(),
+                    self.chat_widget.thread_name(),
+                );
                 self.shutdown_current_thread().await;
                 if let Err(err) = self.server.remove_and_close_all_threads().await {
                     tracing::warn!(error = %err, "failed to close all threads");
@@ -1263,7 +1320,9 @@ impl App {
                     models_manager: self.server.get_models_manager(),
                     feedback: self.feedback.clone(),
                     is_first_run: false,
+                    feedback_audience: self.feedback_audience,
                     model: Some(model),
+                    status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
                     otel_manager: self.otel_manager.clone(),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
@@ -1319,6 +1378,7 @@ impl App {
                         let summary = session_summary(
                             self.chat_widget.token_usage(),
                             self.chat_widget.thread_id(),
+                            self.chat_widget.thread_name(),
                         );
                         match self
                             .server
@@ -1332,10 +1392,8 @@ impl App {
                             Ok(resumed) => {
                                 self.shutdown_current_thread().await;
                                 self.config = resume_config;
-                                self.file_search = FileSearchManager::new(
-                                    self.config.cwd.clone(),
-                                    self.app_event_tx.clone(),
-                                );
+                                tui.set_notification_method(self.config.tui_notification_method);
+                                self.file_search.update_search_dir(self.config.cwd.clone());
                                 let init = self.chatwidget_init_for_forked_or_resumed_thread(
                                     tui,
                                     self.config.clone(),
@@ -1376,8 +1434,15 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::ForkCurrentSession => {
-                let summary =
-                    session_summary(self.chat_widget.token_usage(), self.chat_widget.thread_id());
+                self.otel_manager
+                    .counter("codex.thread.fork", 1, &[("source", "slash_command")]);
+                let summary = session_summary(
+                    self.chat_widget.token_usage(),
+                    self.chat_widget.thread_id(),
+                    self.chat_widget.thread_name(),
+                );
+                self.chat_widget
+                    .add_plain_history_lines(vec!["/fork".magenta().into()]);
                 if let Some(path) = self.chat_widget.rollout_path() {
                     match self
                         .server
@@ -1459,7 +1524,7 @@ impl App {
                     let running = self.commit_anim_running.clone();
                     thread::spawn(move || {
                         while running.load(Ordering::Relaxed) {
-                            thread::sleep(Duration::from_millis(50));
+                            thread::sleep(COMMIT_ANIMATION_TICK);
                             tx.send(AppEvent::CommitTick);
                         }
                     });
@@ -1502,10 +1567,23 @@ impl App {
                 ));
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::OpenAppLink {
+                title,
+                description,
+                instructions,
+                url,
+                is_installed,
+            } => {
+                self.chat_widget.open_app_link_view(
+                    title,
+                    description,
+                    instructions,
+                    url,
+                    is_installed,
+                );
+            }
             AppEvent::StartFileSearch(query) => {
-                if !query.is_empty() {
-                    self.file_search.on_user_query(query);
-                }
+                self.file_search.on_user_query(query);
             }
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
@@ -1513,14 +1591,20 @@ impl App {
             AppEvent::RateLimitSnapshotFetched(snapshot) => {
                 self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
             }
+            AppEvent::ConnectorsLoaded(result) => {
+                self.chat_widget.on_connectors_loaded(result);
+            }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
+                self.refresh_status_line();
             }
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(&model);
+                self.refresh_status_line();
             }
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
+                self.refresh_status_line();
             }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
@@ -1628,10 +1712,29 @@ impl App {
                                 }
                             }
                             Err(err) => {
+                                let mut code_tag: Option<String> = None;
+                                let mut message_tag: Option<String> = None;
+                                if let Some((code, message)) =
+                                    codex_core::windows_sandbox::elevated_setup_failure_details(
+                                        &err,
+                                    )
+                                {
+                                    code_tag = Some(code);
+                                    message_tag = Some(message);
+                                }
+                                let mut tags: Vec<(&str, &str)> = Vec::new();
+                                if let Some(code) = code_tag.as_deref() {
+                                    tags.push(("code", code));
+                                }
+                                if let Some(message) = message_tag.as_deref() {
+                                    tags.push(("message", message));
+                                }
                                 otel_manager.counter(
-                                    "codex.windows_sandbox.elevated_setup_failure",
+                                    codex_core::windows_sandbox::elevated_setup_failure_metric_name(
+                                        &err,
+                                    ),
                                     1,
-                                    &[],
+                                    &tags,
                                 );
                                 tracing::error!(
                                     error = %err,
@@ -1666,27 +1769,48 @@ impl App {
                     let feature_key = Feature::WindowsSandbox.key();
                     let elevated_key = Feature::WindowsSandboxElevated.key();
                     let elevated_enabled = matches!(mode, WindowsSandboxEnableMode::Elevated);
-                    match ConfigEditsBuilder::new(&self.config.codex_home)
-                        .with_profile(profile)
-                        .set_feature_enabled(feature_key, true)
-                        .set_feature_enabled(elevated_key, elevated_enabled)
-                        .apply()
-                        .await
-                    {
+                    let mut builder =
+                        ConfigEditsBuilder::new(&self.config.codex_home).with_profile(profile);
+                    if elevated_enabled {
+                        builder = builder.set_feature_enabled(elevated_key, true);
+                    } else {
+                        builder = builder
+                            .set_feature_enabled(feature_key, true)
+                            .set_feature_enabled(elevated_key, false);
+                    }
+                    match builder.apply().await {
                         Ok(()) => {
-                            self.config.set_windows_sandbox_globally(true);
-                            self.config
-                                .set_windows_elevated_sandbox_globally(elevated_enabled);
-                            self.chat_widget
-                                .set_feature_enabled(Feature::WindowsSandbox, true);
-                            self.chat_widget.set_feature_enabled(
-                                Feature::WindowsSandboxElevated,
-                                elevated_enabled,
-                            );
+                            if elevated_enabled {
+                                self.config.set_windows_elevated_sandbox_enabled(true);
+                                self.chat_widget
+                                    .set_feature_enabled(Feature::WindowsSandboxElevated, true);
+                            } else {
+                                self.config.set_windows_sandbox_enabled(true);
+                                self.config.set_windows_elevated_sandbox_enabled(false);
+                                self.chat_widget
+                                    .set_feature_enabled(Feature::WindowsSandbox, true);
+                                self.chat_widget
+                                    .set_feature_enabled(Feature::WindowsSandboxElevated, false);
+                            }
                             self.chat_widget.clear_forced_auto_mode_downgrade();
+                            let windows_sandbox_level =
+                                WindowsSandboxLevel::from_config(&self.config);
                             if let Some((sample_paths, extra_count, failed_scan)) =
                                 self.chat_widget.world_writable_warning_details()
                             {
+                                self.app_event_tx.send(AppEvent::CodexOp(
+                                    Op::OverrideTurnContext {
+                                        cwd: None,
+                                        approval_policy: None,
+                                        sandbox_policy: None,
+                                        windows_sandbox_level: Some(windows_sandbox_level),
+                                        model: None,
+                                        effort: None,
+                                        summary: None,
+                                        collaboration_mode: None,
+                                        personality: None,
+                                    },
+                                ));
                                 self.app_event_tx.send(
                                     AppEvent::OpenWorldWritableWarningConfirmation {
                                         preset: Some(preset.clone()),
@@ -1701,6 +1825,7 @@ impl App {
                                         cwd: None,
                                         approval_policy: Some(preset.approval),
                                         sandbox_policy: Some(preset.sandbox.clone()),
+                                        windows_sandbox_level: Some(windows_sandbox_level),
                                         model: None,
                                         effort: None,
                                         summary: None,
@@ -1782,7 +1907,7 @@ impl App {
                 let profile = self.active_profile.as_deref();
                 match ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)
-                    .set_model_personality(Some(personality))
+                    .set_personality(Some(personality))
                     .apply()
                     .await
                 {
@@ -1839,7 +1964,8 @@ impl App {
                 }
                 #[cfg(target_os = "windows")]
                 if !matches!(&policy, codex_core::protocol::SandboxPolicy::ReadOnly)
-                    || codex_core::get_platform_sandbox().is_some()
+                    || WindowsSandboxLevel::from_config(&self.config)
+                        != WindowsSandboxLevel::Disabled
                 {
                     self.config.forced_auto_mode_downgraded_on_windows = false;
                 }
@@ -1861,7 +1987,8 @@ impl App {
                         return Ok(AppRunControl::Continue);
                     }
 
-                    let should_check = codex_core::get_platform_sandbox().is_some()
+                    let should_check = WindowsSandboxLevel::from_config(&self.config)
+                        != WindowsSandboxLevel::Disabled
                         && policy_is_workspace_write_or_ro
                         && !self.chat_widget.world_writable_warning_hidden();
                     if should_check {
@@ -1885,6 +2012,12 @@ impl App {
                 if updates.is_empty() {
                     return Ok(AppRunControl::Continue);
                 }
+                let windows_sandbox_changed = updates.iter().any(|(feature, _)| {
+                    matches!(
+                        feature,
+                        Feature::WindowsSandbox | Feature::WindowsSandboxElevated
+                    )
+                });
                 let mut builder = ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(self.active_profile.as_deref());
                 for (feature, enabled) in &updates {
@@ -1908,6 +2041,24 @@ impl App {
                                 segments: vec!["features".to_string(), feature_key.to_string()],
                             }]);
                         }
+                    }
+                }
+                if windows_sandbox_changed {
+                    #[cfg(target_os = "windows")]
+                    {
+                        let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
+                        self.app_event_tx
+                            .send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                                cwd: None,
+                                approval_policy: None,
+                                sandbox_policy: None,
+                                windows_sandbox_level: Some(windows_sandbox_level),
+                                model: None,
+                                effort: None,
+                                summary: None,
+                                collaboration_mode: None,
+                                personality: None,
+                            }));
                     }
                 }
                 if let Err(err) = builder.apply().await {
@@ -2087,11 +2238,45 @@ impl App {
                     ));
                 }
             },
+            AppEvent::StatusLineSetup { items } => {
+                let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
+                let edit = codex_core::config::edit::status_line_items_edit(&ids);
+                let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits([edit])
+                    .apply()
+                    .await;
+                match apply_result {
+                    Ok(()) => {
+                        self.config.tui_status_line = if ids.is_empty() {
+                            None
+                        } else {
+                            Some(ids.clone())
+                        };
+                        self.chat_widget.setup_status_line(items);
+                    }
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist status line items; keeping previous selection");
+                        self.chat_widget
+                            .add_error_message(format!("Failed to save status line items: {err}"));
+                    }
+                }
+            }
+            AppEvent::StatusLineBranchUpdated { cwd, branch } => {
+                self.chat_widget.set_status_line_branch(cwd, branch);
+                self.refresh_status_line();
+            }
+            AppEvent::StatusLineSetupCancelled => {
+                self.chat_widget.cancel_status_line_setup();
+            }
         }
         Ok(AppRunControl::Continue)
     }
 
     fn handle_codex_event_now(&mut self, event: Event) {
+        let needs_refresh = matches!(
+            event.msg,
+            EventMsg::SessionConfigured(_) | EventMsg::TokenCount(_)
+        );
         if self.suppress_shutdown_complete && matches!(event.msg, EventMsg::ShutdownComplete) {
             self.suppress_shutdown_complete = false;
             return;
@@ -2103,6 +2288,10 @@ impl App {
         }
         self.handle_backtrack_event(&event.msg);
         self.chat_widget.handle_codex_event(event);
+
+        if needs_refresh {
+            self.refresh_status_line();
+        }
     }
 
     fn handle_codex_event_replay(&mut self, event: Event) {
@@ -2135,6 +2324,7 @@ impl App {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: thread_id,
                 forked_from_id: None,
+                thread_name: None,
                 model: config_snapshot.model,
                 model_provider_id: config_snapshot.model_provider_id,
                 approval_policy: config_snapshot.approval_policy,
@@ -2205,12 +2395,13 @@ impl App {
     }
 
     fn on_update_personality(&mut self, personality: Personality) {
-        self.config.model_personality = Some(personality);
+        self.config.personality = Some(personality);
         self.chat_widget.set_personality(personality);
     }
 
     fn personality_label(personality: Personality) -> &'static str {
         match personality {
+            Personality::None => "None",
             Personality::Friendly => "Friendly",
             Personality::Pragmatic => "Pragmatic",
         }
@@ -2222,8 +2413,9 @@ impl App {
             Err(external_editor::EditorError::MissingEditor) => {
                 self.chat_widget
                     .add_to_history(history_cell::new_error_event(
-                        "Cannot open external editor: set $VISUAL or $EDITOR".to_string(),
-                    ));
+                    "Cannot open external editor: set $VISUAL or $EDITOR before starting Codex."
+                        .to_string(),
+                ));
                 self.reset_external_editor_state(tui);
                 return;
             }
@@ -2352,6 +2544,10 @@ impl App {
                 // Ignore Release key events.
             }
         };
+    }
+
+    fn refresh_status_line(&mut self) {
+        self.chat_widget.refresh_status_line();
     }
 
     #[cfg(target_os = "windows")]
@@ -2510,9 +2706,11 @@ mod tests {
             has_emitted_history_lines: false,
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
+            status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),
+            feedback_audience: FeedbackAudience::External,
             pending_update_action: None,
             suppress_shutdown_complete: false,
             windows_sandbox: WindowsSandboxState::default(),
@@ -2562,9 +2760,11 @@ mod tests {
                 has_emitted_history_lines: false,
                 enhanced_keys_supported: false,
                 commit_anim_running: Arc::new(AtomicBool::new(false)),
+                status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
                 backtrack: BacktrackState::default(),
                 backtrack_render_pending: false,
                 feedback: codex_feedback::CodexFeedback::new(),
+                feedback_audience: FeedbackAudience::External,
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
                 windows_sandbox: WindowsSandboxState::default(),
@@ -2799,6 +2999,7 @@ mod tests {
             let event = SessionConfiguredEvent {
                 session_id: ThreadId::new(),
                 forked_from_id: None,
+                thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
@@ -2815,6 +3016,7 @@ mod tests {
                 app.chat_widget.current_model(),
                 event,
                 is_first,
+                None,
             )) as Arc<dyn HistoryCell>
         };
 
@@ -2851,6 +3053,7 @@ mod tests {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: base_id,
                 forked_from_id: None,
+                thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
@@ -2896,6 +3099,7 @@ mod tests {
         let event = SessionConfiguredEvent {
             session_id: thread_id,
             forked_from_id: None,
+            thread_name: None,
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,
@@ -2927,7 +3131,7 @@ mod tests {
 
     #[tokio::test]
     async fn session_summary_skip_zero_usage() {
-        assert!(session_summary(TokenUsage::default(), None).is_none());
+        assert!(session_summary(TokenUsage::default(), None, None).is_none());
     }
 
     #[tokio::test]
@@ -2940,7 +3144,7 @@ mod tests {
         };
         let conversation = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
 
-        let summary = session_summary(usage, Some(conversation)).expect("summary");
+        let summary = session_summary(usage, Some(conversation), None).expect("summary");
         assert_eq!(
             summary.usage_line,
             "Token usage: total=12 input=10 output=2"
@@ -2948,6 +3152,24 @@ mod tests {
         assert_eq!(
             summary.resume_command,
             Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn session_summary_prefers_name_over_id() {
+        let usage = TokenUsage {
+            input_tokens: 10,
+            output_tokens: 2,
+            total_tokens: 12,
+            ..Default::default()
+        };
+        let conversation = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
+
+        let summary = session_summary(usage, Some(conversation), Some("my-session".to_string()))
+            .expect("summary");
+        assert_eq!(
+            summary.resume_command,
+            Some("codex resume my-session".to_string())
         );
     }
 }

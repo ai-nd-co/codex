@@ -14,6 +14,8 @@ use tokio::select;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
+use tracing::Instrument;
+use tracing::Span;
 use tracing::trace;
 use tracing::warn;
 
@@ -30,6 +32,7 @@ use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
@@ -40,7 +43,9 @@ pub(crate) use regular::RegularTask;
 pub(crate) use review::ReviewTask;
 pub(crate) use smart_compact::SmartCompactTask;
 pub(crate) use undo::UndoTask;
+pub(crate) use user_shell::UserShellCommandMode;
 pub(crate) use user_shell::UserShellCommandTask;
+pub(crate) use user_shell::execute_user_shell_command;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
@@ -117,6 +122,8 @@ impl Session {
         task: T,
     ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
+        self.seed_initial_context_if_needed(turn_context.as_ref())
+            .await;
 
         let task: Arc<dyn SessionTask> = Arc::new(task);
         let task_kind = task.kind();
@@ -130,30 +137,33 @@ impl Session {
             let ctx = Arc::clone(&turn_context);
             let task_for_run = Arc::clone(&task);
             let task_cancellation_token = cancellation_token.child_token();
-            tokio::spawn(async move {
-                let ctx_for_finish = Arc::clone(&ctx);
-                let last_agent_message = task_for_run
-                    .run(
-                        Arc::clone(&session_ctx),
-                        ctx,
-                        input,
-                        task_cancellation_token.child_token(),
-                    )
-                    .await;
-                session_ctx.clone_session().flush_rollout().await;
-                if !task_cancellation_token.is_cancelled() {
-                    // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
-                    let sess = session_ctx.clone_session();
-                    sess.on_task_finished(ctx_for_finish, last_agent_message)
+            let session_span = Span::current();
+            tokio::spawn(
+                async move {
+                    let ctx_for_finish = Arc::clone(&ctx);
+                    let last_agent_message = task_for_run
+                        .run(
+                            Arc::clone(&session_ctx),
+                            ctx,
+                            input,
+                            task_cancellation_token.child_token(),
+                        )
                         .await;
+                    session_ctx.clone_session().flush_rollout().await;
+                    if !task_cancellation_token.is_cancelled() {
+                        // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
+                        let sess = session_ctx.clone_session();
+                        sess.on_task_finished(ctx_for_finish, last_agent_message)
+                            .await;
+                    }
+                    done_clone.notify_waiters();
                 }
-                done_clone.notify_waiters();
-            })
+                .instrument(session_span),
+            )
         };
 
         let timer = turn_context
-            .client
-            .get_otel_manager()
+            .otel_manager
             .start_timer("codex.turn.e2e_duration_ms", &[])
             .ok();
 
@@ -182,15 +192,27 @@ impl Session {
         last_agent_message: Option<String>,
     ) {
         let mut active = self.active_turn.lock().await;
-        let should_close_processes = if let Some(at) = active.as_mut()
+        let mut pending_input = Vec::<ResponseInputItem>::new();
+        let mut should_close_processes = false;
+        if let Some(at) = active.as_mut()
             && at.remove_task(&turn_context.sub_id)
         {
+            let mut ts = at.turn_state.lock().await;
+            pending_input = ts.take_pending_input();
+            should_close_processes = true;
+        }
+        if should_close_processes {
             *active = None;
-            true
-        } else {
-            false
-        };
+        }
         drop(active);
+        if !pending_input.is_empty() {
+            let pending_response_items = pending_input
+                .into_iter()
+                .map(ResponseItem::from)
+                .collect::<Vec<_>>();
+            self.record_conversation_items(turn_context.as_ref(), &pending_response_items)
+                .await;
+        }
         if should_close_processes {
             self.close_unified_exec_processes().await;
         }
@@ -259,6 +281,7 @@ impl Session {
                     ),
                 }],
                 end_turn: None,
+                phase: None,
             };
             self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
                 .await;
