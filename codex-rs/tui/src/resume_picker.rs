@@ -659,6 +659,12 @@ impl PickerState {
         search_token: Option<usize>,
         tokens: Vec<String>,
     ) -> bool {
+        // Avoid spawning scan tasks for paths that don't exist. This keeps the
+        // picker responsive in cases where rollout files were deleted and
+        // avoids flaky tests that use placeholder paths.
+        if !path.is_file() {
+            return false;
+        }
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             return false;
         };
@@ -698,6 +704,19 @@ impl PickerState {
         self.selected = 0;
         self.search_state = SearchState::Idle;
         self.search_cache = None;
+
+        // If a previous search kicked off a page load, don't let that in-flight
+        // request block a new query. We'll ignore any stale PageLoaded event by
+        // request token.
+        if matches!(
+            self.pagination.loading,
+            LoadingState::Pending(PendingLoad {
+                search_token: Some(_),
+                ..
+            })
+        ) {
+            self.pagination.loading = LoadingState::Idle;
+        }
 
         let tokens = tokenize_query(&self.query);
         if tokens.is_empty() {
