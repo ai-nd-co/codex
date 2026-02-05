@@ -804,6 +804,10 @@ impl TurnContext {
             denied_domains: network.denied_domains.clone().unwrap_or_default(),
         })
     }
+
+    pub(crate) fn smart_compact_prompt(&self) -> &str {
+        compact::SMART_COMPACT_PROMPT
+    }
 }
 
 fn local_time_context() -> (String, String) {
@@ -4398,7 +4402,7 @@ mod handlers {
         sess.spawn_task(
             Arc::clone(&turn_context),
             vec![UserInput::Text {
-                text: turn_context.compact_prompt().to_string(),
+                text: turn_context.smart_compact_prompt().to_string(),
                 // Compaction prompt is synthesized; no UI element ranges to preserve.
                 text_elements: Vec::new(),
             }],
