@@ -29,13 +29,15 @@ pub(crate) struct ExecCall {
 pub(crate) struct ExecCell {
     pub(crate) calls: Vec<ExecCall>,
     animations_enabled: bool,
+    verbose_tool_calls: bool,
 }
 
 impl ExecCell {
-    pub(crate) fn new(call: ExecCall, animations_enabled: bool) -> Self {
+    pub(crate) fn new(call: ExecCall, animations_enabled: bool, verbose_tool_calls: bool) -> Self {
         Self {
             calls: vec![call],
             animations_enabled,
+            verbose_tool_calls,
         }
     }
 
@@ -61,6 +63,7 @@ impl ExecCell {
             Some(Self {
                 calls: [self.calls.clone(), vec![call]].concat(),
                 animations_enabled: self.animations_enabled,
+                verbose_tool_calls: self.verbose_tool_calls,
             })
         } else {
             None
@@ -119,6 +122,10 @@ impl ExecCell {
 
     pub(crate) fn animations_enabled(&self) -> bool {
         self.animations_enabled
+    }
+
+    pub(crate) fn verbose_tool_calls(&self) -> bool {
+        self.verbose_tool_calls
     }
 
     pub(crate) fn iter_calls(&self) -> impl Iterator<Item = &ExecCall> {

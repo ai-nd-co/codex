@@ -320,9 +320,13 @@ mod tests {
             // Windows only because on Linux path splitting doesn't handle `/` separators properly
             return;
         }
+        let pwsh_path = r"C:\Program Files\PowerShell\7\pwsh.exe";
+        if !std::path::Path::new(pwsh_path).exists() {
+            return;
+        }
 
         assert!(is_known_safe_command(&vec_str(&[
-            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            pwsh_path,
             "-Command",
             "Get-Location",
         ])));

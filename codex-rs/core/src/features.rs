@@ -115,6 +115,8 @@ pub enum Feature {
     DisableSystemPrompt,
     /// Enable markdown table rendering in the TUI.
     EnableMarkdownTables,
+    /// Show verbose tool call output in the TUI.
+    VerboseToolCalls,
     /// Disable automatic and manual compaction.
     DisableCompaction,
     /// Enable collaboration modes (Plan, Code, Pair Programming, Execute).
@@ -482,6 +484,16 @@ pub const FEATURES: &[FeatureSpec] = &[
             name: "Render markdown tables",
             menu_description: "Render markdown tables with aligned columns.",
             announcement: "NEW! Render markdown tables in the TUI. Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::VerboseToolCalls,
+        key: "verbose_tool_calls",
+        stage: Stage::Experimental {
+            name: "Verbose tool calls",
+            menu_description: "Show output for Search, Read, and List tool calls.",
+            announcement: "NEW! Show verbose tool call output. Enable in /experimental!",
         },
         default_enabled: false,
     },

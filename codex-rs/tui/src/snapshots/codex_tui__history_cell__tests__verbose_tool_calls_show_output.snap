@@ -1,0 +1,9 @@
+---
+source: tui/src/history_cell.rs
+assertion_line: 2505
+expression: rendered
+---
+• Explored
+  └ Search foo in src
+        src/lib.rs:1: foo
+        src/lib.rs:2: bar

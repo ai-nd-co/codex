@@ -975,6 +975,7 @@ mod tests {
             ExecCommandSource::Agent,
             None,
             true,
+            false,
         );
         exec_cell.complete_call(
             "exec-1",

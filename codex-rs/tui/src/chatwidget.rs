@@ -1681,6 +1681,7 @@ impl ChatWidget {
             .map(|cell| cell.as_any().downcast_ref::<ExecCell>().is_none())
             .unwrap_or(true);
         if needs_new {
+            let verbose_tool_calls = self.config.features.enabled(Feature::VerboseToolCalls);
             self.flush_active_cell();
             self.active_cell = Some(Box::new(new_active_exec_command(
                 ev.call_id.clone(),
@@ -1689,6 +1690,7 @@ impl ChatWidget {
                 source,
                 ev.interaction_input.clone(),
                 self.config.animations,
+                verbose_tool_calls,
             )));
         }
 
@@ -1844,6 +1846,7 @@ impl ChatWidget {
             *cell = new_exec;
             self.bump_active_cell_revision();
         } else {
+            let verbose_tool_calls = self.config.features.enabled(Feature::VerboseToolCalls);
             self.flush_active_cell();
 
             self.active_cell = Some(Box::new(new_active_exec_command(
@@ -1853,6 +1856,7 @@ impl ChatWidget {
                 ev.source,
                 interaction_input,
                 self.config.animations,
+                verbose_tool_calls,
             )));
             self.bump_active_cell_revision();
         }
