@@ -20,6 +20,7 @@ use ratatui::text::Text;
 use std::borrow::Cow;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use unicode_width::UnicodeWidthStr;
 
 struct MarkdownStyles {
     h1: Style,
@@ -63,6 +64,7 @@ impl Default for MarkdownStyles {
 
 static TABLES_ENABLED: AtomicBool = AtomicBool::new(false);
 const UTF8_TABLE_PRESET: &str = "││──├─┼┤│─┼├┤┬┴┌┐└┘";
+const TABLE_MAX_WIDTH_FALLBACK: usize = 160;
 
 pub(crate) fn set_tables_enabled(enabled: bool) {
     TABLES_ENABLED.store(enabled, Ordering::Relaxed);
@@ -626,7 +628,19 @@ where
 
         let mut table_output = Table::new();
         table_output.load_preset(UTF8_TABLE_PRESET);
-        table_output.set_content_arrangement(ContentArrangement::Disabled);
+        table_output.set_content_arrangement(ContentArrangement::Dynamic);
+
+        // Hard cap the rendered table width to avoid terminal overflow. We prefer the
+        // current markdown wrap width (computed from the TUI layout). If it's unavailable,
+        // use a conservative fallback.
+        let max_width = self.wrap_width.unwrap_or(TABLE_MAX_WIDTH_FALLBACK);
+        let prefix_width: usize = self
+            .prefix_spans(self.pending_marker_line)
+            .iter()
+            .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+            .sum();
+        let available_width = max_width.saturating_sub(prefix_width).max(10);
+        table_output.set_width(available_width.min(u16::MAX as usize) as u16);
 
         if let Some(header) = header {
             table_output.set_header(header);

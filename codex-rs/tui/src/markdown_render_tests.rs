@@ -69,6 +69,36 @@ fn unicode_tables_render_box_drawing() {
 }
 
 #[test]
+fn unicode_tables_respect_render_width_cap() {
+    let prev_tables_enabled = crate::markdown_render::tables_enabled();
+    crate::markdown_render::set_tables_enabled(true);
+
+    let md = "| Col1 | Col2 |\n| --- | --- |\n| This is a very long cell | Another very long cell |\n";
+    let text = crate::markdown_render::render_markdown_text_with_width(md, Some(24));
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.clone())
+                .collect::<String>()
+        })
+        .collect();
+
+    // All rendered lines should fit within the configured width cap.
+    for line in &lines {
+        let w = unicode_width::UnicodeWidthStr::width(line.as_str());
+        assert!(
+            w <= 24,
+            "expected table line width <= 24, got {w}: {line:?}"
+        );
+    }
+
+    crate::markdown_render::set_tables_enabled(prev_tables_enabled);
+}
+
+#[test]
 fn headings() {
     let md = "# Heading 1\n## Heading 2\n### Heading 3\n#### Heading 4\n##### Heading 5\n###### Heading 6\n";
     let text = render_markdown_text(md);
