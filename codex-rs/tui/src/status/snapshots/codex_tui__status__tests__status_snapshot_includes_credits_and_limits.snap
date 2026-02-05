@@ -1,6 +1,5 @@
 ---
 source: tui/src/status/tests.rs
-assertion_line: 677
 expression: sanitized
 ---
 /status
