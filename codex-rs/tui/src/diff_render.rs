@@ -14,6 +14,7 @@ use std::path::PathBuf;
 
 use crate::exec_command::relativize_to_home;
 use crate::render::Insets;
+use crate::render::highlight::HighlightLanguage;
 use crate::render::line_utils::prefix_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::InsetRenderable;
@@ -39,16 +40,36 @@ impl DiffSummary {
     }
 }
 
-impl Renderable for FileChange {
+#[derive(Clone)]
+struct FileChangeRenderable {
+    change: FileChange,
+    lang: Option<HighlightLanguage>,
+}
+
+impl Renderable for FileChangeRenderable {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let mut lines = vec![];
-        render_change(self, &mut lines, area.width as usize);
+        render_change(&self.change, &mut lines, area.width as usize, self.lang);
         Paragraph::new(lines).render(area, buf);
     }
 
     fn desired_height(&self, width: u16) -> u16 {
         let mut lines = vec![];
-        render_change(self, &mut lines, width as usize);
+        render_change(&self.change, &mut lines, width as usize, self.lang);
+        lines.len() as u16
+    }
+}
+
+impl Renderable for FileChange {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        let mut lines = vec![];
+        render_change(self, &mut lines, area.width as usize, None);
+        Paragraph::new(lines).render(area, buf);
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        let mut lines = vec![];
+        render_change(self, &mut lines, width as usize, None);
         lines.len() as u16
     }
 }
@@ -66,8 +87,12 @@ impl From<DiffSummary> for Box<dyn Renderable> {
             path.extend(render_line_count_summary(row.added, row.removed));
             rows.push(Box::new(path));
             rows.push(Box::new(RtLine::from("")));
+            let lang = HighlightLanguage::from_path(&row.path);
             rows.push(Box::new(InsetRenderable::new(
-                Box::new(row.change) as Box<dyn Renderable>,
+                Box::new(FileChangeRenderable {
+                    change: row.change,
+                    lang,
+                }) as Box<dyn Renderable>,
                 Insets::tlbr(0, 2, 0, 0),
             )));
         }
@@ -186,22 +211,29 @@ fn render_changes_block(rows: Vec<Row>, wrap_cols: usize, cwd: &Path) -> Vec<RtL
         }
 
         let mut lines = vec![];
-        render_change(&r.change, &mut lines, wrap_cols - 4);
+        let lang = HighlightLanguage::from_path(&r.path);
+        render_change(&r.change, &mut lines, wrap_cols - 4, lang);
         out.extend(prefix_lines(lines, "    ".into(), "    ".into()));
     }
 
     out
 }
 
-fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usize) {
+fn render_change(
+    change: &FileChange,
+    out: &mut Vec<RtLine<'static>>,
+    width: usize,
+    lang: Option<HighlightLanguage>,
+) {
     match change {
         FileChange::Add { content } => {
             let line_number_width = line_number_width(content.lines().count());
             for (i, raw) in content.lines().enumerate() {
+                let line = highlight_line(lang, raw);
                 out.extend(push_wrapped_diff_line(
                     i + 1,
                     DiffLineType::Insert,
-                    raw,
+                    &line,
                     width,
                     line_number_width,
                 ));
@@ -210,10 +242,11 @@ fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usi
         FileChange::Delete { content } => {
             let line_number_width = line_number_width(content.lines().count());
             for (i, raw) in content.lines().enumerate() {
+                let line = highlight_line(lang, raw);
                 out.extend(push_wrapped_diff_line(
                     i + 1,
                     DiffLineType::Delete,
-                    raw,
+                    &line,
                     width,
                     line_number_width,
                 ));
@@ -259,10 +292,11 @@ fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usi
                         match l {
                             diffy::Line::Insert(text) => {
                                 let s = text.trim_end_matches('\n');
+                                let line = highlight_line(lang, s);
                                 out.extend(push_wrapped_diff_line(
                                     new_ln,
                                     DiffLineType::Insert,
-                                    s,
+                                    &line,
                                     width,
                                     line_number_width,
                                 ));
@@ -270,10 +304,11 @@ fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usi
                             }
                             diffy::Line::Delete(text) => {
                                 let s = text.trim_end_matches('\n');
+                                let line = highlight_line(lang, s);
                                 out.extend(push_wrapped_diff_line(
                                     old_ln,
                                     DiffLineType::Delete,
-                                    s,
+                                    &line,
                                     width,
                                     line_number_width,
                                 ));
@@ -281,10 +316,11 @@ fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usi
                             }
                             diffy::Line::Context(text) => {
                                 let s = text.trim_end_matches('\n');
+                                let line = highlight_line(lang, s);
                                 out.extend(push_wrapped_diff_line(
                                     new_ln,
                                     DiffLineType::Context,
-                                    s,
+                                    &line,
                                     width,
                                     line_number_width,
                                 ));
@@ -345,12 +381,13 @@ pub(crate) fn calculate_add_remove_from_diff(diff: &str) -> (usize, usize) {
 fn push_wrapped_diff_line(
     line_number: usize,
     kind: DiffLineType,
-    text: &str,
+    text: &ratatui::text::Line<'static>,
     width: usize,
     line_number_width: usize,
 ) -> Vec<RtLine<'static>> {
     let ln_str = line_number.to_string();
-    let mut remaining_text: &str = text;
+    let (flat, span_bounds) = flatten_line(text);
+    let mut remaining_start = 0usize;
 
     // Reserve a fixed number of spaces (equal to the widest line number plus a
     // trailing spacer) so the sign column stays aligned across the diff block.
@@ -358,10 +395,20 @@ fn push_wrapped_diff_line(
     let prefix_cols = gutter_width + 1;
 
     let mut first = true;
-    let (sign_char, line_style) = match kind {
-        DiffLineType::Insert => ('+', style_add()),
-        DiffLineType::Delete => ('-', style_del()),
-        DiffLineType::Context => (' ', style_context()),
+    let (sign_char, line_style, sign_style, gutter_style) = match kind {
+        DiffLineType::Insert => (
+            '+',
+            style_add_line(),
+            style_add_sign().patch(style_add_line()),
+            style_gutter_add().patch(style_add_line()),
+        ),
+        DiffLineType::Delete => (
+            '-',
+            style_del_line(),
+            style_del_sign().patch(style_del_line()),
+            style_gutter_del().patch(style_del_line()),
+        ),
+        DiffLineType::Context => (' ', style_context(), Style::default(), style_gutter()),
     };
     let mut lines: Vec<RtLine<'static>> = Vec::new();
 
@@ -370,33 +417,34 @@ fn push_wrapped_diff_line(
         // compute how many columns are available after the prefix, then split
         // at a UTF-8 character boundary so this row's chunk fits exactly.
         let available_content_cols = width.saturating_sub(prefix_cols + 1).max(1);
+        let remaining_text = &flat[remaining_start..];
         let split_at_byte_index = remaining_text
             .char_indices()
             .nth(available_content_cols)
             .map(|(i, _)| i)
             .unwrap_or_else(|| remaining_text.len());
-        let (chunk, rest) = remaining_text.split_at(split_at_byte_index);
-        remaining_text = rest;
+        let chunk_end = remaining_start + split_at_byte_index;
+        let chunk = slice_line_spans(&flat, &span_bounds, remaining_start..chunk_end, line_style);
+        remaining_start = chunk_end;
 
         if first {
             // Build gutter (right-aligned line number plus spacer) as a dimmed span
             let gutter = format!("{ln_str:>gutter_width$} ");
-            // Content with a sign ('+'/'-'/' ') styled per diff kind
-            let content = format!("{sign_char}{chunk}");
-            lines.push(RtLine::from(vec![
-                RtSpan::styled(gutter, style_gutter()),
-                RtSpan::styled(content, line_style),
-            ]));
+            let mut spans: Vec<RtSpan<'static>> = Vec::new();
+            spans.push(RtSpan::styled(gutter, gutter_style));
+            spans.push(RtSpan::styled(sign_char.to_string(), sign_style));
+            spans.extend(chunk);
+            lines.push(RtLine::from(spans));
             first = false;
         } else {
             // Continuation lines keep a space for the sign column so content aligns
             let gutter = format!("{:gutter_width$}  ", "");
-            lines.push(RtLine::from(vec![
-                RtSpan::styled(gutter, style_gutter()),
-                RtSpan::styled(chunk.to_string(), line_style),
-            ]));
+            let mut spans: Vec<RtSpan<'static>> = Vec::new();
+            spans.push(RtSpan::styled(gutter, gutter_style));
+            spans.extend(chunk);
+            lines.push(RtLine::from(spans));
         }
-        if remaining_text.is_empty() {
+        if remaining_start >= flat.len() {
             break;
         }
     }
@@ -415,16 +463,88 @@ fn style_gutter() -> Style {
     Style::default().add_modifier(Modifier::DIM)
 }
 
+fn style_gutter_add() -> Style {
+    style_gutter().fg(Color::Green)
+}
+
+fn style_gutter_del() -> Style {
+    style_gutter().fg(Color::Red)
+}
+
 fn style_context() -> Style {
     Style::default()
 }
 
-fn style_add() -> Style {
-    Style::default().fg(Color::Green)
+fn style_add_line() -> Style {
+    // GitHub-like: additions get a subtle green background.
+    // Terminals don't support opacity, so use a dark background color.
+    #[allow(clippy::disallowed_methods)]
+    Style::default().bg(Color::Rgb(16, 64, 32))
 }
 
-fn style_del() -> Style {
-    Style::default().fg(Color::Red)
+fn style_del_line() -> Style {
+    // GitHub-like: deletions get a subtle red background.
+    #[allow(clippy::disallowed_methods)]
+    Style::default().bg(Color::Rgb(64, 16, 16))
+}
+
+fn style_add_sign() -> Style {
+    Style::default().fg(Color::Green).bold()
+}
+
+fn style_del_sign() -> Style {
+    Style::default().fg(Color::Red).bold()
+}
+
+fn highlight_line(lang: Option<HighlightLanguage>, text: &str) -> ratatui::text::Line<'static> {
+    let Some(lang) = lang else {
+        return ratatui::text::Line::from(text.to_string());
+    };
+    let mut lines = crate::render::highlight::highlight_to_lines(lang, text);
+    lines
+        .pop()
+        .unwrap_or_else(|| ratatui::text::Line::from(text.to_string()))
+}
+
+fn flatten_line(
+    line: &ratatui::text::Line<'static>,
+) -> (String, Vec<(std::ops::Range<usize>, Style)>) {
+    let mut flat = String::new();
+    let mut bounds: Vec<(std::ops::Range<usize>, Style)> = Vec::new();
+    let mut acc = 0usize;
+    for span in &line.spans {
+        let text = span.content.as_ref();
+        let start = acc;
+        flat.push_str(text);
+        acc += text.len();
+        bounds.push((start..acc, span.style));
+    }
+    (flat, bounds)
+}
+
+fn slice_line_spans(
+    flat: &str,
+    bounds: &[(std::ops::Range<usize>, Style)],
+    range: std::ops::Range<usize>,
+    patch: Style,
+) -> Vec<RtSpan<'static>> {
+    if range.start >= range.end || range.start >= flat.len() {
+        return Vec::new();
+    }
+    let range = range.start..range.end.min(flat.len());
+    let mut spans: Vec<RtSpan<'static>> = Vec::new();
+    for (r, style) in bounds {
+        let start = range.start.max(r.start);
+        let end = range.end.min(r.end);
+        if start >= end {
+            continue;
+        }
+        spans.push(RtSpan::styled(
+            flat[start..end].to_string(),
+            style.patch(patch),
+        ));
+    }
+    spans
 }
 
 #[cfg(test)]
@@ -497,8 +617,9 @@ mod tests {
         let long_line = "this is a very long line that should wrap across multiple terminal columns and continue";
 
         // Call the wrapping function directly so we can precisely control the width
+        let line = ratatui::text::Line::from(long_line.to_string());
         let lines =
-            push_wrapped_diff_line(1, DiffLineType::Insert, long_line, 80, line_number_width(1));
+            push_wrapped_diff_line(1, DiffLineType::Insert, &line, 80, line_number_width(1));
 
         // Render into a small terminal to capture the visual layout
         snapshot_lines("wrap_behavior_insert", lines, 90, 8);

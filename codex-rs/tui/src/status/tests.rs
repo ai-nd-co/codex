@@ -83,6 +83,32 @@ fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+fn sanitize_version(lines: Vec<String>) -> Vec<String> {
+    lines
+        .into_iter()
+        .map(|mut line| {
+            // Keep snapshots stable across version bumps.
+            if let (Some(vpos), Some(end)) = (line.find("(v"), line.rfind(')')) {
+                if vpos < end {
+                    let version_slice = &line[vpos..=end];
+                    if version_slice.starts_with("(v") {
+                        // Replace only the numeric part so spacing stays identical
+                        // for typical `X.Y.Z` versions (5 chars).
+                        if let Some(close) = line[vpos..].find(')') {
+                            let close = vpos + close;
+                            let start = (vpos + 2).min(line.len());
+                            if start < close {
+                                line.replace_range(start..close, "X.Y.Z");
+                            }
+                        }
+                    }
+                }
+            }
+            line
+        })
+        .collect()
+}
+
 fn reset_at_from(captured_at: &chrono::DateTime<chrono::Local>, seconds: i64) -> i64 {
     (*captured_at + ChronoDuration::seconds(seconds))
         .with_timezone(&Utc)
@@ -162,7 +188,7 @@ async fn status_snapshot_includes_reasoning_details() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_version(sanitize_directory(rendered_lines)).join("\n");
     assert_snapshot!(sanitized);
 }
 
@@ -216,7 +242,7 @@ async fn status_snapshot_includes_forked_from() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_version(sanitize_directory(rendered_lines)).join("\n");
     assert_snapshot!(sanitized);
 }
 
@@ -276,7 +302,7 @@ async fn status_snapshot_includes_monthly_limit() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_version(sanitize_directory(rendered_lines)).join("\n");
     assert_snapshot!(sanitized);
 }
 
@@ -568,7 +594,7 @@ async fn status_snapshot_truncates_in_narrow_terminal() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_version(sanitize_directory(rendered_lines)).join("\n");
 
     assert_snapshot!(sanitized);
 }
@@ -617,7 +643,7 @@ async fn status_snapshot_shows_missing_limits_message() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_version(sanitize_directory(rendered_lines)).join("\n");
     assert_snapshot!(sanitized);
 }
 
@@ -684,7 +710,7 @@ async fn status_snapshot_includes_credits_and_limits() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_version(sanitize_directory(rendered_lines)).join("\n");
     assert_snapshot!(sanitized);
 }
 
@@ -739,7 +765,7 @@ async fn status_snapshot_shows_empty_limits_message() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_version(sanitize_directory(rendered_lines)).join("\n");
     assert_snapshot!(sanitized);
 }
 
@@ -803,7 +829,7 @@ async fn status_snapshot_shows_stale_limits_message() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_version(sanitize_directory(rendered_lines)).join("\n");
     assert_snapshot!(sanitized);
 }
 
@@ -871,7 +897,7 @@ async fn status_snapshot_cached_limits_hide_credits_without_flag() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_version(sanitize_directory(rendered_lines)).join("\n");
     assert_snapshot!(sanitized);
 }
 

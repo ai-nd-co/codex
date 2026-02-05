@@ -744,10 +744,14 @@ fn link() {
 }
 
 #[test]
-fn code_block_unhighlighted() {
+fn code_block_highlighting_preserves_text() {
     let text = render_markdown_text("```rust\nfn main() {}\n```\n");
-    let expected = Text::from_iter([Line::from_iter(["", "fn main() {}"])]);
-    assert_eq!(text, expected);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|l| l.spans.iter().map(|s| s.content.clone()).collect::<String>())
+        .collect();
+    assert_eq!(lines, vec!["fn main() {}"]);
 }
 
 #[test]

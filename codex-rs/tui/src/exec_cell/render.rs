@@ -5,7 +5,9 @@ use super::model::ExecCall;
 use super::model::ExecCell;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::HistoryCell;
+use crate::render::highlight::HighlightLanguage;
 use crate::render::highlight::highlight_bash_to_lines;
+use crate::render::highlight::highlight_to_lines;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
 use crate::shimmer::shimmer_spans;
@@ -253,6 +255,75 @@ impl HistoryCell for ExecCell {
     }
 }
 
+fn output_lines_for_call(call: &ExecCall, params: OutputLinesParams) -> OutputLines {
+    let Some(output) = call.output.as_ref() else {
+        return OutputLines {
+            lines: Vec::new(),
+            omitted: None,
+        };
+    };
+
+    if params.only_err && output.exit_code == 0 {
+        return OutputLines {
+            lines: Vec::new(),
+            omitted: None,
+        };
+    }
+
+    let read_path = call.parsed.iter().find_map(|parsed| match parsed {
+        ParsedCommand::Read { path, .. } => Some(path),
+        _ => None,
+    });
+
+    let is_read = read_path.is_some()
+        && !call.is_user_shell_command()
+        && call
+            .parsed
+            .iter()
+            .all(|parsed| matches!(parsed, ParsedCommand::Read { .. }));
+
+    if !is_read {
+        return output_lines(Some(output), params);
+    }
+
+    let lang = read_path.and_then(|path| HighlightLanguage::from_path(path.as_path()));
+
+    // For read_file output, prefer syntax highlighting over dimmed/plain output.
+    // Fall back to plain text if we can't determine a language.
+    let highlighted: Vec<Line<'static>> = match lang {
+        Some(lang) => highlight_to_lines(lang, &output.aggregated_output),
+        None => output
+            .aggregated_output
+            .lines()
+            .map(|l| Line::from(l.to_string()))
+            .collect(),
+    };
+
+    // Apply the same truncation semantics as `output_lines()`, but keep styles.
+    let total = highlighted.len();
+    let line_limit = params.line_limit;
+    let head_end = total.min(line_limit);
+    let mut out: Vec<Line<'static>> = highlighted[..head_end].to_vec();
+
+    let show_ellipsis = total > 2 * line_limit;
+    let omitted = if show_ellipsis {
+        let omitted = total.saturating_sub(2 * line_limit);
+        // Insert ellipsis line.
+        out.push(Line::from(vec![format!("… +{omitted} lines").dim()]));
+        // Keep tail.
+        let tail_start = total.saturating_sub(line_limit);
+        out.extend_from_slice(&highlighted[tail_start..]);
+        Some(omitted)
+    } else {
+        None
+    };
+
+    OutputLines {
+        lines: out,
+        omitted,
+    }
+}
+
 impl ExecCell {
     fn exploring_display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut out: Vec<Line<'static>> = Vec::new();
@@ -309,10 +380,27 @@ impl ExecCell {
                         _ => unreachable!(),
                     })
                     .unique();
-                vec![(
-                    "Read",
-                    Itertools::intersperse(names.into_iter().map(Into::into), ", ".dim()).collect(),
-                )]
+                let cmds = call
+                    .parsed
+                    .iter()
+                    .filter_map(|parsed| match parsed {
+                        ParsedCommand::Read { cmd, .. } => Some(cmd.clone()),
+                        _ => None,
+                    })
+                    .unique()
+                    .collect::<Vec<_>>();
+
+                let mut spans: Vec<Span<'static>> =
+                    Itertools::intersperse(names.into_iter().map(Into::into), ", ".dim()).collect();
+
+                // If this is a single read, show the underlying command string so it's
+                // clear what args were used (e.g. `cat`, `sed -n`, `read_file`).
+                if spans.len() == 1 && cmds.len() == 1 {
+                    spans.push(" ".into());
+                    spans.push(format!("({})", cmds[0]).dim());
+                }
+
+                vec![("Read", spans)]
             } else {
                 let mut lines = Vec::new();
                 for parsed in &call.parsed {
@@ -354,41 +442,41 @@ impl ExecCell {
                 push_owned_lines(&wrapped, &mut out_indented);
             }
 
-            if verbose_tool_calls {
-                if let Some(output) = call.output.as_ref() {
-                    let raw_output = output_lines(
-                        Some(output),
-                        OutputLinesParams {
-                            line_limit: TOOL_CALL_MAX_LINES,
-                            only_err: false,
-                            include_angle_pipe: false,
-                            include_prefix: false,
-                        },
-                    );
-                    let output_preview: Vec<Line<'static>> = if raw_output.lines.is_empty() {
-                        vec![Line::from("(no output)".dim())]
-                    } else {
-                        let output_wrap_width = width.max(1) as usize;
-                        let output_opts = RtOptions::new(output_wrap_width)
-                            .word_splitter(WordSplitter::NoHyphenation);
-                        let mut wrapped_output: Vec<Line<'static>> = Vec::new();
-                        for line in &raw_output.lines {
-                            push_owned_lines(
-                                &word_wrap_line(line, output_opts.clone()),
-                                &mut wrapped_output,
-                            );
-                        }
-                        Self::truncate_lines_middle(
-                            &wrapped_output,
-                            TOOL_CALL_MAX_LINES,
-                            raw_output.omitted,
-                        )
-                    };
-
-                    if !output_preview.is_empty() {
-                        let prefixed = prefix_lines(output_preview, "    ".dim(), "    ".into());
-                        out_indented.extend(prefixed);
+            // In exploring mode, show file contents for read calls; "Read X" without
+            // output is usually not actionable.
+            if call.output.is_some() && (verbose_tool_calls || reads_only) {
+                let raw_output = output_lines_for_call(
+                    &call,
+                    OutputLinesParams {
+                        line_limit: TOOL_CALL_MAX_LINES,
+                        only_err: false,
+                        include_angle_pipe: false,
+                        include_prefix: false,
+                    },
+                );
+                let output_preview: Vec<Line<'static>> = if raw_output.lines.is_empty() {
+                    vec![Line::from("(no output)".dim())]
+                } else {
+                    let output_wrap_width = width.max(1) as usize;
+                    let output_opts = RtOptions::new(output_wrap_width)
+                        .word_splitter(WordSplitter::NoHyphenation);
+                    let mut wrapped_output: Vec<Line<'static>> = Vec::new();
+                    for line in &raw_output.lines {
+                        push_owned_lines(
+                            &word_wrap_line(line, output_opts.clone()),
+                            &mut wrapped_output,
+                        );
                     }
+                    Self::truncate_lines_middle(
+                        &wrapped_output,
+                        TOOL_CALL_MAX_LINES,
+                        raw_output.omitted,
+                    )
+                };
+
+                if !output_preview.is_empty() {
+                    let prefixed = prefix_lines(output_preview, "    ".dim(), "    ".into());
+                    out_indented.extend(prefixed);
                 }
             }
         }
@@ -473,14 +561,14 @@ impl ExecCell {
             ));
         }
 
-        if let Some(output) = call.output.as_ref() {
+        if call.output.is_some() {
             let line_limit = if call.is_user_shell_command() {
                 USER_SHELL_TOOL_CALL_MAX_LINES
             } else {
                 TOOL_CALL_MAX_LINES
             };
-            let raw_output = output_lines(
-                Some(output),
+            let raw_output = output_lines_for_call(
+                call,
                 OutputLinesParams {
                     line_limit,
                     only_err: false,
@@ -654,6 +742,9 @@ const EXEC_DISPLAY_LAYOUT: ExecDisplayLayout = ExecDisplayLayout::new(
 mod tests {
     use super::*;
     use codex_core::protocol::ExecCommandSource;
+    use codex_protocol::parse_command::ParsedCommand;
+    use ratatui::text::Line;
+    use std::path::PathBuf;
 
     #[test]
     fn user_shell_output_is_limited_by_screen_lines() {
@@ -678,8 +769,18 @@ mod tests {
         };
         let width = 20;
         let layout = EXEC_DISPLAY_LAYOUT;
-        let raw_output = output_lines(
-            Some(&output),
+        let call = ExecCall {
+            call_id: "call-id".to_string(),
+            command: vec!["bash".into(), "-lc".into(), "echo long".into()],
+            parsed: Vec::new(),
+            output: Some(output),
+            source: ExecCommandSource::UserShell,
+            start_time: None,
+            duration: None,
+            interaction_input: None,
+        };
+        let raw_output = output_lines_for_call(
+            &call,
             OutputLinesParams {
                 // Large enough to include all logical lines without
                 // triggering the ellipsis in `output_lines`.
@@ -712,17 +813,6 @@ mod tests {
             "expected unbounded wrapping to produce more than {USER_SHELL_TOOL_CALL_MAX_LINES} screen lines, got {full_screen_lines}",
         );
 
-        let call = ExecCall {
-            call_id: "call-id".to_string(),
-            command: vec!["bash".into(), "-lc".into(), "echo long".into()],
-            parsed: Vec::new(),
-            output: Some(output),
-            source: ExecCommandSource::UserShell,
-            start_time: None,
-            duration: None,
-            interaction_input: None,
-        };
-
         let cell = ExecCell::new(call, false, false);
 
         // Use a narrow width so each logical line wraps into many on-screen lines.
@@ -743,5 +833,41 @@ mod tests {
             output_screen_lines <= USER_SHELL_TOOL_CALL_MAX_LINES,
             "expected at most {USER_SHELL_TOOL_CALL_MAX_LINES} screen lines of user shell output, got {output_screen_lines}",
         );
+    }
+
+    #[test]
+    fn exploring_read_calls_show_output_by_default() {
+        let output = CommandOutput {
+            exit_code: 0,
+            aggregated_output: "line1\nline2\n".to_string(),
+            formatted_output: String::new(),
+        };
+        let call = ExecCall {
+            call_id: "call-id".to_string(),
+            command: vec!["read_file".into(), "/tmp/demo.py".into()],
+            parsed: vec![ParsedCommand::Read {
+                cmd: "read_file /tmp/demo.py".to_string(),
+                name: "demo.py".to_string(),
+                path: PathBuf::from("/tmp/demo.py"),
+            }],
+            output: Some(output),
+            source: ExecCommandSource::Agent,
+            start_time: None,
+            duration: None,
+            interaction_input: None,
+        };
+        let cell = ExecCell::new(call, false, false);
+        let lines = cell.display_lines(80);
+
+        fn contains_text(lines: &[Line<'static>], needle: &str) -> bool {
+            lines
+                .iter()
+                .any(|line| line.spans.iter().any(|s| s.content.contains(needle)))
+        }
+
+        assert!(contains_text(&lines, "Read"));
+        assert!(contains_text(&lines, "demo.py"));
+        assert!(contains_text(&lines, "line1"));
+        assert!(contains_text(&lines, "line2"));
     }
 }
