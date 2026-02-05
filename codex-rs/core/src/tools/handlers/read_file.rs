@@ -1,11 +1,17 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use async_trait::async_trait;
+use codex_protocol::parse_command::ParsedCommand;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
+use crate::protocol::EventMsg;
+use crate::protocol::ExecCommandBeginEvent;
+use crate::protocol::ExecCommandEndEvent;
+use crate::protocol::ExecCommandSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -138,18 +144,103 @@ impl ToolHandler for ReadFileHandler {
             ));
         }
 
+        let command = vec!["read_file".to_string(), file_path.clone()];
+        let name = path
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| file_path.clone());
+        let parsed_cmd = vec![ParsedCommand::Read {
+            cmd: format!("read_file {file_path}"),
+            name,
+            path: path.clone(),
+        }];
+        let cwd = invocation.turn.cwd.clone();
+
+        let start = Instant::now();
+        invocation
+            .session
+            .send_event(
+                invocation.turn.as_ref(),
+                EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+                    call_id: invocation.call_id.clone(),
+                    process_id: None,
+                    turn_id: invocation.turn.sub_id.clone(),
+                    command: command.clone(),
+                    cwd: cwd.clone(),
+                    parsed_cmd: parsed_cmd.clone(),
+                    source: ExecCommandSource::Agent,
+                    interaction_input: None,
+                }),
+            )
+            .await;
+
         let collected = match mode {
-            ReadMode::Slice => slice::read(&path, offset, limit).await?,
+            ReadMode::Slice => slice::read(&path, offset, limit).await,
             ReadMode::Indentation => {
                 let indentation = indentation.unwrap_or_default();
-                indentation::read_block(&path, offset, limit, indentation).await?
+                indentation::read_block(&path, offset, limit, indentation).await
             }
         };
-        Ok(ToolOutput::Function {
-            content: collected.join("\n"),
-            content_items: None,
-            success: Some(true),
-        })
+        let duration = start.elapsed();
+
+        match collected {
+            Ok(collected) => {
+                let content = collected.join("\n");
+                invocation
+                    .session
+                    .send_event(
+                        invocation.turn.as_ref(),
+                        EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+                            call_id: invocation.call_id.clone(),
+                            process_id: None,
+                            turn_id: invocation.turn.sub_id.clone(),
+                            command,
+                            cwd,
+                            parsed_cmd,
+                            source: ExecCommandSource::Agent,
+                            interaction_input: None,
+                            stdout: content.clone(),
+                            stderr: String::new(),
+                            aggregated_output: content.clone(),
+                            exit_code: 0,
+                            duration,
+                            formatted_output: content.clone(),
+                        }),
+                    )
+                    .await;
+                Ok(ToolOutput::Function {
+                    content,
+                    content_items: None,
+                    success: Some(true),
+                })
+            }
+            Err(err) => {
+                let message = err.to_string();
+                invocation
+                    .session
+                    .send_event(
+                        invocation.turn.as_ref(),
+                        EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+                            call_id: invocation.call_id.clone(),
+                            process_id: None,
+                            turn_id: invocation.turn.sub_id.clone(),
+                            command,
+                            cwd,
+                            parsed_cmd,
+                            source: ExecCommandSource::Agent,
+                            interaction_input: None,
+                            stdout: String::new(),
+                            stderr: message.clone(),
+                            aggregated_output: message.clone(),
+                            exit_code: -1,
+                            duration,
+                            formatted_output: message,
+                        }),
+                    )
+                    .await;
+                Err(err)
+            }
+        }
     }
 }
 

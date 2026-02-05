@@ -4,6 +4,7 @@
 //! between user and agent.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fmt;
 use std::path::Path;
@@ -23,7 +24,20 @@ use crate::items::TurnItem;
 use crate::message_history::HistoryEntry;
 use crate::models::BaseInstructions;
 use crate::models::ContentItem;
+use crate::models::FunctionCallOutputContentItem;
+use crate::models::FunctionCallOutputPayload;
+use crate::models::LocalShellAction;
+use crate::models::ReasoningItemContent;
+use crate::models::ReasoningItemReasoningSummary;
 use crate::models::ResponseItem;
+use crate::models::ShellCommandToolCallParams;
+use crate::models::ShellToolCallParams;
+use crate::models::VIEW_IMAGE_TOOL_NAME;
+use crate::models::WebSearchAction;
+use crate::models::is_image_close_tag_text;
+use crate::models::is_image_open_tag_text;
+use crate::models::is_local_image_close_tag_text;
+use crate::models::is_local_image_open_tag_text;
 use crate::num_format::format_with_separators;
 use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
@@ -60,6 +74,10 @@ pub const ENVIRONMENT_CONTEXT_CLOSE_TAG: &str = "</environment_context>";
 pub const COLLABORATION_MODE_OPEN_TAG: &str = "<collaboration_mode>";
 pub const COLLABORATION_MODE_CLOSE_TAG: &str = "</collaboration_mode>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
+const USER_INSTRUCTIONS_PREFIX: &str = "# AGENTS.md instructions for ";
+const SKILL_INSTRUCTIONS_PREFIX: &str = "<skill";
+const USER_SHELL_COMMAND_OPEN_TAG: &str = "<user_shell_command>";
+const TURN_ABORTED_OPEN_TAG: &str = "<turn_aborted>";
 
 /// Submission Queue Entry - requests from user
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -1467,25 +1485,8 @@ impl InitialHistory {
     pub fn get_event_msgs(&self) -> Option<Vec<EventMsg>> {
         match self {
             InitialHistory::New => None,
-            InitialHistory::Resumed(resumed) => Some(
-                resumed
-                    .history
-                    .iter()
-                    .filter_map(|ri| match ri {
-                        RolloutItem::EventMsg(ev) => Some(ev.clone()),
-                        _ => None,
-                    })
-                    .collect(),
-            ),
-            InitialHistory::Forked(items) => Some(
-                items
-                    .iter()
-                    .filter_map(|ri| match ri {
-                        RolloutItem::EventMsg(ev) => Some(ev.clone()),
-                        _ => None,
-                    })
-                    .collect(),
-            ),
+            InitialHistory::Resumed(resumed) => Some(collect_initial_event_msgs(&resumed.history)),
+            InitialHistory::Forked(items) => Some(collect_initial_event_msgs(items)),
         }
     }
 
@@ -1504,6 +1505,836 @@ impl InitialHistory {
                 _ => None,
             }),
         }
+    }
+}
+
+fn collect_initial_event_msgs(items: &[RolloutItem]) -> Vec<EventMsg> {
+    let state = ExistingEventState::from_items(items);
+    let mut collector = ResumeEventCollector::new(items, state);
+    collector.collect(items)
+}
+
+struct ExistingEventState {
+    user_messages: HashMap<String, usize>,
+    agent_messages: HashMap<String, usize>,
+    reasoning_messages: HashMap<String, usize>,
+    raw_reasoning_messages: HashMap<String, usize>,
+    web_search_queries: HashMap<String, usize>,
+    tool_call_begin_ids: HashSet<String>,
+    tool_call_end_ids: HashSet<String>,
+    web_search_end_ids: HashSet<String>,
+}
+
+impl ExistingEventState {
+    fn from_items(items: &[RolloutItem]) -> Self {
+        let mut state = Self {
+            user_messages: HashMap::new(),
+            agent_messages: HashMap::new(),
+            reasoning_messages: HashMap::new(),
+            raw_reasoning_messages: HashMap::new(),
+            web_search_queries: HashMap::new(),
+            tool_call_begin_ids: HashSet::new(),
+            tool_call_end_ids: HashSet::new(),
+            web_search_end_ids: HashSet::new(),
+        };
+
+        for item in items {
+            let RolloutItem::EventMsg(ev) = item else {
+                continue;
+            };
+            match ev {
+                EventMsg::UserMessage(user) => {
+                    *state.user_messages.entry(user.message.clone()).or_insert(0) += 1;
+                }
+                EventMsg::AgentMessage(agent) => {
+                    *state
+                        .agent_messages
+                        .entry(agent.message.clone())
+                        .or_insert(0) += 1;
+                }
+                EventMsg::AgentReasoning(reasoning) => {
+                    *state
+                        .reasoning_messages
+                        .entry(reasoning.text.clone())
+                        .or_insert(0) += 1;
+                }
+                EventMsg::AgentReasoningRawContent(raw) => {
+                    *state
+                        .raw_reasoning_messages
+                        .entry(raw.text.clone())
+                        .or_insert(0) += 1;
+                }
+                EventMsg::WebSearchEnd(search) => {
+                    *state
+                        .web_search_queries
+                        .entry(search.query.clone())
+                        .or_insert(0) += 1;
+                    state.web_search_end_ids.insert(search.call_id.clone());
+                }
+                EventMsg::ExecCommandBegin(exec) => {
+                    state.tool_call_begin_ids.insert(exec.call_id.clone());
+                }
+                EventMsg::ExecCommandEnd(exec) => {
+                    state.tool_call_end_ids.insert(exec.call_id.clone());
+                }
+                EventMsg::PatchApplyBegin(patch) => {
+                    state.tool_call_begin_ids.insert(patch.call_id.clone());
+                }
+                EventMsg::PatchApplyEnd(patch) => {
+                    state.tool_call_end_ids.insert(patch.call_id.clone());
+                }
+                EventMsg::McpToolCallBegin(call) => {
+                    state.tool_call_begin_ids.insert(call.call_id.clone());
+                }
+                EventMsg::McpToolCallEnd(call) => {
+                    state.tool_call_end_ids.insert(call.call_id.clone());
+                }
+                EventMsg::ViewImageToolCall(call) => {
+                    state.tool_call_begin_ids.insert(call.call_id.clone());
+                    state.tool_call_end_ids.insert(call.call_id.clone());
+                }
+                _ => {}
+            }
+        }
+
+        state
+    }
+
+    fn should_include_raw_reasoning(&self) -> bool {
+        !self.raw_reasoning_messages.is_empty()
+    }
+
+    fn has_tool_call(&self, call_id: &str) -> bool {
+        self.tool_call_begin_ids.contains(call_id) || self.tool_call_end_ids.contains(call_id)
+    }
+
+    fn has_tool_end(&self, call_id: &str) -> bool {
+        self.tool_call_end_ids.contains(call_id)
+    }
+
+    fn consume_user_message(&mut self, message: &str) -> bool {
+        Self::consume(&mut self.user_messages, message)
+    }
+
+    fn consume_agent_message(&mut self, message: &str) -> bool {
+        Self::consume(&mut self.agent_messages, message)
+    }
+
+    fn consume_reasoning_message(&mut self, message: &str) -> bool {
+        Self::consume(&mut self.reasoning_messages, message)
+    }
+
+    fn consume_raw_reasoning_message(&mut self, message: &str) -> bool {
+        Self::consume(&mut self.raw_reasoning_messages, message)
+    }
+
+    fn consume_web_search_query(&mut self, query: &str) -> bool {
+        Self::consume(&mut self.web_search_queries, query)
+    }
+
+    fn consume(map: &mut HashMap<String, usize>, key: &str) -> bool {
+        if let Some(count) = map.get_mut(key) {
+            if *count > 0 {
+                *count -= 1;
+                return true;
+            }
+        }
+        false
+    }
+}
+
+#[derive(Clone)]
+struct PendingExecCall {
+    command: Vec<String>,
+    parsed_cmd: Vec<ParsedCommand>,
+    cwd: PathBuf,
+    source: ExecCommandSource,
+}
+
+struct ResumeEventCollector {
+    state: ExistingEventState,
+    current_cwd: PathBuf,
+    turn_index: usize,
+    current_turn_id: String,
+    pending_exec_calls: HashMap<String, PendingExecCall>,
+    suppressed_call_ids: HashSet<String>,
+    synthetic_call_index: usize,
+}
+
+impl ResumeEventCollector {
+    fn new(items: &[RolloutItem], state: ExistingEventState) -> Self {
+        let cwd = session_cwd_from_items(items).unwrap_or_default();
+        Self {
+            state,
+            current_cwd: cwd,
+            turn_index: 0,
+            current_turn_id: "resume-0".to_string(),
+            pending_exec_calls: HashMap::new(),
+            suppressed_call_ids: HashSet::new(),
+            synthetic_call_index: 0,
+        }
+    }
+
+    fn collect(&mut self, items: &[RolloutItem]) -> Vec<EventMsg> {
+        let mut events = Vec::new();
+        for item in items {
+            match item {
+                RolloutItem::SessionMeta(meta_line) => {
+                    if self.current_cwd.as_os_str().is_empty() {
+                        self.current_cwd = meta_line.meta.cwd.clone();
+                    }
+                }
+                RolloutItem::TurnContext(turn_context) => {
+                    self.current_cwd = turn_context.cwd.clone();
+                    self.turn_index += 1;
+                    self.current_turn_id = format!("resume-{}", self.turn_index);
+                }
+                RolloutItem::EventMsg(ev) => events.push(ev.clone()),
+                RolloutItem::ResponseItem(item) => {
+                    events.extend(self.response_item_to_events(item));
+                }
+                RolloutItem::Compacted(_) => {}
+            }
+        }
+        events
+    }
+
+    fn response_item_to_events(&mut self, item: &ResponseItem) -> Vec<EventMsg> {
+        match item {
+            ResponseItem::Message { role, content, .. } => self.message_to_events(role, content),
+            ResponseItem::Reasoning {
+                summary, content, ..
+            } => self.reasoning_to_events(summary, content.as_ref()),
+            ResponseItem::WebSearchCall { id, action, .. } => {
+                self.web_search_to_events(id.as_ref(), action)
+            }
+            ResponseItem::FunctionCall {
+                name,
+                arguments,
+                call_id,
+                ..
+            } => self.function_call_to_events(name, arguments, call_id),
+            ResponseItem::CustomToolCall {
+                name,
+                input,
+                call_id,
+                ..
+            } => self.custom_tool_call_to_events(name, input, call_id),
+            ResponseItem::LocalShellCall {
+                call_id,
+                id,
+                action,
+                ..
+            } => self.local_shell_call_to_events(call_id.as_ref().or(id.as_ref()), action),
+            ResponseItem::FunctionCallOutput { call_id, output } => {
+                self.function_call_output_to_events(call_id, output)
+            }
+            ResponseItem::CustomToolCallOutput { call_id, output } => {
+                self.custom_tool_call_output_to_events(call_id, output)
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn message_to_events(&mut self, role: &str, content: &[ContentItem]) -> Vec<EventMsg> {
+        match role {
+            "user" => {
+                let Some(parsed) = parse_user_message(content) else {
+                    return Vec::new();
+                };
+                if self.state.consume_user_message(&parsed.message) {
+                    return Vec::new();
+                }
+                vec![EventMsg::UserMessage(UserMessageEvent {
+                    message: parsed.message,
+                    images: if parsed.images.is_empty() {
+                        None
+                    } else {
+                        Some(parsed.images)
+                    },
+                    local_images: parsed.local_images,
+                    text_elements: parsed.text_elements,
+                })]
+            }
+            "assistant" => {
+                let mut events = Vec::new();
+                for text in assistant_message_texts(content) {
+                    if self.state.consume_agent_message(&text) {
+                        continue;
+                    }
+                    events.push(EventMsg::AgentMessage(AgentMessageEvent { message: text }));
+                }
+                events
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn reasoning_to_events(
+        &mut self,
+        summary: &[ReasoningItemReasoningSummary],
+        content: Option<&Vec<ReasoningItemContent>>,
+    ) -> Vec<EventMsg> {
+        let mut events = Vec::new();
+        for entry in summary {
+            let text = match entry {
+                ReasoningItemReasoningSummary::SummaryText { text } => text.clone(),
+            };
+            if self.state.consume_reasoning_message(&text) {
+                continue;
+            }
+            events.push(EventMsg::AgentReasoning(AgentReasoningEvent { text }));
+        }
+
+        if self.state.should_include_raw_reasoning() {
+            if let Some(content) = content {
+                for entry in content {
+                    let text = match entry {
+                        ReasoningItemContent::ReasoningText { text }
+                        | ReasoningItemContent::Text { text } => text.clone(),
+                    };
+                    if self.state.consume_raw_reasoning_message(&text) {
+                        continue;
+                    }
+                    events.push(EventMsg::AgentReasoningRawContent(
+                        AgentReasoningRawContentEvent { text },
+                    ));
+                }
+            }
+        }
+
+        events
+    }
+
+    fn web_search_to_events(
+        &mut self,
+        id: Option<&String>,
+        action: &WebSearchAction,
+    ) -> Vec<EventMsg> {
+        let call_id = id.cloned().unwrap_or_default();
+        if !call_id.is_empty() && self.state.web_search_end_ids.contains(&call_id) {
+            return Vec::new();
+        }
+
+        let query = web_search_query(action);
+        if query.is_empty() {
+            return Vec::new();
+        }
+        if self.state.consume_web_search_query(&query) {
+            return Vec::new();
+        }
+
+        vec![EventMsg::WebSearchEnd(WebSearchEndEvent { call_id, query })]
+    }
+
+    fn function_call_to_events(
+        &mut self,
+        name: &str,
+        arguments: &str,
+        call_id: &str,
+    ) -> Vec<EventMsg> {
+        if self.state.has_tool_call(call_id) {
+            return Vec::new();
+        }
+
+        if name == VIEW_IMAGE_TOOL_NAME {
+            if let Some(path) = parse_view_image_path(arguments) {
+                let call_id = call_id.to_string();
+                self.suppressed_call_ids.insert(call_id.clone());
+                return vec![EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
+                    call_id,
+                    path,
+                })];
+            }
+        }
+
+        let spec = exec_spec_for_function_call(name, arguments, &self.current_cwd);
+        let pending = PendingExecCall {
+            command: spec.command.clone(),
+            parsed_cmd: spec.parsed_cmd.clone(),
+            cwd: spec.cwd.clone(),
+            source: ExecCommandSource::Agent,
+        };
+        self.pending_exec_calls
+            .insert(call_id.to_string(), pending.clone());
+
+        vec![EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: call_id.to_string(),
+            process_id: None,
+            turn_id: self.current_turn_id.clone(),
+            command: pending.command,
+            cwd: pending.cwd,
+            parsed_cmd: pending.parsed_cmd,
+            source: pending.source,
+            interaction_input: None,
+        })]
+    }
+
+    fn custom_tool_call_to_events(
+        &mut self,
+        name: &str,
+        input: &str,
+        call_id: &str,
+    ) -> Vec<EventMsg> {
+        if self.state.has_tool_call(call_id) {
+            return Vec::new();
+        }
+
+        let spec = exec_spec_for_custom_tool_call(name, input, &self.current_cwd);
+        let pending = PendingExecCall {
+            command: spec.command.clone(),
+            parsed_cmd: spec.parsed_cmd.clone(),
+            cwd: spec.cwd.clone(),
+            source: ExecCommandSource::Agent,
+        };
+        self.pending_exec_calls
+            .insert(call_id.to_string(), pending.clone());
+
+        vec![EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: call_id.to_string(),
+            process_id: None,
+            turn_id: self.current_turn_id.clone(),
+            command: pending.command,
+            cwd: pending.cwd,
+            parsed_cmd: pending.parsed_cmd,
+            source: pending.source,
+            interaction_input: None,
+        })]
+    }
+
+    fn local_shell_call_to_events(
+        &mut self,
+        call_id: Option<&String>,
+        action: &LocalShellAction,
+    ) -> Vec<EventMsg> {
+        let call_id = call_id
+            .cloned()
+            .unwrap_or_else(|| self.next_synthetic_call_id());
+        if self.state.has_tool_call(&call_id) {
+            return Vec::new();
+        }
+
+        let (command, cwd) = match action {
+            LocalShellAction::Exec(exec) => {
+                let cwd = exec
+                    .working_directory
+                    .as_ref()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| self.current_cwd.clone());
+                (exec.command.clone(), cwd)
+            }
+        };
+
+        let pending = PendingExecCall {
+            command: command.clone(),
+            parsed_cmd: Vec::new(),
+            cwd: cwd.clone(),
+            source: ExecCommandSource::Agent,
+        };
+        self.pending_exec_calls
+            .insert(call_id.clone(), pending.clone());
+
+        vec![EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id,
+            process_id: None,
+            turn_id: self.current_turn_id.clone(),
+            command,
+            cwd,
+            parsed_cmd: pending.parsed_cmd,
+            source: pending.source,
+            interaction_input: None,
+        })]
+    }
+
+    fn function_call_output_to_events(
+        &mut self,
+        call_id: &str,
+        output: &FunctionCallOutputPayload,
+    ) -> Vec<EventMsg> {
+        if self.state.has_tool_end(call_id) || self.suppressed_call_ids.contains(call_id) {
+            return Vec::new();
+        }
+
+        let Some(pending) = self.pending_exec_calls.remove(call_id) else {
+            return Vec::new();
+        };
+
+        let output_text = function_call_output_text(output);
+        let success = output.success.unwrap_or(true);
+        vec![EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: call_id.to_string(),
+            process_id: None,
+            turn_id: self.current_turn_id.clone(),
+            command: pending.command,
+            cwd: pending.cwd,
+            parsed_cmd: pending.parsed_cmd,
+            source: pending.source,
+            interaction_input: None,
+            stdout: if success {
+                output_text.clone()
+            } else {
+                String::new()
+            },
+            stderr: if success {
+                String::new()
+            } else {
+                output_text.clone()
+            },
+            aggregated_output: output_text.clone(),
+            exit_code: if success { 0 } else { 1 },
+            duration: Duration::ZERO,
+            formatted_output: output_text,
+        })]
+    }
+
+    fn custom_tool_call_output_to_events(&mut self, call_id: &str, output: &str) -> Vec<EventMsg> {
+        if self.state.has_tool_end(call_id) || self.suppressed_call_ids.contains(call_id) {
+            return Vec::new();
+        }
+
+        let Some(pending) = self.pending_exec_calls.remove(call_id) else {
+            return Vec::new();
+        };
+
+        let output_text = output.to_string();
+        vec![EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: call_id.to_string(),
+            process_id: None,
+            turn_id: self.current_turn_id.clone(),
+            command: pending.command,
+            cwd: pending.cwd,
+            parsed_cmd: pending.parsed_cmd,
+            source: pending.source,
+            interaction_input: None,
+            stdout: output_text.clone(),
+            stderr: String::new(),
+            aggregated_output: output_text.clone(),
+            exit_code: 0,
+            duration: Duration::ZERO,
+            formatted_output: output_text,
+        })]
+    }
+
+    fn next_synthetic_call_id(&mut self) -> String {
+        self.synthetic_call_index += 1;
+        format!("resume-call-{}", self.synthetic_call_index)
+    }
+}
+
+#[derive(Clone)]
+struct ExecCallSpec {
+    command: Vec<String>,
+    parsed_cmd: Vec<ParsedCommand>,
+    cwd: PathBuf,
+}
+
+#[derive(Deserialize)]
+struct ExecCommandArgs {
+    cmd: String,
+    #[serde(default)]
+    workdir: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ReadFileArgs {
+    file_path: String,
+}
+
+#[derive(Deserialize)]
+struct ListDirArgs {
+    dir_path: String,
+}
+
+#[derive(Deserialize)]
+struct GrepFilesArgs {
+    pattern: String,
+    #[serde(default)]
+    path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct McpResourceArgs {
+    #[serde(default)]
+    server: Option<String>,
+    #[serde(default)]
+    uri: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ViewImageArgs {
+    path: String,
+}
+
+struct ParsedUserMessage {
+    message: String,
+    images: Vec<String>,
+    local_images: Vec<PathBuf>,
+    text_elements: Vec<crate::user_input::TextElement>,
+}
+
+fn parse_user_message(content: &[ContentItem]) -> Option<ParsedUserMessage> {
+    if is_user_instructions_message(content) || is_skill_instructions_message(content) {
+        return None;
+    }
+
+    let mut message = String::new();
+    let mut images = Vec::new();
+
+    for (idx, item) in content.iter().enumerate() {
+        match item {
+            ContentItem::InputText { text } => {
+                if is_session_prefix_text(text) || is_user_shell_command_text(text) {
+                    return None;
+                }
+                if (is_local_image_open_tag_text(text) || is_image_open_tag_text(text))
+                    && matches!(content.get(idx + 1), Some(ContentItem::InputImage { .. }))
+                {
+                    continue;
+                }
+                if (is_local_image_close_tag_text(text) || is_image_close_tag_text(text))
+                    && idx > 0
+                    && matches!(content.get(idx - 1), Some(ContentItem::InputImage { .. }))
+                {
+                    continue;
+                }
+                message.push_str(text);
+            }
+            ContentItem::InputImage { image_url } => {
+                images.push(image_url.clone());
+            }
+            ContentItem::OutputText { .. } => {}
+        }
+    }
+
+    if message.trim().is_empty() && images.is_empty() {
+        return None;
+    }
+
+    Some(ParsedUserMessage {
+        message,
+        images,
+        local_images: Vec::new(),
+        text_elements: Vec::new(),
+    })
+}
+
+fn assistant_message_texts(content: &[ContentItem]) -> Vec<String> {
+    content
+        .iter()
+        .filter_map(|item| match item {
+            ContentItem::OutputText { text } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn is_user_instructions_message(content: &[ContentItem]) -> bool {
+    if let [ContentItem::InputText { text }] = content {
+        let trimmed = text.trim_start();
+        trimmed.starts_with(USER_INSTRUCTIONS_PREFIX)
+            || trimmed.starts_with(USER_INSTRUCTIONS_OPEN_TAG)
+    } else {
+        false
+    }
+}
+
+fn is_skill_instructions_message(content: &[ContentItem]) -> bool {
+    if let [ContentItem::InputText { text }] = content {
+        text.trim_start().starts_with(SKILL_INSTRUCTIONS_PREFIX)
+    } else {
+        false
+    }
+}
+
+fn is_session_prefix_text(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    let lowered = trimmed.to_ascii_lowercase();
+    lowered.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG) || lowered.starts_with(TURN_ABORTED_OPEN_TAG)
+}
+
+fn is_user_shell_command_text(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    let lowered = trimmed.to_ascii_lowercase();
+    lowered.starts_with(USER_SHELL_COMMAND_OPEN_TAG)
+}
+
+fn web_search_query(action: &WebSearchAction) -> String {
+    match action {
+        WebSearchAction::Search { query } => query.clone().unwrap_or_default(),
+        WebSearchAction::OpenPage { url } => url.clone().unwrap_or_default(),
+        WebSearchAction::FindInPage { url, pattern } => {
+            let url = url.clone().unwrap_or_default();
+            let pattern = pattern.clone().unwrap_or_default();
+            if url.is_empty() && pattern.is_empty() {
+                String::new()
+            } else if url.is_empty() {
+                format!("find_in_page: {pattern}")
+            } else if pattern.is_empty() {
+                format!("find_in_page: {url}")
+            } else {
+                format!("find_in_page: {url} ({pattern})")
+            }
+        }
+        WebSearchAction::Other => String::new(),
+    }
+}
+
+fn function_call_output_text(output: &FunctionCallOutputPayload) -> String {
+    if !output.content.is_empty() {
+        return output.content.clone();
+    }
+    let Some(items) = &output.content_items else {
+        return String::new();
+    };
+    items
+        .iter()
+        .map(|item| match item {
+            FunctionCallOutputContentItem::InputText { text } => text.clone(),
+            FunctionCallOutputContentItem::InputImage { image_url } => {
+                format!("[image: {image_url}]")
+            }
+        })
+        .collect::<Vec<String>>()
+        .join("")
+}
+
+fn parse_view_image_path(arguments: &str) -> Option<PathBuf> {
+    let args = serde_json::from_str::<ViewImageArgs>(arguments).ok()?;
+    Some(PathBuf::from(args.path))
+}
+
+fn exec_spec_for_function_call(name: &str, arguments: &str, current_cwd: &PathBuf) -> ExecCallSpec {
+    match name {
+        "exec_command" => {
+            let args = serde_json::from_str::<ExecCommandArgs>(arguments).ok();
+            if let Some(args) = args {
+                let cwd = args
+                    .workdir
+                    .as_ref()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| current_cwd.clone());
+                return ExecCallSpec {
+                    command: vec![args.cmd],
+                    parsed_cmd: Vec::new(),
+                    cwd,
+                };
+            }
+        }
+        "shell" | "container.exec" => {
+            let args = serde_json::from_str::<ShellToolCallParams>(arguments).ok();
+            if let Some(args) = args {
+                let cwd = args
+                    .workdir
+                    .as_ref()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| current_cwd.clone());
+                return ExecCallSpec {
+                    command: args.command,
+                    parsed_cmd: Vec::new(),
+                    cwd,
+                };
+            }
+        }
+        "shell_command" => {
+            let args = serde_json::from_str::<ShellCommandToolCallParams>(arguments).ok();
+            if let Some(args) = args {
+                let cwd = args
+                    .workdir
+                    .as_ref()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| current_cwd.clone());
+                return ExecCallSpec {
+                    command: vec![args.command],
+                    parsed_cmd: Vec::new(),
+                    cwd,
+                };
+            }
+        }
+        "read_file" => {
+            let args = serde_json::from_str::<ReadFileArgs>(arguments).ok();
+            if let Some(args) = args {
+                let path = PathBuf::from(&args.file_path);
+                let name = path
+                    .file_name()
+                    .map(|value| value.to_string_lossy().to_string())
+                    .unwrap_or_else(|| args.file_path.clone());
+                return ExecCallSpec {
+                    command: vec!["read_file".to_string(), args.file_path.clone()],
+                    parsed_cmd: vec![ParsedCommand::Read {
+                        cmd: format!("read_file {}", args.file_path),
+                        name,
+                        path,
+                    }],
+                    cwd: current_cwd.clone(),
+                };
+            }
+        }
+        "list_dir" => {
+            let args = serde_json::from_str::<ListDirArgs>(arguments).ok();
+            if let Some(args) = args {
+                return ExecCallSpec {
+                    command: vec!["list_dir".to_string(), args.dir_path.clone()],
+                    parsed_cmd: vec![ParsedCommand::ListFiles {
+                        cmd: format!("list_dir {}", args.dir_path),
+                        path: Some(args.dir_path),
+                    }],
+                    cwd: current_cwd.clone(),
+                };
+            }
+        }
+        "grep_files" => {
+            let args = serde_json::from_str::<GrepFilesArgs>(arguments).ok();
+            if let Some(args) = args {
+                return ExecCallSpec {
+                    command: vec!["grep_files".to_string(), args.pattern.clone()],
+                    parsed_cmd: vec![ParsedCommand::Search {
+                        cmd: format!("grep_files {}", args.pattern),
+                        query: Some(args.pattern),
+                        path: args.path,
+                    }],
+                    cwd: current_cwd.clone(),
+                };
+            }
+        }
+        "list_mcp_resources" | "list_mcp_resource_templates" | "read_mcp_resource" => {
+            let args = serde_json::from_str::<McpResourceArgs>(arguments).ok();
+            let mut command = vec![name.to_string()];
+            if let Some(args) = args {
+                if let Some(server) = args.server {
+                    command.push(server);
+                }
+                if let Some(uri) = args.uri {
+                    command.push(uri);
+                }
+            }
+            return ExecCallSpec {
+                command,
+                parsed_cmd: Vec::new(),
+                cwd: current_cwd.clone(),
+            };
+        }
+        "apply_patch" => {
+            return ExecCallSpec {
+                command: vec!["apply_patch".to_string()],
+                parsed_cmd: Vec::new(),
+                cwd: current_cwd.clone(),
+            };
+        }
+        _ => {}
+    }
+
+    ExecCallSpec {
+        command: vec![name.to_string()],
+        parsed_cmd: Vec::new(),
+        cwd: current_cwd.clone(),
+    }
+}
+
+fn exec_spec_for_custom_tool_call(name: &str, _input: &str, current_cwd: &PathBuf) -> ExecCallSpec {
+    ExecCallSpec {
+        command: vec![name.to_string()],
+        parsed_cmd: Vec::new(),
+        cwd: current_cwd.clone(),
     }
 }
 
@@ -2455,6 +3286,41 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn resume_converts_function_call_items_into_exec_events() {
+        let args = json!({ "file_path": "/tmp/demo.txt" }).to_string();
+        let items = vec![
+            RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+                id: None,
+                name: "read_file".to_string(),
+                arguments: args,
+                call_id: "call-1".to_string(),
+            }),
+            RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: FunctionCallOutputPayload {
+                    content: "demo content".to_string(),
+                    ..Default::default()
+                },
+            }),
+        ];
+
+        let history = InitialHistory::Forked(items);
+        let events = history.get_event_msgs().expect("expected resume events");
+
+        match events.as_slice() {
+            [
+                EventMsg::ExecCommandBegin(begin),
+                EventMsg::ExecCommandEnd(end),
+            ] => {
+                assert_eq!(begin.call_id, "call-1");
+                assert_eq!(end.call_id, "call-1");
+                assert_eq!(end.formatted_output, "demo content");
+            }
+            other => panic!("unexpected resume events: {other:#?}"),
+        }
     }
 
     #[test]
