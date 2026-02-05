@@ -1,6 +1,7 @@
 use ratatui::text::Line;
 
 use crate::markdown;
+use crate::markdown_render;
 
 /// Newline-gated accumulator that renders markdown and commits only fully
 /// completed logical lines.
@@ -35,11 +36,19 @@ impl MarkdownStreamCollector {
     pub fn commit_complete_lines(&mut self) -> Vec<Line<'static>> {
         let source = self.buffer.clone();
         let last_newline_idx = source.rfind('\n');
-        let source = if let Some(last_newline_idx) = last_newline_idx {
+        let mut source = if let Some(last_newline_idx) = last_newline_idx {
             source[..=last_newline_idx].to_string()
         } else {
             return Vec::new();
         };
+        if markdown_render::tables_enabled() {
+            if let Some(truncated) = truncate_incomplete_table_source(&source) {
+                if truncated.is_empty() {
+                    return Vec::new();
+                }
+                source = truncated;
+            }
+        }
         let mut rendered: Vec<Line<'static>> = Vec::new();
         markdown::append_markdown(&source, self.width, &mut rendered);
         let mut complete_line_count = rendered.len();
@@ -94,6 +103,115 @@ impl MarkdownStreamCollector {
         self.clear();
         out
     }
+}
+
+fn truncate_incomplete_table_source(source: &str) -> Option<String> {
+    let mut lines: Vec<&str> = source.split('\n').collect();
+    if matches!(lines.last(), Some(&"")) {
+        lines.pop();
+    }
+    if lines.is_empty() {
+        return None;
+    }
+
+    let mut idx = lines.len();
+    while idx > 0 && is_table_line(lines[idx - 1]) {
+        idx -= 1;
+    }
+    if idx == lines.len() {
+        return None;
+    }
+
+    let prefix = &lines[..idx];
+    if prefix.is_empty() {
+        return Some(String::new());
+    }
+    let mut truncated = prefix.join("\n");
+    truncated.push('\n');
+    Some(truncated)
+}
+
+fn is_table_line(line: &str) -> bool {
+    let trimmed = strip_table_prefix(line).trim();
+    if trimmed.is_empty() || !trimmed.contains('|') {
+        return false;
+    }
+    is_table_separator(trimmed) || is_table_row(trimmed)
+}
+
+fn is_table_row(line: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || !trimmed.contains('|') {
+        return false;
+    }
+    !is_table_separator(trimmed)
+}
+
+fn is_table_separator(line: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || !trimmed.contains('|') {
+        return false;
+    }
+    let mut has_dash = false;
+    for ch in trimmed.chars() {
+        match ch {
+            '-' => has_dash = true,
+            '|' | ':' | ' ' | '\t' => {}
+            _ => return false,
+        }
+    }
+    has_dash
+}
+
+fn strip_table_prefix(line: &str) -> &str {
+    let bytes = line.as_bytes();
+    let len = bytes.len();
+    let mut idx = 0usize;
+    while idx < len && matches!(bytes[idx], b' ' | b'\t') {
+        idx += 1;
+    }
+    while idx < len && bytes[idx] == b'>' {
+        idx += 1;
+        if idx < len && bytes[idx] == b' ' {
+            idx += 1;
+        }
+        while idx < len && matches!(bytes[idx], b' ' | b'\t') {
+            idx += 1;
+        }
+    }
+    let marker_start = idx;
+    if idx < len {
+        let rest = &line[idx..];
+        if rest.starts_with('\u{2022}') {
+            idx += '\u{2022}'.len_utf8();
+        } else {
+            match bytes[idx] {
+                b'-' | b'+' | b'*' => {
+                    idx += 1;
+                }
+                _ if bytes[idx].is_ascii_digit() => {
+                    while idx < len && bytes[idx].is_ascii_digit() {
+                        idx += 1;
+                    }
+                    if idx < len && matches!(bytes[idx], b'.' | b')') {
+                        idx += 1;
+                    } else {
+                        idx = marker_start;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if idx != marker_start {
+        if idx < len && bytes[idx] == b' ' {
+            idx += 1;
+        }
+        while idx < len && matches!(bytes[idx], b' ' | b'\t') {
+            idx += 1;
+        }
+    }
+    &line[idx..]
 }
 
 #[cfg(test)]
@@ -370,6 +488,34 @@ mod tests {
             vec!["Hello."],
             "unexpected markdown lines: {rendered_strings:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn stream_table_buffers_until_non_table_line() {
+        let prev_tables_enabled = markdown_render::tables_enabled();
+        markdown_render::set_tables_enabled(true);
+
+        let mut c = super::MarkdownStreamCollector::new(None);
+        c.push_delta("| A | B |\n");
+        assert!(c.commit_complete_lines().is_empty());
+        c.push_delta("| --- | --- |\n");
+        assert!(c.commit_complete_lines().is_empty());
+        c.push_delta("| 1 | 2 |\n");
+        assert!(c.commit_complete_lines().is_empty());
+        c.push_delta("\nDone\n");
+        let out = c.commit_complete_lines();
+        let rendered = lines_to_plain_strings(&out);
+
+        let mut full_rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
+        crate::markdown::append_markdown(
+            "| A | B |\n| --- | --- |\n| 1 | 2 |\n\nDone\n",
+            None,
+            &mut full_rendered,
+        );
+        let expected = lines_to_plain_strings(&full_rendered);
+
+        assert_eq!(rendered, expected);
+        markdown_render::set_tables_enabled(prev_tables_enabled);
     }
 
     fn lines_to_plain_strings(lines: &[ratatui::text::Line<'_>]) -> Vec<String> {
