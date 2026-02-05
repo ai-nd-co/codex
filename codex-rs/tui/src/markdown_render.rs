@@ -1,6 +1,9 @@
 use crate::render::line_utils::line_to_static;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
+use comfy_table::CellAlignment;
+use comfy_table::ContentArrangement;
+use comfy_table::Table;
 use pulldown_cmark::Alignment as CmarkAlignment;
 use pulldown_cmark::CodeBlockKind;
 use pulldown_cmark::CowStr;
@@ -14,6 +17,7 @@ use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
+use std::borrow::Cow;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
@@ -58,12 +62,13 @@ impl Default for MarkdownStyles {
 }
 
 static TABLES_ENABLED: AtomicBool = AtomicBool::new(false);
+const UTF8_TABLE_PRESET: &str = "││──├─┼┤│─┼├┤┬┴┌┐└┘";
 
 pub(crate) fn set_tables_enabled(enabled: bool) {
     TABLES_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
-fn tables_enabled() -> bool {
+pub(crate) fn tables_enabled() -> bool {
     TABLES_ENABLED.load(Ordering::Relaxed)
 }
 
@@ -92,6 +97,7 @@ struct TableState {
     current_cell: String,
     header_rows: usize,
     in_head: bool,
+    row_open: bool,
 }
 
 impl TableState {
@@ -103,12 +109,14 @@ impl TableState {
             current_cell: String::new(),
             header_rows: 0,
             in_head: false,
+            row_open: false,
         }
     }
 
     fn start_row(&mut self) {
         self.current_row = Vec::new();
         self.current_cell.clear();
+        self.row_open = true;
     }
 
     fn end_row(&mut self) {
@@ -122,6 +130,7 @@ impl TableState {
                 self.header_rows = self.header_rows.saturating_add(1);
             }
         }
+        self.row_open = false;
     }
 
     fn start_cell(&mut self) {
@@ -155,13 +164,185 @@ pub fn render_markdown_text(input: &str) -> Text<'static> {
 pub(crate) fn render_markdown_text_with_width(input: &str, width: Option<usize>) -> Text<'static> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
-    if tables_enabled() {
+    let tables_on = tables_enabled();
+    if tables_on {
         options.insert(Options::ENABLE_TABLES);
     }
-    let parser = Parser::new_ext(input, options);
-    let mut w = Writer::new(parser, width, tables_enabled());
+    let normalized = if tables_on {
+        Cow::Owned(normalize_table_blocks(input))
+    } else {
+        Cow::Borrowed(input)
+    };
+    let parser = Parser::new_ext(normalized.as_ref(), options);
+    let mut w = Writer::new(parser, width, tables_on);
     w.run();
     w.text
+}
+
+fn normalize_table_blocks(input: &str) -> String {
+    let ends_with_newline = input.ends_with('\n');
+    let lines: Vec<&str> = input.split('\n').collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut idx = 0usize;
+
+    while idx < lines.len() {
+        let line = lines[idx];
+        if is_box_table_line(line) {
+            idx += 1;
+            continue;
+        }
+
+        let Some((strip_len, content)) = split_table_prefix(line) else {
+            out.push(line.to_string());
+            idx += 1;
+            continue;
+        };
+
+        if !is_pipe_table_line(content) {
+            out.push(line.to_string());
+            idx += 1;
+            continue;
+        }
+
+        let mut rows: Vec<String> = Vec::new();
+        rows.push(strip_prefix(line, strip_len));
+        idx += 1;
+
+        while idx < lines.len() {
+            let line = lines[idx];
+            if line.trim().is_empty() {
+                idx += 1;
+                break;
+            }
+            if is_box_table_line(line) {
+                idx += 1;
+                continue;
+            }
+            let stripped = strip_prefix(line, strip_len);
+            if is_pipe_table_line(&stripped) || is_pipe_table_separator(&stripped) {
+                rows.push(stripped);
+                idx += 1;
+                continue;
+            }
+            break;
+        }
+
+        if !rows.iter().any(|row| is_pipe_table_separator(row)) {
+            if let Some(separator) = build_pipe_table_separator(&rows) {
+                rows.insert(1, separator);
+            }
+        }
+
+        out.extend(rows);
+        out.push(String::new());
+    }
+
+    let mut normalized = out.join("\n");
+    if ends_with_newline {
+        normalized.push('\n');
+    }
+    normalized
+}
+
+fn split_table_prefix(line: &str) -> Option<(usize, &str)> {
+    if line.is_empty() {
+        return None;
+    }
+    let bytes = line.as_bytes();
+    let mut idx = 0usize;
+    let len = bytes.len();
+    while idx < len && matches!(bytes[idx], b' ' | b'\t') {
+        idx += 1;
+    }
+    while idx < len && bytes[idx] == b'>' {
+        idx += 1;
+        if idx < len && bytes[idx] == b' ' {
+            idx += 1;
+        }
+        while idx < len && matches!(bytes[idx], b' ' | b'\t') {
+            idx += 1;
+        }
+    }
+    let marker_start = idx;
+    if idx < len {
+        let rest = &line[idx..];
+        if rest.starts_with('\u{2022}') {
+            idx += '\u{2022}'.len_utf8();
+        } else {
+            match bytes[idx] {
+                b'-' | b'+' | b'*' => {
+                    idx += 1;
+                }
+                _ if bytes[idx].is_ascii_digit() => {
+                    while idx < len && bytes[idx].is_ascii_digit() {
+                        idx += 1;
+                    }
+                    if idx < len && matches!(bytes[idx], b'.' | b')') {
+                        idx += 1;
+                    } else {
+                        idx = marker_start;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if idx != marker_start {
+        if idx < len && bytes[idx] == b' ' {
+            idx += 1;
+        }
+        while idx < len && matches!(bytes[idx], b' ' | b'\t') {
+            idx += 1;
+        }
+    }
+
+    Some((idx, &line[idx..]))
+}
+
+fn strip_prefix(line: &str, strip_len: usize) -> String {
+    if line.len() <= strip_len {
+        return String::new();
+    }
+    line[strip_len..].to_string()
+}
+
+fn is_pipe_table_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.contains('|') && !trimmed.is_empty() && !is_pipe_table_separator(trimmed)
+}
+
+fn is_pipe_table_separator(line: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || !trimmed.contains('|') {
+        return false;
+    }
+    let mut has_dash = false;
+    for ch in trimmed.chars() {
+        match ch {
+            '-' => has_dash = true,
+            '|' | ':' | ' ' | '\t' => {}
+            _ => return false,
+        }
+    }
+    has_dash
+}
+
+fn build_pipe_table_separator(rows: &[String]) -> Option<String> {
+    let header = rows.iter().find(|row| is_pipe_table_line(row))?;
+    let trimmed = header.trim();
+    let mut parts: Vec<&str> = trimmed.split('|').collect();
+    if trimmed.starts_with('|') && trimmed.ends_with('|') && parts.len() >= 2 {
+        parts = parts[1..parts.len() - 1].to_vec();
+    }
+    let col_count = parts.iter().filter(|cell| !cell.trim().is_empty()).count();
+    if col_count == 0 {
+        return None;
+    }
+    let mut separator = String::from("|");
+    for _ in 0..col_count {
+        separator.push_str(" --- |");
+    }
+    Some(separator)
 }
 
 struct Writer<'a, I>
@@ -369,6 +550,9 @@ where
                 table.in_head = true;
             }
             Event::End(TagEnd::TableHead) => {
+                if table.row_open {
+                    table.end_row();
+                }
                 table.in_head = false;
             }
             Event::Start(Tag::TableRow) => {
@@ -378,12 +562,18 @@ where
                 table.end_row();
             }
             Event::Start(Tag::TableCell) => {
+                if !table.row_open {
+                    table.start_row();
+                }
                 table.start_cell();
             }
             Event::End(TagEnd::TableCell) => {
                 table.end_cell();
             }
             Event::End(TagEnd::Table) => {
+                if table.row_open {
+                    table.end_row();
+                }
                 self.finish_table();
             }
             Event::Text(text) => {
@@ -421,20 +611,44 @@ where
             return;
         }
 
-        let mut widths = vec![0usize; column_count];
-        for row in &table.rows {
-            for (idx, cell) in row.iter().enumerate() {
-                widths[idx] = widths[idx].max(cell.chars().count());
+        let mut rows = table.rows;
+        for row in &mut rows {
+            if row.len() < column_count {
+                row.resize_with(column_count, String::new);
             }
         }
 
-        for (idx, row) in table.rows.iter().enumerate() {
-            let line = format_table_row(row, &widths, &table.alignments);
-            self.push_line(Line::from(line));
-            if table.header_rows > 0 && idx + 1 == table.header_rows {
-                let separator = format_table_separator(&widths, &table.alignments);
-                self.push_line(Line::from(separator));
+        let header = if table.header_rows > 0 && !rows.is_empty() {
+            Some(rows.remove(0))
+        } else {
+            None
+        };
+
+        let mut table_output = Table::new();
+        table_output.load_preset(UTF8_TABLE_PRESET);
+        table_output.set_content_arrangement(ContentArrangement::Disabled);
+
+        if let Some(header) = header {
+            table_output.set_header(header);
+        }
+        for row in rows {
+            table_output.add_row(row);
+        }
+
+        for (idx, alignment) in table.alignments.iter().enumerate() {
+            if let Some(column) = table_output.column_mut(idx) {
+                let cell_alignment = match alignment {
+                    CmarkAlignment::Right => CellAlignment::Right,
+                    CmarkAlignment::Center => CellAlignment::Center,
+                    CmarkAlignment::None | CmarkAlignment::Left => CellAlignment::Left,
+                };
+                column.set_cell_alignment(cell_alignment);
             }
+        }
+
+        let rendered = table_output.to_string();
+        for line in rendered.lines() {
+            self.push_line(Line::from(line.to_string()));
         }
         self.flush_current_line();
     }
@@ -619,8 +833,11 @@ where
     fn flush_current_line(&mut self) {
         if let Some(line) = self.current_line_content.take() {
             let style = self.current_line_style;
+            let line_str = line_to_plain_string(&line);
+            let no_wrap_table = is_box_table_line(&line_str);
             // NB we don't wrap code in code blocks, in order to preserve whitespace for copy/paste.
             if !self.current_line_in_code_block
+                && !no_wrap_table
                 && let Some(width) = self.wrap_width
             {
                 let opts = RtOptions::new(width)
@@ -716,50 +933,17 @@ where
     }
 }
 
-fn format_table_row(row: &[String], widths: &[usize], alignments: &[CmarkAlignment]) -> String {
-    let mut line = String::new();
-    line.push('|');
-    for (idx, width) in widths.iter().enumerate() {
-        let cell = row.get(idx).map(String::as_str).unwrap_or("");
-        let alignment = alignments.get(idx).copied().unwrap_or(CmarkAlignment::Left);
-        let padded = pad_table_cell(cell, *width, alignment);
-        line.push(' ');
-        line.push_str(&padded);
-        line.push(' ');
-        line.push('|');
-    }
-    line
+fn line_to_plain_string(line: &Line<'_>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<Vec<_>>()
+        .join("")
 }
 
-fn format_table_separator(widths: &[usize], _alignments: &[CmarkAlignment]) -> String {
-    let mut line = String::new();
-    line.push('|');
-    for width in widths {
-        let count = (*width).max(1);
-        line.push(' ');
-        line.push_str(&"-".repeat(count));
-        line.push(' ');
-        line.push('|');
-    }
-    line
-}
-
-fn pad_table_cell(cell: &str, width: usize, alignment: CmarkAlignment) -> String {
-    let cell_len = cell.chars().count();
-    if cell_len >= width {
-        return cell.to_string();
-    }
-
-    let pad = width.saturating_sub(cell_len);
-    match alignment {
-        CmarkAlignment::None | CmarkAlignment::Left => format!("{cell}{}", " ".repeat(pad)),
-        CmarkAlignment::Right => format!("{}{}", " ".repeat(pad), cell),
-        CmarkAlignment::Center => {
-            let left = pad / 2;
-            let right = pad - left;
-            format!("{}{}{}", " ".repeat(left), cell, " ".repeat(right))
-        }
-    }
+fn is_box_table_line(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    matches!(trimmed.chars().next(), Some('┌' | '├' | '└' | '│'))
 }
 
 #[cfg(test)]

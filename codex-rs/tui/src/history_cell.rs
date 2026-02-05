@@ -360,21 +360,68 @@ impl AgentMessageCell {
 
 impl HistoryCell for AgentMessageCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        word_wrap_lines(
-            &self.lines,
-            RtOptions::new(width as usize)
-                .initial_indent(if self.is_first_line {
-                    "• ".dim().into()
-                } else {
-                    "  ".into()
-                })
-                .subsequent_indent("  ".into()),
-        )
+        let base_opts = RtOptions::new(width as usize)
+            .initial_indent(if self.is_first_line {
+                "• ".dim().into()
+            } else {
+                "  ".into()
+            })
+            .subsequent_indent("  ".into());
+
+        let mut out: Vec<Line<'static>> = Vec::new();
+        let mut first = true;
+        let mut in_table_block = false;
+
+        for line in &self.lines {
+            let text = line_to_plain_string(line);
+            let is_table_line = is_box_table_line(&text);
+            if is_table_line {
+                in_table_block = true;
+                out.push(line_to_static(line));
+                first = false;
+                continue;
+            }
+            if in_table_block {
+                if text.trim().is_empty() {
+                    out.push(Line::default());
+                    continue;
+                }
+                in_table_block = false;
+            }
+
+            let opts = if first {
+                base_opts.clone()
+            } else {
+                base_opts
+                    .clone()
+                    .initial_indent(base_opts.subsequent_indent.clone())
+            };
+            let wrapped = word_wrap_line(line, opts);
+            push_owned_lines(&wrapped, &mut out);
+            if !wrapped.is_empty() {
+                first = false;
+            }
+        }
+
+        out
     }
 
     fn is_stream_continuation(&self) -> bool {
         !self.is_first_line
     }
+}
+
+fn line_to_plain_string(line: &Line<'_>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn is_box_table_line(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    matches!(trimmed.chars().next(), Some('┌' | '├' | '└' | '│'))
 }
 
 #[derive(Debug)]

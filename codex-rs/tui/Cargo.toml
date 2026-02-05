@@ -95,6 +95,7 @@ url = { workspace = true }
 
 codex-windows-sandbox = { workspace = true }
 tokio-util = { workspace = true, features = ["time"] }
+comfy-table = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }

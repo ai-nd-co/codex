@@ -37,6 +37,38 @@ fn paragraph_multiple() {
 }
 
 #[test]
+fn unicode_tables_render_box_drawing() {
+    let prev_tables_enabled = crate::markdown_render::tables_enabled();
+    crate::markdown_render::set_tables_enabled(true);
+
+    let md = "| A | B |\n| --- | --- |\n| 1 | 2 |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.clone())
+                .collect::<String>()
+        })
+        .collect();
+
+    assert_eq!(
+        lines,
+        vec![
+            "┌───┬───┐".to_string(),
+            "│ A │ B │".to_string(),
+            "├───┼───┤".to_string(),
+            "│ 1 │ 2 │".to_string(),
+            "└───┴───┘".to_string(),
+        ]
+    );
+
+    crate::markdown_render::set_tables_enabled(prev_tables_enabled);
+}
+
+#[test]
 fn headings() {
     let md = "# Heading 1\n## Heading 2\n### Heading 3\n#### Heading 4\n##### Heading 5\n###### Heading 6\n";
     let text = render_markdown_text(md);
