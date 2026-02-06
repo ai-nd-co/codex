@@ -32,8 +32,8 @@ use crate::mcp::Tool as McpTool;
 use crate::message_history::HistoryEntry;
 use crate::models::BaseInstructions;
 use crate::models::ContentItem;
-use crate::models::FunctionCallOutputContentItem;
 use crate::models::FunctionCallOutputBody;
+use crate::models::FunctionCallOutputContentItem;
 use crate::models::FunctionCallOutputPayload;
 use crate::models::LocalShellAction;
 use crate::models::ReasoningItemContent;
@@ -300,6 +300,10 @@ pub enum Op {
     /// The agent will use its existing context (either conversation history or previous response id)
     /// to generate a summary which will be returned as an AgentMessage event.
     Compact,
+
+    /// Request the agent to summarize roughly the first half of the conversation context and
+    /// keep the most recent half.
+    SmartCompact,
 
     /// Set a user-facing thread name in the persisted rollout metadata.
     /// This is a local-only operation handled by codex-core; it does not
@@ -3439,10 +3443,7 @@ mod tests {
             }),
             RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
                 call_id: "call-1".to_string(),
-                output: FunctionCallOutputPayload {
-                    content: "demo content".to_string(),
-                    ..Default::default()
-                },
+                output: FunctionCallOutputPayload::from_text("demo content".to_string()),
             }),
         ];
 
