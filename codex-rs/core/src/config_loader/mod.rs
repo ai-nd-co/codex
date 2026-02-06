@@ -740,6 +740,16 @@ async fn load_project_layers(
                                     ),
                                 ));
                             }
+                            // For untrusted/unknown projects, still record a disabled layer so
+                            // the UI and tests can surface that a config.toml exists but was not
+                            // loaded.
+                            layers.push(project_layer_entry(
+                                trust_context,
+                                &dot_codex_abs,
+                                &layer_dir,
+                                TomlValue::Table(toml::map::Map::new()),
+                                true,
+                            ));
                             continue;
                         }
                     };

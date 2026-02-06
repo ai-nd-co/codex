@@ -1794,6 +1794,7 @@ interface:
                 description: TEST_REPO_SKILL_DESCRIPTION.to_string(),
                 short_description: None,
                 interface: None,
+                dependencies: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]

@@ -250,6 +250,9 @@
             "use_linux_sandbox_bwrap": {
               "type": "boolean"
             },
+            "verbose_tool_calls": {
+              "type": "boolean"
+            },
             "web_search": {
               "type": "boolean"
             },
@@ -1290,6 +1293,9 @@
           "type": "boolean"
         },
         "use_linux_sandbox_bwrap": {
+          "type": "boolean"
+        },
+        "verbose_tool_calls": {
           "type": "boolean"
         },
         "web_search": {

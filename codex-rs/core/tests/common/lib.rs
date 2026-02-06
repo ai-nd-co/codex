@@ -1,6 +1,4 @@
 #![expect(clippy::expect_used)]
-
-use codex_utils_cargo_bin::CargoBinError;
 use tempfile::TempDir;
 
 use codex_core::CodexThread;
@@ -211,8 +209,32 @@ pub fn format_with_current_shell_display_non_login(command: &str) -> String {
         .expect("serialize current shell command without login")
 }
 
-pub fn stdio_server_bin() -> Result<String, CargoBinError> {
-    codex_utils_cargo_bin::cargo_bin("test_stdio_server").map(|p| p.to_string_lossy().to_string())
+pub fn stdio_server_bin() -> anyhow::Result<String> {
+    // Prefer the standard `cargo test` path resolution.
+    if let Ok(path) = codex_utils_cargo_bin::cargo_bin("test_stdio_server") {
+        return Ok(path.to_string_lossy().to_string());
+    }
+
+    // When running `codex-core` tests, `test_stdio_server` is a binary in a different package
+    // (`codex-rmcp-client`), so Cargo doesn't always provide `CARGO_BIN_EXE_*` for it.
+    // Build it on-demand and use the resulting `target/debug` artifact.
+    let repo_root = codex_utils_cargo_bin::repo_root()?;
+    let codex_rs_root = repo_root.join("codex-rs");
+
+    let status = std::process::Command::new("cargo")
+        .current_dir(&codex_rs_root)
+        .args(["build", "-p", "codex-rmcp-client", "--bin", "test_stdio_server"])
+        .status()?;
+    anyhow::ensure!(status.success(), "failed to build test_stdio_server");
+
+    let exe_name = format!("test_stdio_server{}", std::env::consts::EXE_SUFFIX);
+    let bin_path = codex_rs_root.join("target").join("debug").join(exe_name);
+    anyhow::ensure!(
+        bin_path.exists(),
+        "built test_stdio_server but binary missing at {}",
+        bin_path.display()
+    );
+    Ok(bin_path.to_string_lossy().to_string())
 }
 
 pub mod fs_wait {
