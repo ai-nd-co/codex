@@ -21,12 +21,9 @@ use crossterm::event::KeyEventKind;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
-use ratatui::style::Modifier;
-use ratatui::style::Style;
 use ratatui::style::Stylize as _;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use tokio::io::AsyncBufReadExt;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -96,12 +93,6 @@ enum BackgroundEvent {
         request_token: usize,
         search_token: Option<usize>,
         page: std::io::Result<ThreadsPage>,
-    },
-    MessageScanCompleted {
-        path: PathBuf,
-        message_count: Option<usize>,
-        search_token: Option<usize>,
-        matched: Option<bool>,
     },
 }
 
@@ -197,7 +188,6 @@ async fn run_session_picker(
         codex_home.to_path_buf(),
         alt.tui.frame_requester(),
         page_loader,
-        bg_tx.clone(),
         default_provider.clone(),
         show_all,
         filter_cwd,
@@ -272,17 +262,14 @@ impl Drop for AltScreenGuard<'_> {
 struct PickerState {
     codex_home: PathBuf,
     requester: FrameRequester,
-    background_tx: mpsc::UnboundedSender<BackgroundEvent>,
     pagination: PaginationState,
     all_rows: Vec<Row>,
     filtered_rows: Vec<Row>,
     seen_paths: HashSet<PathBuf>,
-    message_count_pending: HashSet<PathBuf>,
     selected: usize,
     scroll_top: usize,
     query: String,
     search_state: SearchState,
-    search_cache: Option<SearchCache>,
     next_request_token: usize,
     next_search_token: usize,
     page_loader: PageLoader,
@@ -325,13 +312,6 @@ enum LoadTrigger {
     Search { token: usize },
 }
 
-struct SearchCache {
-    token: usize,
-    tokens: Vec<String>,
-    matches: HashMap<PathBuf, bool>,
-    pending: HashSet<PathBuf>,
-}
-
 impl LoadingState {
     fn is_pending(&self) -> bool {
         matches!(self, LoadingState::Pending(_))
@@ -361,7 +341,6 @@ struct Row {
     updated_at: Option<DateTime<Utc>>,
     cwd: Option<PathBuf>,
     git_branch: Option<String>,
-    message_count: Option<usize>,
 }
 
 impl Row {
@@ -387,7 +366,6 @@ impl PickerState {
         codex_home: PathBuf,
         requester: FrameRequester,
         page_loader: PageLoader,
-        background_tx: mpsc::UnboundedSender<BackgroundEvent>,
         default_provider: String,
         show_all: bool,
         filter_cwd: Option<PathBuf>,
@@ -396,7 +374,6 @@ impl PickerState {
         Self {
             codex_home,
             requester,
-            background_tx,
             pagination: PaginationState {
                 next_cursor: None,
                 num_scanned_files: 0,
@@ -406,12 +383,10 @@ impl PickerState {
             all_rows: Vec::new(),
             filtered_rows: Vec::new(),
             seen_paths: HashSet::new(),
-            message_count_pending: HashSet::new(),
             selected: 0,
             scroll_top: 0,
             query: String::new(),
             search_state: SearchState::Idle,
-            search_cache: None,
             next_request_token: 0,
             next_search_token: 0,
             page_loader,
@@ -557,28 +532,6 @@ impl PickerState {
                 let completed_token = pending.search_token.or(search_token);
                 self.continue_search_if_token_matches(completed_token);
             }
-            BackgroundEvent::MessageScanCompleted {
-                path,
-                message_count,
-                search_token,
-                matched,
-            } => {
-                self.message_count_pending.remove(&path);
-                if let Some(count) = message_count {
-                    self.set_message_count(&path, count);
-                }
-                if let Some(token) = search_token
-                    && let Some(cache) = self.search_cache.as_mut()
-                    && cache.token == token
-                {
-                    cache.pending.remove(&path);
-                    if let Some(matched) = matched {
-                        cache.matches.insert(path.clone(), matched);
-                    }
-                }
-                self.apply_filter();
-                self.continue_search_if_token_matches(search_token);
-            }
         }
         Ok(())
     }
@@ -605,15 +558,12 @@ impl PickerState {
         }
 
         let rows = rows_from_items(page.items);
-        let mut newly_added = Vec::new();
         for row in rows {
             if self.seen_paths.insert(row.path.clone()) {
-                newly_added.push(row.clone());
                 self.all_rows.push(row);
             }
         }
 
-        self.queue_scans_for_rows(&newly_added);
         self.apply_filter();
     }
 
@@ -693,145 +643,28 @@ impl PickerState {
         paths_match(row_cwd, filter_cwd)
     }
 
-    fn row_matches_query(&self, row: &Row) -> bool {
-        if self.query.is_empty() {
-            return true;
-        }
-        let Some(cache) = self.search_cache.as_ref() else {
-            return false;
-        };
-        cache.matches.get(&row.path).copied().unwrap_or(false)
-    }
-
-    fn search_pending(&self) -> bool {
-        self.search_cache
-            .as_ref()
-            .is_some_and(|cache| !cache.pending.is_empty())
-    }
-
-    fn queue_scans_for_rows(&mut self, rows: &[Row]) {
-        if let Some(cache) = self.search_cache.as_ref() {
-            let token = cache.token;
-            let tokens = cache.tokens.clone();
-            let mut to_scan = Vec::new();
-            for row in rows.iter().filter(|row| self.row_matches_filter(row)) {
-                if cache.matches.contains_key(&row.path) || cache.pending.contains(&row.path) {
-                    continue;
-                }
-                to_scan.push(row.path.clone());
-            }
-            for path in to_scan {
-                if self.spawn_message_scan(path.clone(), Some(token), tokens.clone())
-                    && let Some(cache) = self.search_cache.as_mut()
-                    && cache.token == token
-                {
-                    cache.pending.insert(path);
-                }
-            }
-            return;
-        }
-
-        let mut to_scan = Vec::new();
-        for row in rows.iter().filter(|row| self.row_matches_filter(row)) {
-            if row.message_count.is_some() || self.message_count_pending.contains(&row.path) {
-                continue;
-            }
-            to_scan.push(row.path.clone());
-        }
-        for path in to_scan {
-            if self.spawn_message_scan(path.clone(), None, Vec::new()) {
-                self.message_count_pending.insert(path);
-            }
-        }
-    }
-
-    fn spawn_message_scan(
-        &self,
-        path: PathBuf,
-        search_token: Option<usize>,
-        tokens: Vec<String>,
-    ) -> bool {
-        // Avoid spawning scan tasks for paths that don't exist. This keeps the
-        // picker responsive in cases where rollout files were deleted and
-        // avoids flaky tests that use placeholder paths.
-        if !path.is_file() {
-            return false;
-        }
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            return false;
-        };
-        let tx = self.background_tx.clone();
-        handle.spawn(async move {
-            let result = scan_rollout_messages(&path, &tokens).await;
-            let (message_count, matched) = match result {
-                Ok((count, matched)) => (Some(count), Some(matched)),
-                Err(_) => (None, Some(false)),
-            };
-            let matched = if search_token.is_some() {
-                matched
-            } else {
-                None
-            };
-            let _ = tx.send(BackgroundEvent::MessageScanCompleted {
-                path,
-                message_count,
-                search_token,
-                matched,
-            });
-        });
-        true
-    }
-
-    fn set_message_count(&mut self, path: &Path, count: usize) {
-        if let Some(row) = self.all_rows.iter_mut().find(|row| row.path == path) {
-            row.message_count = Some(count);
-        }
-    }
-
     fn set_query(&mut self, new_query: String) {
         if self.query == new_query {
             return;
         }
         self.query = new_query;
         self.selected = 0;
-        self.search_state = SearchState::Idle;
-        self.search_cache = None;
-
-        // If a previous search kicked off a page load, don't let that in-flight
-        // request block a new query. We'll ignore any stale PageLoaded event by
-        // request token.
-        if matches!(
-            self.pagination.loading,
-            LoadingState::Pending(PendingLoad {
-                search_token: Some(_),
-                ..
-            })
-        ) {
-            self.pagination.loading = LoadingState::Idle;
-        }
-
-        let tokens = tokenize_query(&self.query);
-        if tokens.is_empty() {
-            self.query.clear();
-            self.apply_filter();
-            let rows = self.all_rows.clone();
-            self.queue_scans_for_rows(&rows);
+        self.apply_filter();
+        if self.query.is_empty() {
+            self.search_state = SearchState::Idle;
             return;
         }
-
+        if !self.filtered_rows.is_empty() {
+            self.search_state = SearchState::Idle;
+            return;
+        }
+        if self.pagination.reached_scan_cap || self.pagination.next_cursor.is_none() {
+            self.search_state = SearchState::Idle;
+            return;
+        }
         let token = self.allocate_search_token();
         self.search_state = SearchState::Active { token };
-        self.search_cache = Some(SearchCache {
-            token,
-            tokens,
-            matches: HashMap::new(),
-            pending: HashSet::new(),
-        });
-
-        let rows = self.all_rows.clone();
-        self.queue_scans_for_rows(&rows);
-        self.apply_filter();
-        self.continue_search_if_needed();
+        self.load_more_if_needed(LoadTrigger::Search { token });
     }
 
     fn continue_search_if_needed(&mut self) {
@@ -840,9 +673,6 @@ impl PickerState {
         };
         if !self.filtered_rows.is_empty() {
             self.search_state = SearchState::Idle;
-            return;
-        }
-        if self.search_pending() {
             return;
         }
         if self.pagination.reached_scan_cap || self.pagination.next_cursor.is_none() {
@@ -1116,7 +946,6 @@ fn render_list(
     let visibility = column_visibility(area.width, metrics, state.sort_key);
     let max_created_width = metrics.max_created_width;
     let max_updated_width = metrics.max_updated_width;
-    let max_messages_width = metrics.max_messages_width;
     let max_branch_width = metrics.max_branch_width;
     let max_cwd_width = metrics.max_cwd_width;
 
@@ -1198,10 +1027,6 @@ fn render_list(
             spans.push(updated);
             spans.push("  ".into());
         }
-        if let Some(messages) = messages_span {
-            spans.push(messages);
-            spans.push("  ".into());
-        }
         if let Some(branch) = branch_span {
             spans.push(branch);
             spans.push("  ".into());
@@ -1215,25 +1040,7 @@ fn render_list(
         }
         spans.push(preview.into());
 
-        let mut line: Line = spans.into();
-        if is_sel {
-            let highlight = Style::default().add_modifier(Modifier::REVERSED);
-            line.spans = line
-                .spans
-                .into_iter()
-                .map(|span| span.patch_style(highlight))
-                .collect();
-            let line_width = line
-                .spans
-                .iter()
-                .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-                .sum::<usize>();
-            let target_width = area.width as usize;
-            if line_width < target_width {
-                line.spans
-                    .push(Span::from(" ".repeat(target_width - line_width)).patch_style(highlight));
-            }
-        }
+        let line: Line = spans.into();
         let rect = Rect::new(area.x, y, area.width, 1);
         frame.render_widget_ref(line, rect);
         y = y.saturating_add(1);
@@ -1249,7 +1056,6 @@ fn render_list(
 fn render_empty_state_line(state: &PickerState) -> Line<'static> {
     if !state.query.is_empty() {
         if state.search_state.is_active()
-            || state.search_pending()
             || (state.pagination.loading.is_pending() && state.pagination.next_cursor.is_some())
         {
             return vec!["Searching…".italic().dim()].into();
@@ -1384,7 +1190,6 @@ fn render_column_headers(
 struct ColumnMetrics {
     max_created_width: usize,
     max_updated_width: usize,
-    max_messages_width: usize,
     max_branch_width: usize,
     max_cwd_width: usize,
     /// (created_label, updated_label, branch_label, cwd_label) per row.
@@ -1437,7 +1242,6 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
     for row in rows {
         let created = format_created_label(row);
         let updated = format_updated_label(row);
-        let messages = format_message_count_label(row);
         let branch_raw = row.git_branch.clone().unwrap_or_default();
         let branch = right_elide(&branch_raw, 24);
         let cwd = if include_cwd {
@@ -1452,7 +1256,6 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
         };
         max_created_width = max_created_width.max(UnicodeWidthStr::width(created.as_str()));
         max_updated_width = max_updated_width.max(UnicodeWidthStr::width(updated.as_str()));
-        max_messages_width = max_messages_width.max(UnicodeWidthStr::width(messages.as_str()));
         max_branch_width = max_branch_width.max(UnicodeWidthStr::width(branch.as_str()));
         max_cwd_width = max_cwd_width.max(UnicodeWidthStr::width(cwd.as_str()));
         labels.push((created, updated, branch, cwd));
@@ -1461,7 +1264,6 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
     ColumnMetrics {
         max_created_width,
         max_updated_width,
-        max_messages_width,
         max_branch_width,
         max_cwd_width,
         labels,
@@ -1788,12 +1590,10 @@ mod tests {
         use ratatui::layout::Layout;
 
         let loader: PageLoader = Arc::new(|_| {});
-        let (bg_tx, _bg_rx) = mpsc::unbounded_channel();
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
-            bg_tx,
             String::from("openai"),
             true,
             None,
@@ -1811,7 +1611,6 @@ mod tests {
                 updated_at: Some(now - Duration::seconds(42)),
                 cwd: None,
                 git_branch: None,
-                message_count: Some(12),
             },
             Row {
                 path: PathBuf::from("/tmp/b.jsonl"),
@@ -1822,7 +1621,6 @@ mod tests {
                 updated_at: Some(now - Duration::minutes(35)),
                 cwd: None,
                 git_branch: None,
-                message_count: Some(7),
             },
             Row {
                 path: PathBuf::from("/tmp/c.jsonl"),
@@ -1833,7 +1631,6 @@ mod tests {
                 updated_at: Some(now - Duration::hours(2)),
                 cwd: None,
                 git_branch: None,
-                message_count: Some(3),
             },
         ];
         state.all_rows = rows.clone();
@@ -1948,12 +1745,10 @@ mod tests {
         );
 
         let loader: PageLoader = Arc::new(|_| {});
-        let (bg_tx, _bg_rx) = mpsc::unbounded_channel();
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
-            bg_tx,
             String::from("openai"),
             true,
             None,
@@ -1964,7 +1759,7 @@ mod tests {
             &state.codex_home,
             PAGE_SIZE,
             None,
-            ThreadSortKey::UpdatedAt,
+            ThreadSortKey::CreatedAt,
             INTERACTIVE_SESSION_SOURCES,
             Some(&[String::from("openai")]),
             "openai",
@@ -2139,12 +1934,10 @@ mod tests {
     #[test]
     fn pageless_scrolling_deduplicates_and_keeps_order() {
         let loader: PageLoader = Arc::new(|_| {});
-        let (bg_tx, _bg_rx) = mpsc::unbounded_channel();
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
-            bg_tx,
             String::from("openai"),
             true,
             None,
@@ -2209,13 +2002,11 @@ mod tests {
         let loader: PageLoader = Arc::new(move |req: PageLoadRequest| {
             request_sink.lock().unwrap().push(req);
         });
-        let (bg_tx, _bg_rx) = mpsc::unbounded_channel();
 
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
-            bg_tx,
             String::from("openai"),
             true,
             None,
@@ -2323,12 +2114,10 @@ mod tests {
     #[tokio::test]
     async fn page_navigation_uses_view_rows() {
         let loader: PageLoader = Arc::new(|_| {});
-        let (bg_tx, _bg_rx) = mpsc::unbounded_channel();
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
-            bg_tx,
             String::from("openai"),
             true,
             None,
@@ -2370,12 +2159,10 @@ mod tests {
     #[tokio::test]
     async fn up_at_bottom_does_not_scroll_when_visible() {
         let loader: PageLoader = Arc::new(|_| {});
-        let (bg_tx, _bg_rx) = mpsc::unbounded_channel();
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
-            bg_tx,
             String::from("openai"),
             true,
             None,
@@ -2416,13 +2203,11 @@ mod tests {
         let loader: PageLoader = Arc::new(move |req: PageLoadRequest| {
             request_sink.lock().unwrap().push(req);
         });
-        let (bg_tx, _bg_rx) = mpsc::unbounded_channel();
 
         let mut state = PickerState::new(
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
-            bg_tx,
             String::from("openai"),
             true,
             None,
@@ -2492,16 +2277,6 @@ mod tests {
                 )),
             })
             .await
-            .unwrap();
-
-        let search_token = state.search_state.active_token();
-        state
-            .handle_background_event(BackgroundEvent::MessageScanCompleted {
-                path: PathBuf::from("/tmp/match.jsonl"),
-                message_count: Some(2),
-                search_token,
-                matched: Some(true),
-            })
             .unwrap();
 
         assert!(!state.filtered_rows.is_empty());

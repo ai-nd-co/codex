@@ -125,6 +125,14 @@ pub enum Feature {
     SkillEnvVarDependencyPrompt,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
+    /// Send empty base instructions to the model.
+    DisableSystemPrompt,
+    /// Render markdown tables with aligned columns.
+    EnableMarkdownTables,
+    /// Show output for Search, Read, and List tool calls.
+    VerboseToolCalls,
+    /// Skip automatic and manual context compaction.
+    DisableCompaction,
     /// Enable collaboration modes (Plan, Default).
     CollaborationModes,
     /// Enable personality selection in the TUI.

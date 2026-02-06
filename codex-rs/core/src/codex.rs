@@ -2678,9 +2678,6 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::Compact => {
                 handlers::compact(&sess, sub.id.clone()).await;
             }
-            Op::SmartCompact => {
-                handlers::smart_compact(&sess, sub.id.clone()).await;
-            }
             Op::ThreadRollback { num_turns } => {
                 handlers::thread_rollback(&sess, sub.id.clone(), num_turns).await;
             }
@@ -2726,7 +2723,6 @@ mod handlers {
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
 
-    use crate::features::Feature;
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
     use crate::mcp::effective_mcp_servers;
@@ -2734,7 +2730,6 @@ mod handlers {
     use crate::rollout::session_index;
     use crate::tasks::CompactTask;
     use crate::tasks::RegularTask;
-    use crate::tasks::SmartCompactTask;
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandMode;
     use crate::tasks::UserShellCommandTask;
@@ -3205,21 +3200,6 @@ mod handlers {
 
     pub async fn compact(sess: &Arc<Session>, sub_id: String) {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
-        if turn_context
-            .client
-            .config()
-            .features
-            .enabled(Feature::DisableCompaction)
-        {
-            sess.send_event_raw(Event {
-                id: turn_context.sub_id.clone(),
-                msg: EventMsg::Warning(WarningEvent {
-                    message: "Compaction is disabled in experimental settings.".to_string(),
-                }),
-            })
-            .await;
-            return;
-        }
 
         sess.spawn_task(
             Arc::clone(&turn_context),
@@ -3229,20 +3209,6 @@ mod handlers {
                 text_elements: Vec::new(),
             }],
             CompactTask,
-        )
-        .await;
-    }
-
-    pub async fn smart_compact(sess: &Arc<Session>, sub_id: String) {
-        let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
-        sess.spawn_task(
-            Arc::clone(&turn_context),
-            vec![UserInput::Text {
-                text: turn_context.smart_compact_prompt().to_string(),
-                // Compaction prompt is synthesized; no UI element ranges to preserve.
-                text_elements: Vec::new(),
-            }],
-            SmartCompactTask,
         )
         .await;
     }
@@ -3806,8 +3772,9 @@ pub(crate) async fn run_turn(
                     "post sampling token usage"
                 );
 
-                // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
-                if !compaction_disabled && token_limit_reached && needs_follow_up {
+                // As long as compaction works well in getting us way below the token limit, we
+                // shouldn't worry about being in an infinite loop.
+                if token_limit_reached && needs_follow_up {
                     run_auto_compact(&sess, &turn_context).await;
                     continue;
                 }

@@ -3451,11 +3451,14 @@ async fn approvals_selection_popup_snapshot() {
 
     #[cfg(target_os = "windows")]
     {
-        let was_sandbox_enabled = codex_core::get_platform_sandbox().is_some();
-        let was_elevated_enabled = codex_core::is_windows_elevated_sandbox_enabled();
+        let was_sandbox_enabled = chat.config.features.enabled(Feature::WindowsSandbox);
+        let was_elevated_enabled = chat
+            .config
+            .features
+            .enabled(Feature::WindowsSandboxElevated);
 
-        set_windows_sandbox_enabled(false);
-        set_windows_elevated_sandbox_enabled(false);
+        chat.config.set_windows_sandbox_enabled(false);
+        chat.config.set_windows_elevated_sandbox_enabled(false);
 
         chat.config.notices.hide_full_access_warning = None;
         chat.open_approvals_popup();
@@ -3465,8 +3468,9 @@ async fn approvals_selection_popup_snapshot() {
             assert_snapshot!("approvals_selection_popup", popup);
         });
 
-        set_windows_sandbox_enabled(was_sandbox_enabled);
-        set_windows_elevated_sandbox_enabled(was_elevated_enabled);
+        chat.config.set_windows_sandbox_enabled(was_sandbox_enabled);
+        chat.config
+            .set_windows_elevated_sandbox_enabled(was_elevated_enabled);
         return;
     }
     #[cfg(not(target_os = "windows"))]

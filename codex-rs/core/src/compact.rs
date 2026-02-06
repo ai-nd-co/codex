@@ -7,7 +7,6 @@ use crate::client_common::ResponseEvent;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::get_last_assistant_message_from_turn;
-use crate::context_manager::ContextManager;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
@@ -33,9 +32,7 @@ use tracing::error;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
-pub const SMART_COMPACT_PROMPT: &str = include_str!("../templates/smart_compact/prompt.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
-const SMART_COMPACT_RATIO: f64 = 0.5;
 
 pub(crate) fn should_use_remote_compact_task(
     session: &Session,
@@ -69,18 +66,6 @@ pub(crate) async fn run_compact_task(
     });
     sess.send_event(&turn_context, start_event).await;
     run_compact_task_inner(sess.clone(), turn_context, input).await;
-}
-
-pub(crate) async fn run_smart_compact_task(
-    sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
-    input: Vec<UserInput>,
-) {
-    let start_event = EventMsg::TurnStarted(TurnStartedEvent {
-        model_context_window: turn_context.client.get_model_context_window(),
-    });
-    sess.send_event(&turn_context, start_event).await;
-    run_smart_compact_task_inner(sess.clone(), turn_context, input).await;
 }
 
 async fn run_compact_task_inner(
@@ -232,147 +217,6 @@ async fn run_compact_task_inner(
     sess.send_event(&turn_context, warning).await;
 }
 
-async fn run_smart_compact_task_inner(
-    sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
-    input: Vec<UserInput>,
-) {
-    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-
-    let history_snapshot = sess.clone_history().await;
-    let history_items = history_snapshot.raw_items();
-    let ghost_snapshots: Vec<ResponseItem> = history_items
-        .iter()
-        .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
-        .cloned()
-        .collect();
-
-    let conversation_items: Vec<ResponseItem> = history_items
-        .iter()
-        .filter(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }))
-        .cloned()
-        .collect();
-    let (first_half, second_half) = split_items_for_smart_compaction(&conversation_items);
-
-    let prompt_item: ResponseItem = initial_input_for_turn.clone().into();
-    let mut summary_history = ContextManager::new();
-    summary_history.replace(first_half);
-    summary_history.record_items(
-        std::iter::once(&prompt_item),
-        turn_context.truncation_policy,
-    );
-
-    let mut truncated_count = 0usize;
-    let max_retries = turn_context.client.get_provider().stream_max_retries();
-    let mut retries = 0;
-
-    let collaboration_mode = sess.current_collaboration_mode().await;
-    let rollout_item = RolloutItem::TurnContext(TurnContextItem {
-        cwd: turn_context.cwd.clone(),
-        approval_policy: turn_context.approval_policy,
-        sandbox_policy: turn_context.sandbox_policy.clone(),
-        model: turn_context.client.get_model(),
-        personality: turn_context.personality,
-        collaboration_mode: Some(collaboration_mode),
-        effort: turn_context.client.get_reasoning_effort(),
-        summary: turn_context.client.get_reasoning_summary(),
-        user_instructions: turn_context.user_instructions.clone(),
-        developer_instructions: turn_context.developer_instructions.clone(),
-        final_output_json_schema: turn_context.final_output_json_schema.clone(),
-        truncation_policy: Some(turn_context.truncation_policy.into()),
-    });
-    sess.persist_rollout_items(&[rollout_item]).await;
-
-    loop {
-        let turn_input = summary_history.clone().for_prompt();
-        let turn_input_len = turn_input.len();
-        let prompt = Prompt {
-            input: turn_input,
-            base_instructions: sess.get_base_instructions().await,
-            personality: turn_context.personality,
-            ..Default::default()
-        };
-        let attempt_result = drain_to_completed(&sess, turn_context.as_ref(), &prompt).await;
-
-        match attempt_result {
-            Ok(()) => {
-                if truncated_count > 0 {
-                    sess.notify_background_event(
-                        turn_context.as_ref(),
-                        format!(
-                            "Trimmed {truncated_count} older thread item(s) before smart compacting so the prompt fits the model context window."
-                        ),
-                    )
-                    .await;
-                }
-                break;
-            }
-            Err(CodexErr::Interrupted) => {
-                return;
-            }
-            Err(e @ CodexErr::ContextWindowExceeded) => {
-                if turn_input_len > 1 {
-                    error!(
-                        "Context window exceeded while smart compacting; removing oldest history item. Error: {e}"
-                    );
-                    summary_history.remove_first_item();
-                    truncated_count += 1;
-                    retries = 0;
-                    continue;
-                }
-                sess.set_total_tokens_full(turn_context.as_ref()).await;
-                let event = EventMsg::Error(e.to_error_event(None));
-                sess.send_event(&turn_context, event).await;
-                return;
-            }
-            Err(e) => {
-                if retries < max_retries {
-                    retries += 1;
-                    let delay = backoff(retries);
-                    sess.notify_stream_error(
-                        turn_context.as_ref(),
-                        format!("Reconnecting... {retries}/{max_retries}"),
-                        e,
-                    )
-                    .await;
-                    tokio::time::sleep(delay).await;
-                    continue;
-                } else {
-                    let event = EventMsg::Error(e.to_error_event(None));
-                    sess.send_event(&turn_context, event).await;
-                    return;
-                }
-            }
-        }
-    }
-
-    let history_snapshot = sess.clone_history().await;
-    let history_items = history_snapshot.raw_items();
-    let summary_suffix = get_last_assistant_message_from_turn(history_items).unwrap_or_default();
-    let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
-
-    let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
-    let mut new_history =
-        build_smart_compacted_history(initial_context, &summary_text, &second_half);
-    new_history.extend(ghost_snapshots);
-    sess.replace_history(new_history).await;
-    sess.recompute_token_usage(&turn_context).await;
-
-    let rollout_item = RolloutItem::Compacted(CompactedItem {
-        message: summary_text.clone(),
-        replacement_history: None,
-    });
-    sess.persist_rollout_items(&[rollout_item]).await;
-
-    let event = EventMsg::ContextCompacted(ContextCompactedEvent {});
-    sess.send_event(&turn_context, event).await;
-
-    let warning = EventMsg::Warning(WarningEvent {
-        message: "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.".to_string(),
-    });
-    sess.send_event(&turn_context, warning).await;
-}
-
 pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
     let mut pieces = Vec::new();
     for item in content {
@@ -498,105 +342,6 @@ fn build_compacted_history_with_limit(
     });
 
     history
-}
-
-fn build_smart_compacted_history(
-    mut history: Vec<ResponseItem>,
-    summary_text: &str,
-    tail_items: &[ResponseItem],
-) -> Vec<ResponseItem> {
-    let summary_text = if summary_text.is_empty() {
-        "(no summary available)".to_string()
-    } else {
-        summary_text.to_string()
-    };
-
-    history.push(ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText { text: summary_text }],
-        end_turn: None,
-    });
-
-    history.extend(tail_items.iter().cloned());
-
-    history
-}
-
-fn split_items_for_smart_compaction(
-    items: &[ResponseItem],
-) -> (Vec<ResponseItem>, Vec<ResponseItem>) {
-    if items.is_empty() {
-        return (Vec::new(), Vec::new());
-    }
-
-    let total_tokens: usize = items.iter().map(estimate_item_tokens).sum();
-    if total_tokens == 0 {
-        return (Vec::new(), items.to_vec());
-    }
-
-    let cutoff_tokens = ((total_tokens as f64) * SMART_COMPACT_RATIO) as usize;
-    let mut cumulative = 0usize;
-    let mut cut_index = items.len();
-
-    for (idx, item) in items.iter().enumerate() {
-        cumulative = cumulative.saturating_add(estimate_item_tokens(item));
-        if cumulative >= cutoff_tokens {
-            cut_index = idx + 1;
-            break;
-        }
-    }
-
-    let cut_index = adjust_split_index_for_call_pairs(items, cut_index);
-    let (first, second) = items.split_at(cut_index);
-    (first.to_vec(), second.to_vec())
-}
-
-fn adjust_split_index_for_call_pairs(items: &[ResponseItem], cut_index: usize) -> usize {
-    if cut_index == 0 || cut_index >= items.len() {
-        return cut_index;
-    }
-
-    let current = &items[cut_index];
-    let Some(call_id) = output_call_id(current) else {
-        return cut_index;
-    };
-
-    let previous = &items[cut_index - 1];
-    if is_matching_call(previous, call_id) {
-        return cut_index - 1;
-    }
-
-    cut_index
-}
-
-fn output_call_id(item: &ResponseItem) -> Option<&str> {
-    match item {
-        ResponseItem::FunctionCallOutput { call_id, .. } => Some(call_id),
-        ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id),
-        _ => None,
-    }
-}
-
-fn is_matching_call(item: &ResponseItem, call_id: &str) -> bool {
-    match item {
-        ResponseItem::FunctionCall {
-            call_id: existing, ..
-        } => existing == call_id,
-        ResponseItem::CustomToolCall {
-            call_id: existing, ..
-        } => existing == call_id,
-        ResponseItem::LocalShellCall {
-            call_id: Some(existing),
-            ..
-        } => existing == call_id,
-        _ => false,
-    }
-}
-
-fn estimate_item_tokens(item: &ResponseItem) -> usize {
-    let serialized = serde_json::to_string(item).unwrap_or_default();
-    approx_token_count(&serialized)
 }
 
 async fn drain_to_completed(

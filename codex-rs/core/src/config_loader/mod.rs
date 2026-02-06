@@ -706,8 +706,10 @@ async fn load_project_layers(
 
     let mut layers = Vec::new();
     for dir in dirs {
-        let dot_folders = [dir.join(".claude"), dir.join(".codex")];
-        for dot_folder in dot_folders {
+        let layer_dir = AbsolutePathBuf::from_absolute_path(dir)?;
+        let decision = trust_context.decision_for_dir(&layer_dir);
+
+        for dot_folder in [dir.join(".claude"), dir.join(".codex")] {
             if !tokio::fs::metadata(&dot_folder)
                 .await
                 .map(|meta| meta.is_dir())
@@ -716,28 +718,28 @@ async fn load_project_layers(
                 continue;
             }
 
-        let layer_dir = AbsolutePathBuf::from_absolute_path(dir)?;
-        let decision = trust_context.decision_for_dir(&layer_dir);
-        let dot_codex_abs = AbsolutePathBuf::from_absolute_path(&dot_codex)?;
-        let dot_codex_normalized =
-            normalize_path(dot_codex_abs.as_path()).unwrap_or_else(|_| dot_codex_abs.to_path_buf());
-        if dot_codex_abs == codex_home_abs || dot_codex_normalized == codex_home_normalized {
-            continue;
-        }
-        let config_file = dot_codex_abs.join(CONFIG_TOML_FILE)?;
-        match tokio::fs::read_to_string(&config_file).await {
-            Ok(contents) => {
-                let config: TomlValue = match toml::from_str(&contents) {
-                    Ok(config) => config,
-                    Err(e) => {
-                        if decision.is_trusted() {
-                            let config_file_display = config_file.as_path().display();
-                            return Err(io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                format!(
-                                    "Error parsing project config file {config_file_display}: {e}"
-                                ),
-                            ));
+            let dot_codex_abs = AbsolutePathBuf::from_absolute_path(&dot_folder)?;
+            let dot_codex_normalized = normalize_path(dot_codex_abs.as_path())
+                .unwrap_or_else(|_| dot_codex_abs.to_path_buf());
+            if dot_codex_abs == codex_home_abs || dot_codex_normalized == codex_home_normalized {
+                continue;
+            }
+
+            let config_file = dot_codex_abs.join(CONFIG_TOML_FILE)?;
+            match tokio::fs::read_to_string(&config_file).await {
+                Ok(contents) => {
+                    let config: TomlValue = match toml::from_str(&contents) {
+                        Ok(config) => config,
+                        Err(e) => {
+                            if decision.is_trusted() {
+                                let config_file_display = config_file.as_path().display();
+                                return Err(io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    format!(
+                                        "Error parsing project config file {config_file_display}: {e}"
+                                    ),
+                                ));
+                            }
                             continue;
                         }
                     };

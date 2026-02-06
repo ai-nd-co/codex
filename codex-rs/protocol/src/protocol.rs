@@ -33,12 +33,20 @@ use crate::message_history::HistoryEntry;
 use crate::models::BaseInstructions;
 use crate::models::ContentItem;
 use crate::models::FunctionCallOutputContentItem;
+use crate::models::FunctionCallOutputBody;
 use crate::models::FunctionCallOutputPayload;
 use crate::models::LocalShellAction;
 use crate::models::ReasoningItemContent;
 use crate::models::ReasoningItemReasoningSummary;
 use crate::models::ResponseItem;
+use crate::models::ShellCommandToolCallParams;
+use crate::models::ShellToolCallParams;
+use crate::models::VIEW_IMAGE_TOOL_NAME;
 use crate::models::WebSearchAction;
+use crate::models::is_image_close_tag_text;
+use crate::models::is_image_open_tag_text;
+use crate::models::is_local_image_close_tag_text;
+use crate::models::is_local_image_open_tag_text;
 use crate::num_format::format_with_separators;
 use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
@@ -1762,9 +1770,10 @@ impl ResumeEventCollector {
             ResponseItem::Reasoning {
                 summary, content, ..
             } => self.reasoning_to_events(summary, content.as_ref()),
-            ResponseItem::WebSearchCall { id, action, .. } => {
-                self.web_search_to_events(id.as_ref(), action)
-            }
+            ResponseItem::WebSearchCall { id, action, .. } => action
+                .as_ref()
+                .map(|action| self.web_search_to_events(id.as_ref(), action))
+                .unwrap_or_default(),
             ResponseItem::FunctionCall {
                 name,
                 arguments,
@@ -1881,7 +1890,11 @@ impl ResumeEventCollector {
             return Vec::new();
         }
 
-        vec![EventMsg::WebSearchEnd(WebSearchEndEvent { call_id, query })]
+        vec![EventMsg::WebSearchEnd(WebSearchEndEvent {
+            call_id,
+            query,
+            action: action.clone(),
+        })]
     }
 
     fn function_call_to_events(
@@ -2217,7 +2230,10 @@ fn is_user_shell_command_text(text: &str) -> bool {
 
 fn web_search_query(action: &WebSearchAction) -> String {
     match action {
-        WebSearchAction::Search { query } => query.clone().unwrap_or_default(),
+        WebSearchAction::Search { query, queries, .. } => query
+            .clone()
+            .or_else(|| queries.as_ref().map(|q| q.join(", ")))
+            .unwrap_or_default(),
         WebSearchAction::OpenPage { url } => url.clone().unwrap_or_default(),
         WebSearchAction::FindInPage { url, pattern } => {
             let url = url.clone().unwrap_or_default();
@@ -2237,22 +2253,19 @@ fn web_search_query(action: &WebSearchAction) -> String {
 }
 
 fn function_call_output_text(output: &FunctionCallOutputPayload) -> String {
-    if !output.content.is_empty() {
-        return output.content.clone();
+    match &output.body {
+        FunctionCallOutputBody::Text(content) => content.clone(),
+        FunctionCallOutputBody::ContentItems(items) => items
+            .iter()
+            .map(|item| match item {
+                FunctionCallOutputContentItem::InputText { text } => text.clone(),
+                FunctionCallOutputContentItem::InputImage { image_url } => {
+                    format!("[image: {image_url}]")
+                }
+            })
+            .collect::<Vec<String>>()
+            .join(""),
     }
-    let Some(items) = &output.content_items else {
-        return String::new();
-    };
-    items
-        .iter()
-        .map(|item| match item {
-            FunctionCallOutputContentItem::InputText { text } => text.clone(),
-            FunctionCallOutputContentItem::InputImage { image_url } => {
-                format!("[image: {image_url}]")
-            }
-        })
-        .collect::<Vec<String>>()
-        .join("")
 }
 
 fn parse_view_image_path(arguments: &str) -> Option<PathBuf> {

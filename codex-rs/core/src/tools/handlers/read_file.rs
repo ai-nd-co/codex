@@ -182,8 +182,59 @@ impl ToolHandler for ReadFileHandler {
                 indentation::read_block(&path, offset, limit, indentation).await
             }
         };
+        let formatted_output = match collected {
+            Ok(lines) => lines.join("\n"),
+            Err(err) => {
+                invocation
+                    .session
+                    .send_event(
+                        invocation.turn.as_ref(),
+                        EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+                            call_id: invocation.call_id.clone(),
+                            process_id: None,
+                            turn_id: invocation.turn.sub_id.clone(),
+                            command,
+                            cwd,
+                            parsed_cmd,
+                            source: ExecCommandSource::Agent,
+                            interaction_input: None,
+                            stdout: String::new(),
+                            stderr: err.to_string(),
+                            aggregated_output: String::new(),
+                            exit_code: 1,
+                            duration: start.elapsed(),
+                            formatted_output: String::new(),
+                        }),
+                    )
+                    .await;
+                return Err(err);
+            }
+        };
+
+        invocation
+            .session
+            .send_event(
+                invocation.turn.as_ref(),
+                EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+                    call_id: invocation.call_id.clone(),
+                    process_id: None,
+                    turn_id: invocation.turn.sub_id.clone(),
+                    command,
+                    cwd,
+                    parsed_cmd,
+                    source: ExecCommandSource::Agent,
+                    interaction_input: None,
+                    stdout: formatted_output.clone(),
+                    stderr: String::new(),
+                    aggregated_output: formatted_output.clone(),
+                    exit_code: 0,
+                    duration: start.elapsed(),
+                    formatted_output: formatted_output.clone(),
+                }),
+            )
+            .await;
         Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(collected.join("\n")),
+            body: FunctionCallOutputBody::Text(formatted_output),
             success: Some(true),
         })
     }
