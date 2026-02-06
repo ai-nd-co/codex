@@ -299,6 +299,9 @@ pub fn default_user_shell() -> Shell {
 
 fn default_user_shell_from_path(user_shell_path: Option<PathBuf>) -> Shell {
     if cfg!(windows) {
+        // Prefer Git Bash on Windows when available (and avoid the WSL shim).
+        // Users who prefer native PowerShell (or any other shell) can opt into it
+        // explicitly via `shell_path_override`.
         get_shell(ShellType::Bash, None)
             .or_else(|| get_shell(ShellType::PowerShell, None))
             .unwrap_or(ultimate_fallback_shell())
