@@ -26,6 +26,13 @@ pub(crate) enum HighlightLanguage {
     Toml,
     Yaml,
     Rust,
+    Css,
+    Html,
+    Sql,
+    Java,
+    Kotlin,
+    Dart,
+    Hcl,
 }
 
 impl HighlightLanguage {
@@ -41,6 +48,16 @@ impl HighlightLanguage {
             "toml" => Some(Self::Toml),
             "yml" | "yaml" => Some(Self::Yaml),
             "rs" => Some(Self::Rust),
+            "css" => Some(Self::Css),
+            // Tree-sitter scss doesn't currently build cleanly on Windows (MSVC)
+            // in this workspace; fall back to CSS highlighting.
+            "scss" => Some(Self::Css),
+            "html" | "htm" => Some(Self::Html),
+            "sql" => Some(Self::Sql),
+            "java" => Some(Self::Java),
+            "kt" | "kts" => Some(Self::Kotlin),
+            "dart" => Some(Self::Dart),
+            "tf" | "hcl" => Some(Self::Hcl),
             _ => None,
         }
     }
@@ -62,6 +79,14 @@ impl HighlightLanguage {
             "toml" => Some(Self::Toml),
             "yml" | "yaml" => Some(Self::Yaml),
             "rs" | "rust" => Some(Self::Rust),
+            "css" => Some(Self::Css),
+            "scss" => Some(Self::Css),
+            "html" => Some(Self::Html),
+            "sql" => Some(Self::Sql),
+            "java" => Some(Self::Java),
+            "kotlin" | "kt" => Some(Self::Kotlin),
+            "dart" | "flutter" => Some(Self::Dart),
+            "hcl" | "terraform" => Some(Self::Hcl),
             _ => None,
         }
     }
@@ -77,24 +102,34 @@ const HIGHLIGHT_NAMES: &[&str] = &[
     "character",
     "comment",
     "constant",
+    "constant.builtin",
     "constructor",
+    "conditional",
     "embedded",
     "error",
     "escape",
+    "exception",
     "function",
     "function.builtin",
+    "include",
     "keyword",
     "label",
+    "method",
     "module",
     "namespace",
     "number",
     "operator",
+    "parameter",
     "property",
     "punctuation",
     "punctuation.bracket",
     "punctuation.delimiter",
+    "punctuation.special",
+    "repeat",
     "string",
     "string.special",
+    "string.escape",
+    "symbol",
     "tag",
     "tag.builtin",
     "type",
@@ -266,6 +301,124 @@ fn config_rust() -> &'static HighlightConfiguration {
     })
 }
 
+fn config_css() -> &'static HighlightConfiguration {
+    static CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
+    CONFIG.get_or_init(|| {
+        let language = tree_sitter_css::LANGUAGE.into();
+        #[expect(clippy::expect_used)]
+        let mut config = HighlightConfiguration::new(
+            language,
+            "css",
+            tree_sitter_css::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        )
+        .expect("load css highlight query");
+        config.configure(HIGHLIGHT_NAMES);
+        config
+    })
+}
+
+fn config_html() -> &'static HighlightConfiguration {
+    static CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
+    CONFIG.get_or_init(|| {
+        let language = tree_sitter_html::LANGUAGE.into();
+        #[expect(clippy::expect_used)]
+        let mut config = HighlightConfiguration::new(
+            language,
+            "html",
+            tree_sitter_html::HIGHLIGHTS_QUERY,
+            tree_sitter_html::INJECTIONS_QUERY,
+            "",
+        )
+        .expect("load html highlight query");
+        config.configure(HIGHLIGHT_NAMES);
+        config
+    })
+}
+
+fn config_sql() -> &'static HighlightConfiguration {
+    static CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
+    CONFIG.get_or_init(|| {
+        let language = tree_sitter_sequel::LANGUAGE.into();
+        #[expect(clippy::expect_used)]
+        let mut config = HighlightConfiguration::new(
+            language,
+            "sql",
+            tree_sitter_sequel::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        )
+        .expect("load sql highlight query");
+        config.configure(HIGHLIGHT_NAMES);
+        config
+    })
+}
+
+fn config_java() -> &'static HighlightConfiguration {
+    static CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
+    CONFIG.get_or_init(|| {
+        let language = tree_sitter_java::LANGUAGE.into();
+        #[expect(clippy::expect_used)]
+        let mut config = HighlightConfiguration::new(
+            language,
+            "java",
+            tree_sitter_java::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        )
+        .expect("load java highlight query");
+        config.configure(HIGHLIGHT_NAMES);
+        config
+    })
+}
+
+fn config_kotlin() -> &'static HighlightConfiguration {
+    static CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
+    CONFIG.get_or_init(|| {
+        let language = tree_sitter_kotlin_codanna::language();
+        #[expect(clippy::expect_used)]
+        let mut config = HighlightConfiguration::new(
+            language,
+            "kotlin",
+            tree_sitter_kotlin_codanna::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        )
+        .expect("load kotlin highlight query");
+        config.configure(HIGHLIGHT_NAMES);
+        config
+    })
+}
+
+const DART_HIGHLIGHTS_QUERY: &str = include_str!("queries/dart_highlights.scm");
+fn config_dart() -> &'static HighlightConfiguration {
+    static CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
+    CONFIG.get_or_init(|| {
+        let language = tree_sitter_dart::language();
+        #[expect(clippy::expect_used)]
+        let mut config =
+            HighlightConfiguration::new(language, "dart", DART_HIGHLIGHTS_QUERY, "", "")
+                .expect("load dart highlight query");
+        config.configure(HIGHLIGHT_NAMES);
+        config
+    })
+}
+
+const HCL_HIGHLIGHTS_QUERY: &str = include_str!("queries/hcl_highlights.scm");
+fn config_hcl() -> &'static HighlightConfiguration {
+    static CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
+    CONFIG.get_or_init(|| {
+        let language = tree_sitter_hcl::LANGUAGE.into();
+        #[expect(clippy::expect_used)]
+        let mut config =
+            HighlightConfiguration::new(language, "hcl", HCL_HIGHLIGHTS_QUERY, "", "")
+                .expect("load hcl highlight query");
+        config.configure(HIGHLIGHT_NAMES);
+        config
+    })
+}
+
 fn highlight_name_for(highlight: Highlight) -> &'static str {
     HIGHLIGHT_NAMES
         .get(highlight.0)
@@ -290,20 +443,23 @@ fn style_for_capture(lang: HighlightLanguage, capture: &str) -> Style {
         // We intentionally use RGB colors directly (instead of best_color()) to avoid
         // terminal palette detection issues causing "everything looks gray".
         "comment" => Style::default().fg(darcula_rgb(128, 128, 128)).dim(),
-        "string" | "string.special" | "character" | "escape" => {
+        "string" | "string.special" | "string.escape" | "character" | "escape" => {
             Style::default().fg(darcula_rgb(106, 135, 89))
         }
         "number" | "boolean" => Style::default().fg(darcula_rgb(104, 151, 187)),
-        "keyword" => Style::default().fg(darcula_rgb(204, 120, 50)).bold(),
+        "keyword" | "include" | "conditional" | "exception" | "repeat" => {
+            Style::default().fg(darcula_rgb(204, 120, 50)).bold()
+        }
         "operator" | "punctuation" | "punctuation.bracket" | "punctuation.delimiter" => {
             Style::default().fg(darcula_rgb(169, 183, 198)).dim()
         }
-        "function" | "function.builtin" | "constructor" => {
+        "punctuation.special" => Style::default().fg(darcula_rgb(169, 183, 198)).dim(),
+        "function" | "function.builtin" | "constructor" | "method" => {
             Style::default().fg(darcula_rgb(255, 198, 109))
         }
         "type" | "type.builtin" => Style::default().fg(darcula_rgb(152, 118, 170)),
-        "constant" => Style::default().fg(darcula_rgb(152, 118, 170)),
-        "variable" | "variable.parameter" | "variable.builtin" => {
+        "constant" | "constant.builtin" | "symbol" => Style::default().fg(darcula_rgb(152, 118, 170)),
+        "variable" | "variable.parameter" | "variable.builtin" | "parameter" => {
             Style::default().fg(darcula_rgb(169, 183, 198))
         }
         "property" | "attribute" => Style::default().fg(darcula_rgb(187, 181, 41)),
@@ -332,6 +488,13 @@ fn highlight_config(lang: HighlightLanguage) -> &'static HighlightConfiguration 
         HighlightLanguage::Toml => config_toml(),
         HighlightLanguage::Yaml => config_yaml(),
         HighlightLanguage::Rust => config_rust(),
+        HighlightLanguage::Css => config_css(),
+        HighlightLanguage::Html => config_html(),
+        HighlightLanguage::Sql => config_sql(),
+        HighlightLanguage::Java => config_java(),
+        HighlightLanguage::Kotlin => config_kotlin(),
+        HighlightLanguage::Dart => config_dart(),
+        HighlightLanguage::Hcl => config_hcl(),
     }
 }
 
@@ -403,6 +566,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use ratatui::style::Modifier;
+    use std::path::PathBuf;
 
     fn reconstructed(lines: &[Line<'static>]) -> String {
         lines
@@ -487,5 +651,76 @@ mod tests {
         }
         let body_style = body_style.expect("missing heredoc span");
         assert!(body_style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn detects_languages_from_paths() {
+        let cases = [
+            ("foo.py", HighlightLanguage::Python),
+            ("foo.ts", HighlightLanguage::TypeScript),
+            ("foo.tsx", HighlightLanguage::Tsx),
+            ("foo.json", HighlightLanguage::Json),
+            ("foo.toml", HighlightLanguage::Toml),
+            ("foo.yml", HighlightLanguage::Yaml),
+            ("foo.rs", HighlightLanguage::Rust),
+            ("foo.dart", HighlightLanguage::Dart),
+            ("foo.sql", HighlightLanguage::Sql),
+            ("foo.java", HighlightLanguage::Java),
+            ("foo.kt", HighlightLanguage::Kotlin),
+            ("foo.css", HighlightLanguage::Css),
+            ("foo.scss", HighlightLanguage::Css),
+            ("foo.html", HighlightLanguage::Html),
+            ("main.tf", HighlightLanguage::Hcl),
+        ];
+        for (path, expected) in cases {
+            let lang = HighlightLanguage::from_path(&PathBuf::from(path)).expect("language");
+            assert_eq!(lang, expected, "path: {path}");
+        }
+    }
+
+    #[test]
+    fn detects_languages_from_fences() {
+        let cases = [
+            ("python", HighlightLanguage::Python),
+            ("ts", HighlightLanguage::TypeScript),
+            ("tsx", HighlightLanguage::Tsx),
+            ("json", HighlightLanguage::Json),
+            ("toml", HighlightLanguage::Toml),
+            ("yaml", HighlightLanguage::Yaml),
+            ("rust", HighlightLanguage::Rust),
+            ("dart", HighlightLanguage::Dart),
+            ("flutter", HighlightLanguage::Dart),
+            ("sql", HighlightLanguage::Sql),
+            ("java", HighlightLanguage::Java),
+            ("kotlin", HighlightLanguage::Kotlin),
+            ("css", HighlightLanguage::Css),
+            ("scss", HighlightLanguage::Css),
+            ("html", HighlightLanguage::Html),
+            ("terraform", HighlightLanguage::Hcl),
+        ];
+        for (fence, expected) in cases {
+            let lang = HighlightLanguage::from_fence_info(fence).expect("language");
+            assert_eq!(lang, expected, "fence: {fence}");
+        }
+    }
+
+    #[test]
+    fn highlights_common_repo_languages_without_error() {
+        // This mainly ensures our highlight queries compile + the highlighter doesn't
+        // choke on representative snippets.
+        let cases: &[(HighlightLanguage, &str)] = &[
+            (HighlightLanguage::Dart, "class A { final int x = 1; A(this.x); }"),
+            (HighlightLanguage::Sql, "select * from drivers where id = 1;"),
+            (HighlightLanguage::Java, "class A { int x = 1; }"),
+            (HighlightLanguage::Kotlin, "data class A(val x: Int = 1)"),
+            (HighlightLanguage::Css, "body { color: red; }"),
+            (HighlightLanguage::Html, "<div class='x'>hi</div>"),
+            (HighlightLanguage::Hcl, "resource \"x\" \"y\" { name = \"z\" }"),
+        ];
+
+        for (lang, src) in cases {
+            let lines = highlight_to_lines(*lang, src);
+            assert_eq!(reconstructed(&lines), *src);
+        }
     }
 }
