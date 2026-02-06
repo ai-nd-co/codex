@@ -3062,6 +3062,7 @@ mod tests {
     use super::*;
     use crate::items::UserMessageItem;
     use crate::items::WebSearchItem;
+    use crate::models::FunctionCallOutputPayload;
     use anyhow::Result;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -3295,6 +3296,38 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn resume_converts_function_call_items_into_exec_events() {
+        let args = json!({ "file_path": "/tmp/demo.txt" }).to_string();
+        let items = vec![
+            RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+                id: None,
+                name: "read_file".to_string(),
+                arguments: args,
+                call_id: "call-1".to_string(),
+            }),
+            RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: FunctionCallOutputPayload::from_text("demo content".to_string()),
+            }),
+        ];
+
+        let history = InitialHistory::Forked(items);
+        let events = history.get_event_msgs().expect("expected resume events");
+
+        match events.as_slice() {
+            [
+                EventMsg::ExecCommandBegin(begin),
+                EventMsg::ExecCommandEnd(end),
+            ] => {
+                assert_eq!(begin.call_id, "call-1");
+                assert_eq!(end.call_id, "call-1");
+                assert_eq!(end.formatted_output, "demo content");
+            }
+            other => panic!("unexpected resume events: {other:#?}"),
+        }
     }
 
     #[test]
