@@ -131,17 +131,11 @@ async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()>
     let fixture = builder.build(&server).await?;
 
     let call_id = "active-turn-shell-call";
-    let args = if cfg!(windows) {
-        serde_json::json!({
-            "command": "Start-Sleep -Seconds 2; Write-Output model-shell",
-            "timeout_ms": 10_000,
-        })
-    } else {
-        serde_json::json!({
-            "command": "sleep 2; echo model-shell",
-            "timeout_ms": 10_000,
-        })
-    };
+    let args = serde_json::json!({
+        // Works in both PowerShell (`sleep` is an alias) and bash/sh/zsh.
+        "command": "sleep 2; echo model-shell",
+        "timeout_ms": 10_000,
+    });
     let first = sse(vec![
         ev_response_created("resp-1"),
         ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
@@ -180,10 +174,8 @@ async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()>
     })
     .await;
 
-    #[cfg(windows)]
-    let user_shell_command = "Write-Output user-shell".to_string();
-    #[cfg(not(windows))]
-    let user_shell_command = "printf user-shell".to_string();
+    // Keep this command shell-agnostic so we can change the Windows default shell.
+    let user_shell_command = "echo user-shell".to_string();
     fixture
         .codex
         .submit(Op::RunUserShellCommand {
@@ -242,10 +234,16 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
     });
     let test = builder.build(&server).await?;
 
-    #[cfg(windows)]
-    let command = r#"$val = $env:CODEX_SANDBOX; if ([string]::IsNullOrEmpty($val)) { $val = 'not-set' } ; [System.Console]::Write($val)"#.to_string();
-    #[cfg(not(windows))]
-    let command = r#"sh -c "printf '%s' \"${CODEX_SANDBOX:-not-set}\"""#.to_string();
+    let shell = codex_core::shell::default_user_shell();
+    let command = match shell.name() {
+        "powershell" => {
+            r#"$val = $env:CODEX_SANDBOX; if ([string]::IsNullOrEmpty($val)) { $val = 'not-set' } ; [System.Console]::Write($val)"#
+                .to_string()
+        }
+        "cmd" => r#"if defined CODEX_SANDBOX (echo|set /p="%CODEX_SANDBOX%") else (echo|set /p=not-set)"#.to_string(),
+        // bash/sh/zsh
+        _ => r#"printf '%s' "${CODEX_SANDBOX:-not-set}""#.to_string(),
+    };
 
     test.codex
         .submit(Op::RunUserShellCommand {
@@ -390,17 +388,17 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
     let fixture = builder.build(&server).await?;
 
     let call_id = "user-shell-double-truncation";
-    let args = if cfg!(windows) {
-        serde_json::json!({
-            "command": "for ($i=1; $i -le 2000; $i++) { Write-Output $i }",
-            "timeout_ms": 5_000,
-        })
-    } else {
-        serde_json::json!({
-            "command": "seq 1 2000",
-            "timeout_ms": 5_000,
-        })
+    let shell = codex_core::shell::default_user_shell();
+    let command = match shell.name() {
+        "powershell" => "for ($i=1; $i -le 2000; $i++) { Write-Output $i }",
+        "cmd" => "for /l %i in (1,1,2000) do @echo %i",
+        // bash/sh/zsh
+        _ => "i=1; while [ $i -le 2000 ]; do echo $i; i=$((i+1)); done",
     };
+    let args = serde_json::json!({
+        "command": command,
+        "timeout_ms": 5_000,
+    });
 
     mount_sse_once(
         &server,

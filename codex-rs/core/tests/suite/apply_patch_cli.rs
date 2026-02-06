@@ -778,10 +778,13 @@ async fn apply_patch_cli_can_use_shell_command_output_as_patch_input() -> Result
             let call_num = self.num_calls.fetch_add(1, Ordering::SeqCst);
             match call_num {
                 0 => {
-                    let command = if cfg!(windows) {
-                        "Get-Content -Encoding utf8 source.txt"
-                    } else {
-                        "cat source.txt"
+                    let shell = codex_core::shell::default_user_shell();
+                    let command = match shell.name() {
+                        // Ensure UTF-8 decoding on Windows PowerShell.
+                        "powershell" => "Get-Content -Encoding utf8 source.txt",
+                        // `cat` is not available in cmd.exe by default.
+                        "cmd" => "type source.txt",
+                        _ => "cat source.txt",
                     };
                     let body = sse(vec![
                         ev_response_created("resp-1"),

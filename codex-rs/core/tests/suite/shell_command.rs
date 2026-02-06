@@ -210,10 +210,12 @@ async fn shell_command_times_out_with_timeout_ms() -> anyhow::Result<()> {
 
     let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
     let call_id = "shell-command-timeout";
-    let command = if cfg!(windows) {
-        "timeout /t 5"
-    } else {
-        "sleep 5"
+    let shell = codex_core::shell::default_user_shell();
+    let command = match shell.name() {
+        // `sleep` is not a built-in for cmd.exe.
+        "cmd" => "timeout /t 5",
+        // Works in bash/sh/zsh, and also in PowerShell where `sleep` is an alias.
+        _ => "sleep 5",
     };
     mount_shell_responses_with_timeout(
         &harness,
