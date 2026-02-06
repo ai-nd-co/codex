@@ -1,11 +1,12 @@
 ---
 source: tui/src/status/tests.rs
+assertion_line: 647
 expression: sanitized
 ---
 /status
 
 ╭───────────────────────────────────────────────────────────────────────╮
-│  >_ OpenAI Codex (vX.Y.Z)                                             │
+│  >_ OpenAI Codex (vX.Y.Z)                                            │
 │                                                                       │
 │ Visit https://chatgpt.com/codex/settings/usage for up-to-date         │
 │ information on rate limits and credits                                │
