@@ -3143,18 +3143,49 @@ impl ChatComposer {
                 };
                 let available_width =
                     hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
-                let status_line = footer_props
-                    .status_line_value
-                    .as_ref()
-                    .map(|line| line.clone().dim());
                 let status_line_candidate = footer_props.status_line_enabled
                     && matches!(
                         footer_props.mode,
                         FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
                     );
+
+                fn truncate_status_line_with_mode_indicator(
+                    base: &Line<'static>,
+                    indicator: Option<CollaborationModeIndicator>,
+                    show_cycle_hint: bool,
+                    max_width: usize,
+                ) -> Line<'static> {
+                    if max_width == 0 {
+                        return Line::from("");
+                    }
+                    let Some(indicator) = indicator else {
+                        return truncate_line_with_ellipsis_if_overflow(base.clone(), max_width);
+                    };
+                    let suffix =
+                        Line::from(vec![Span::from(" · ").dim(), indicator.styled_span(show_cycle_hint)]);
+                    let suffix_width = suffix.width();
+                    if suffix_width >= max_width {
+                        return truncate_line_with_ellipsis_if_overflow(
+                            Line::from(vec![indicator.styled_span(show_cycle_hint)]),
+                            max_width,
+                        );
+                    }
+                    let prefix_budget = max_width.saturating_sub(suffix_width);
+                    let mut out = truncate_line_with_ellipsis_if_overflow(base.clone(), prefix_budget);
+                    out.extend(suffix.spans);
+                    out
+                }
+
+                let status_line_base =
+                    footer_props.status_line_value.as_ref().map(|line| line.clone().dim());
                 let mut truncated_status_line = if status_line_candidate {
-                    status_line.as_ref().map(|line| {
-                        truncate_line_with_ellipsis_if_overflow(line.clone(), available_width)
+                    status_line_base.as_ref().map(|base| {
+                        truncate_status_line_with_mode_indicator(
+                            base,
+                            self.collaboration_mode_indicator,
+                            false,
+                            available_width,
+                        )
                     })
                 } else {
                     None
@@ -3186,42 +3217,23 @@ impl ChatComposer {
                         show_queue_hint,
                     )
                 };
-                let right_line = if status_line_active {
-                    let percent = footer_props.context_window_percent.map(|p| p.clamp(0, 100));
-                    let mode_span = self
-                        .collaboration_mode_indicator
-                        .map(|indicator| indicator.styled_span(false));
-
-                    let context_full = context_window_line(
-                        footer_props.context_window_percent,
-                        footer_props.context_window_used_tokens,
-                        footer_props.context_window_total_tokens,
-                    );
-                    let mut line = if let Some(percent) = percent {
-                        Line::from(vec![Span::from(format!("{percent}% context left")).dim()])
-                    } else {
-                        context_full
-                    };
-                    if let Some(mode_span) = mode_span {
-                        line.push_span(" · ".dim());
-                        line.push_span(mode_span);
-                    }
-                    Some(line)
-                } else {
-                    Some(context_window_line(
-                        footer_props.context_window_percent,
-                        footer_props.context_window_used_tokens,
-                        footer_props.context_window_total_tokens,
-                    ))
-                };
+                let right_line = Some(context_window_line(
+                    footer_props.context_window_percent,
+                    footer_props.context_window_used_tokens,
+                    footer_props.context_window_total_tokens,
+                ));
                 let right_width = right_line.as_ref().map(|l| l.width() as u16).unwrap_or(0);
                 if status_line_active
                     && let Some(max_left) = max_left_width_for_right(hint_rect, right_width)
                     && left_width > max_left
-                    && let Some(line) = status_line.as_ref().map(|line| {
-                        truncate_line_with_ellipsis_if_overflow(line.clone(), max_left as usize)
-                    })
+                    && let Some(base) = status_line_base.as_ref()
                 {
+                    let line = truncate_status_line_with_mode_indicator(
+                        base,
+                        self.collaboration_mode_indicator,
+                        false,
+                        max_left as usize,
+                    );
                     left_width = line.width() as u16;
                     truncated_status_line = Some(line);
                 }

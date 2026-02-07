@@ -1060,7 +1060,26 @@ mod tests {
                     );
                 let mut truncated_status_line = if status_line_candidate {
                     props.status_line_value.as_ref().map(|line| {
-                        truncate_line_with_ellipsis_if_overflow(line.clone().dim(), available_width)
+                        let line = line.clone().dim();
+                        if let Some(indicator) = collaboration_mode_indicator {
+                            let suffix = Line::from(vec![
+                                Span::from(" · ").dim(),
+                                indicator.styled_span(false),
+                            ]);
+                            let suffix_width = suffix.width();
+                            if suffix_width >= available_width {
+                                return truncate_line_with_ellipsis_if_overflow(
+                                    Line::from(vec![indicator.styled_span(false)]),
+                                    available_width,
+                                );
+                            }
+                            let prefix_budget = available_width.saturating_sub(suffix_width);
+                            let mut out =
+                                truncate_line_with_ellipsis_if_overflow(line, prefix_budget);
+                            out.extend(suffix.spans);
+                            return out;
+                        }
+                        truncate_line_with_ellipsis_if_overflow(line, available_width)
                     })
                 } else {
                     None
@@ -1085,33 +1104,11 @@ mod tests {
                         show_queue_hint,
                     )
                 };
-                let right_line = if status_line_active {
-                    let percent = props.context_window_percent.map(|p| p.clamp(0, 100));
-                    let mode_span =
-                        collaboration_mode_indicator.map(|indicator| indicator.styled_span(false));
-
-                    let context_full = context_window_line(
-                        props.context_window_percent,
-                        props.context_window_used_tokens,
-                        props.context_window_total_tokens,
-                    );
-                    let mut line = if let Some(percent) = percent {
-                        Line::from(vec![Span::from(format!("{percent}% context left")).dim()])
-                    } else {
-                        context_full
-                    };
-                    if let Some(mode_span) = mode_span {
-                        line.push_span(" · ".dim());
-                        line.push_span(mode_span);
-                    }
-                    Some(line)
-                } else {
-                    Some(context_window_line(
-                        props.context_window_percent,
-                        props.context_window_used_tokens,
-                        props.context_window_total_tokens,
-                    ))
-                };
+                let right_line = Some(context_window_line(
+                    props.context_window_percent,
+                    props.context_window_used_tokens,
+                    props.context_window_total_tokens,
+                ));
                 let right_width = right_line
                     .as_ref()
                     .map(|line| line.width() as u16)
@@ -1123,10 +1120,27 @@ mod tests {
                         .status_line_value
                         .as_ref()
                         .map(|line| line.clone().dim())
-                        .map(|line| {
-                            truncate_line_with_ellipsis_if_overflow(line, max_left as usize)
-                        })
                 {
+                    let line = if let Some(indicator) = collaboration_mode_indicator {
+                        let suffix = Line::from(vec![
+                            Span::from(" · ").dim(),
+                            indicator.styled_span(false),
+                        ]);
+                        let suffix_width = suffix.width();
+                        if suffix_width >= max_left as usize {
+                            truncate_line_with_ellipsis_if_overflow(
+                                Line::from(vec![indicator.styled_span(false)]),
+                                max_left as usize,
+                            )
+                        } else {
+                            let prefix_budget = (max_left as usize).saturating_sub(suffix_width);
+                            let mut out = truncate_line_with_ellipsis_if_overflow(line, prefix_budget);
+                            out.extend(suffix.spans);
+                            out
+                        }
+                    } else {
+                        truncate_line_with_ellipsis_if_overflow(line, max_left as usize)
+                    };
                     left_width = line.width() as u16;
                     truncated_status_line = Some(line);
                 }
