@@ -101,7 +101,7 @@ impl CollaborationModeIndicator {
         }
     }
 
-    fn styled_span(self, show_cycle_hint: bool) -> Span<'static> {
+    pub(crate) fn styled_span(self, show_cycle_hint: bool) -> Span<'static> {
         let label = self.label(show_cycle_hint);
         match self {
             CollaborationModeIndicator::Plan => Span::from(label).magenta(),
@@ -1052,26 +1052,26 @@ mod tests {
                     | FooterMode::ShortcutOverlay
                     | FooterMode::EscHint => false,
                 };
-                let left_mode_indicator = if props.status_line_enabled {
+                let available_width = area.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
+                let status_line_candidate = props.status_line_enabled
+                    && matches!(
+                        props.mode,
+                        FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
+                    );
+                let mut truncated_status_line = if status_line_candidate {
+                    props.status_line_value.as_ref().map(|line| {
+                        truncate_line_with_ellipsis_if_overflow(line.clone().dim(), available_width)
+                    })
+                } else {
+                    None
+                };
+                let status_line_active = status_line_candidate && truncated_status_line.is_some();
+                let left_mode_indicator = if status_line_active {
                     None
                 } else {
                     collaboration_mode_indicator
                 };
-                let available_width = area.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
-                let mut truncated_status_line = if props.status_line_enabled
-                    && matches!(
-                        props.mode,
-                        FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
-                    ) {
-                    props
-                        .status_line_value
-                        .as_ref()
-                        .map(|line| line.clone().dim())
-                        .map(|line| truncate_line_with_ellipsis_if_overflow(line, available_width))
-                } else {
-                    None
-                };
-                let mut left_width = if props.status_line_enabled {
+                let mut left_width = if status_line_active {
                     truncated_status_line
                         .as_ref()
                         .map(|line| line.width() as u16)
@@ -1085,15 +1085,26 @@ mod tests {
                         show_queue_hint,
                     )
                 };
-                let right_line = if props.status_line_enabled {
-                    let full = mode_indicator_line(collaboration_mode_indicator, show_cycle_hint);
-                    let compact = mode_indicator_line(collaboration_mode_indicator, false);
-                    let full_width = full.as_ref().map(|line| line.width() as u16).unwrap_or(0);
-                    if can_show_left_with_context(area, left_width, full_width) {
-                        full
+                let right_line = if status_line_active {
+                    let percent = props.context_window_percent.map(|p| p.clamp(0, 100));
+                    let mode_span =
+                        collaboration_mode_indicator.map(|indicator| indicator.styled_span(false));
+
+                    let context_full = context_window_line(
+                        props.context_window_percent,
+                        props.context_window_used_tokens,
+                        props.context_window_total_tokens,
+                    );
+                    let mut line = if let Some(percent) = percent {
+                        Line::from(vec![Span::from(format!("{percent}% context left")).dim()])
                     } else {
-                        compact
+                        context_full
+                    };
+                    if let Some(mode_span) = mode_span {
+                        line.push_span(" · ".dim());
+                        line.push_span(mode_span);
                     }
+                    Some(line)
                 } else {
                     Some(context_window_line(
                         props.context_window_percent,
@@ -1105,7 +1116,7 @@ mod tests {
                     .as_ref()
                     .map(|line| line.width() as u16)
                     .unwrap_or(0);
-                if props.status_line_enabled
+                if status_line_active
                     && let Some(max_left) = max_left_width_for_right(area, right_width)
                     && left_width > max_left
                     && let Some(line) = props
@@ -1135,7 +1146,7 @@ mod tests {
                     );
                     match summary_left {
                         SummaryLeft::Default => {
-                            if props.status_line_enabled {
+                            if status_line_active {
                                 if let Some(line) = truncated_status_line.clone() {
                                     render_footer_line(area, f.buffer_mut(), line);
                                 }
