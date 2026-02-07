@@ -2875,6 +2875,12 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        crate::markdown_render::set_tables_enabled(
+            widget
+                .config
+                .features
+                .enabled(codex_core::features::Feature::EnableMarkdownTables),
+        );
         widget.bottom_pane.set_status_line_enabled(
             widget
                 .config
