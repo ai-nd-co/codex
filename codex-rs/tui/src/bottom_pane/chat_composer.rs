@@ -2534,6 +2534,7 @@ impl ChatComposer {
             is_wsl,
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
+            context_window_total_tokens: self.context_window_total_tokens,
             status_line_value: self.status_line_value.clone(),
             status_line_enabled: self.status_line_enabled,
         }
@@ -3200,6 +3201,7 @@ impl ChatComposer {
                     Some(context_window_line(
                         footer_props.context_window_percent,
                         footer_props.context_window_used_tokens,
+                        footer_props.context_window_total_tokens,
                     ))
                 };
                 let right_width = right_line.as_ref().map(|l| l.width() as u16).unwrap_or(0);

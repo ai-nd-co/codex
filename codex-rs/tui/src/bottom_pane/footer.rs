@@ -68,6 +68,7 @@ pub(crate) struct FooterProps {
     pub(crate) quit_shortcut_key: KeyBinding,
     pub(crate) context_window_percent: Option<i64>,
     pub(crate) context_window_used_tokens: Option<i64>,
+    pub(crate) context_window_total_tokens: Option<i64>,
     pub(crate) status_line_value: Option<Line<'static>>,
     pub(crate) status_line_enabled: bool,
 }
@@ -776,7 +777,37 @@ fn build_columns(entries: Vec<Line<'static>>) -> Vec<Line<'static>> {
         .collect()
 }
 
-pub(crate) fn context_window_line(percent: Option<i64>, used_tokens: Option<i64>) -> Line<'static> {
+pub(crate) fn context_window_line(
+    percent: Option<i64>,
+    used_tokens: Option<i64>,
+    total_tokens: Option<i64>,
+) -> Line<'static> {
+    if let Some(tokens) = used_tokens {
+        let used_fmt = format_tokens_compact(tokens);
+        if let Some(total) = total_tokens {
+            let total_fmt = format_tokens_compact(total);
+            let mut line =
+                Line::from(vec![Span::from(format!("{used_fmt} / {total_fmt} tokens")).dim()]);
+            if let Some(percent) = percent {
+                let percent = percent.clamp(0, 100);
+                line.push_span(" · ".dim());
+                line.push_span(Span::from(format!("{percent}% context left")).dim());
+            }
+            return line;
+        }
+
+        if let Some(percent) = percent {
+            let percent = percent.clamp(0, 100);
+            return Line::from(vec![
+                Span::from(format!("{used_fmt} tokens")).dim(),
+                Span::from(" · ").dim(),
+                Span::from(format!("{percent}% context left")).dim(),
+            ]);
+        }
+
+        return Line::from(vec![Span::from(format!("{used_fmt} tokens")).dim()]);
+    }
+
     if let Some(percent) = percent {
         let percent = percent.clamp(0, 100);
         return Line::from(vec![Span::from(format!("{percent}% context left")).dim()]);
@@ -1067,6 +1098,7 @@ mod tests {
                     Some(context_window_line(
                         props.context_window_percent,
                         props.context_window_used_tokens,
+                        props.context_window_total_tokens,
                     ))
                 };
                 let right_width = right_line
@@ -1190,6 +1222,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
             },
@@ -1208,6 +1241,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
             },
@@ -1226,6 +1260,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
             },
@@ -1244,6 +1279,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
             },
@@ -1262,6 +1298,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
             },
@@ -1280,6 +1317,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
             },
@@ -1298,6 +1336,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
             },
@@ -1316,6 +1355,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: Some(72),
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
             },
@@ -1334,6 +1374,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: Some(123_456),
+                context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
             },
@@ -1352,6 +1393,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
             },
@@ -1370,6 +1412,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
             },
@@ -1386,6 +1429,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
             context_window_used_tokens: None,
+            context_window_total_tokens: None,
             status_line_value: None,
             status_line_enabled: false,
         };
@@ -1415,6 +1459,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
             context_window_used_tokens: None,
+            context_window_total_tokens: None,
             status_line_value: None,
             status_line_enabled: false,
         };
@@ -1437,6 +1482,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
             context_window_used_tokens: None,
+            context_window_total_tokens: None,
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
         };
@@ -1454,6 +1500,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: Some(50),
             context_window_used_tokens: None,
+            context_window_total_tokens: None,
             status_line_value: None, // command timed out / empty
             status_line_enabled: true,
         };
@@ -1476,6 +1523,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: Some(50),
             context_window_used_tokens: None,
+            context_window_total_tokens: None,
             status_line_value: None,
             status_line_enabled: false,
         };
@@ -1498,6 +1546,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: Some(50),
             context_window_used_tokens: None,
+            context_window_total_tokens: None,
             status_line_value: None,
             status_line_enabled: true,
         };
@@ -1521,6 +1570,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: Some(50),
             context_window_used_tokens: None,
+            context_window_total_tokens: None,
             status_line_value: Some(Line::from(
                 "Status line content that should truncate before the mode indicator".to_string(),
             )),
@@ -1548,6 +1598,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: Some(50),
             context_window_used_tokens: None,
+            context_window_total_tokens: None,
             status_line_value: Some(Line::from(
                 "Status line content that is definitely too long to fit alongside the mode label"
                     .to_string(),
