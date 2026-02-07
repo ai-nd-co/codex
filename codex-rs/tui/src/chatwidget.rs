@@ -3280,6 +3280,12 @@ impl ChatWidget {
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
         widget.bottom_pane.set_collaboration_modes_enabled(true);
+        crate::markdown_render::set_tables_enabled(
+            widget
+                .config
+                .features
+                .enabled(codex_core::features::Feature::MarkdownTables),
+        );
         widget.sync_personality_command_enabled();
         widget
             .bottom_pane
