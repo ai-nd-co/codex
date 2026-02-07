@@ -639,14 +639,43 @@ jobs:
             tag_args+=(--tag "${NPM_TAG}")
           fi
 
+          packages=(
+            "@ai-nd-co/codex"
+            "@ai-nd-co/codex-responses-api-proxy"
+            "@ai-nd-co/codex-sdk"
+          )
+
           tarballs=(
             "codex-npm-${VERSION}.tgz"
             "codex-responses-api-proxy-npm-${VERSION}.tgz"
             "codex-sdk-npm-${VERSION}.tgz"
           )
 
-          for tarball in "${tarballs[@]}"; do
-            npm publish "${GITHUB_WORKSPACE}/dist/npm/${tarball}" "${tag_args[@]}"
+          for idx in "${!tarballs[@]}"; do
+            tarball="${tarballs[$idx]}"
+            package="${packages[$idx]}"
+            tarball_path="${GITHUB_WORKSPACE}/dist/npm/${tarball}"
+
+            # Trusted publishing/provenance can sometimes return a 409 (e.g. retrying the same
+            # publish). If the version is already present in the registry, treat the publish as a
+            # no-op success so reruns don't fail the release.
+            if npm view "${package}@${VERSION}" version >/dev/null 2>&1; then
+              echo "::notice::${package}@${VERSION} already exists on npm; skipping publish for ${tarball}."
+              continue
+            fi
+
+            set +e
+            npm publish "${tarball_path}" "${tag_args[@]}"
+            publish_status="$?"
+            set -e
+
+            if [[ "${publish_status}" -ne 0 ]]; then
+              if npm view "${package}@${VERSION}" version >/dev/null 2>&1; then
+                echo "::warning::npm publish failed for ${package}@${VERSION}, but the version exists on npm; continuing."
+                continue
+              fi
+              exit "${publish_status}"
+            fi
           done
 
   update-branch:
