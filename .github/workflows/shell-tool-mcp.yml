@@ -466,4 +466,24 @@ jobs:
           if [[ -n "${NPM_TAG}" ]]; then
             tag_args+=(--tag "${NPM_TAG}")
           fi
-          npm publish "dist/npm/codex-shell-tool-mcp-npm-${VERSION}.tgz" "${tag_args[@]}"
+
+          package="@ai-nd-co/codex-shell-tool-mcp"
+          tarball="dist/npm/codex-shell-tool-mcp-npm-${VERSION}.tgz"
+
+          if npm view "${package}@${VERSION}" version >/dev/null 2>&1; then
+            echo "::notice::${package}@${VERSION} already exists on npm; skipping publish."
+            exit 0
+          fi
+
+          set +e
+          npm publish "${tarball}" "${tag_args[@]}"
+          publish_status="$?"
+          set -e
+
+          if [[ "${publish_status}" -ne 0 ]]; then
+            if npm view "${package}@${VERSION}" version >/dev/null 2>&1; then
+              echo "::warning::npm publish failed for ${package}@${VERSION}, but the version exists on npm; continuing."
+              exit 0
+            fi
+            exit "${publish_status}"
+          fi
