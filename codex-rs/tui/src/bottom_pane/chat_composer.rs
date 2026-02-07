@@ -120,7 +120,6 @@
 //! - If repeated space events are seen before timeout, we proceed with hold-to-talk.
 //! - While recording, repeated space events keep the recording alive; if they stop for a short
 //!   window, we stop and transcribe.
-use crate::bottom_pane::footer::mode_indicator_line;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::has_ctrl_or_alt;
@@ -4191,15 +4190,26 @@ impl ChatComposer {
                     )
                 };
                 let right_line = if status_line_active {
-                    let full =
-                        mode_indicator_line(self.collaboration_mode_indicator, show_cycle_hint);
-                    let compact = mode_indicator_line(self.collaboration_mode_indicator, false);
-                    let full_width = full.as_ref().map(|l| l.width() as u16).unwrap_or(0);
-                    if can_show_left_with_context(hint_rect, left_width, full_width) {
-                        full
+                    let percent = footer_props.context_window_percent.map(|p| p.clamp(0, 100));
+                    let mode_span = self
+                        .collaboration_mode_indicator
+                        .map(|indicator| indicator.styled_span(false));
+
+                    let context_full = context_window_line(
+                        footer_props.context_window_percent,
+                        footer_props.context_window_used_tokens,
+                        footer_props.context_window_total_tokens,
+                    );
+                    let mut line = if let Some(percent) = percent {
+                        Line::from(vec![Span::from(format!("{percent}% context left")).dim()])
                     } else {
-                        compact
+                        context_full
+                    };
+                    if let Some(mode_span) = mode_span {
+                        line.push_span(" · ".dim());
+                        line.push_span(mode_span);
                     }
+                    Some(line)
                 } else {
                     Some(context_window_line(
                         footer_props.context_window_percent,
