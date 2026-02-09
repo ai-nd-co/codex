@@ -55,6 +55,21 @@
       },
       "type": "object"
     },
+    "ApprovalsToml": {
+      "additionalProperties": false,
+      "description": "Approval-related settings deserialized from config.toml.",
+      "properties": {
+        "always_prompt_regex": {
+          "default": null,
+          "description": "Regex patterns. If any matches the displayed command string, Codex will always prompt for approval for that command, even in YOLO mode.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "AskForApproval": {
       "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
       "oneOf": [
@@ -1148,6 +1163,15 @@
         }
       ],
       "description": "Default approval policy for executing commands."
+    },
+    "approvals": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ApprovalsToml"
+        }
+      ],
+      "default": null,
+      "description": "Approval-related settings."
     },
     "chatgpt_base_url": {
       "description": "Base URL for requests to ChatGPT (as opposed to the OpenAI API).",

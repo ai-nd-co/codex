@@ -15,6 +15,7 @@ use crate::state_db::StateDbHandle;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_otel::OtelManager;
+use regex::Regex;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -29,6 +30,8 @@ pub(crate) struct SessionServices {
     pub(crate) user_shell: Arc<crate::shell::Shell>,
     pub(crate) show_raw_agent_reasoning: bool,
     pub(crate) exec_policy: ExecPolicyManager,
+    /// Compiled regex patterns that force command approval prompts.
+    pub(crate) approvals_always_prompt_regex: Arc<Vec<Regex>>,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) otel_manager: OtelManager,

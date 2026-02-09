@@ -30,6 +30,7 @@ use crate::features::Features;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use shlex::try_join as shlex_try_join;
+use regex::Regex;
 
 const PROMPT_CONFLICT_REASON: &str =
     "approval required by policy, but AskForApproval is set to Never";
@@ -94,6 +95,7 @@ pub(crate) struct ExecApprovalRequest<'a> {
     pub(crate) sandbox_policy: &'a SandboxPolicy,
     pub(crate) sandbox_permissions: SandboxPermissions,
     pub(crate) prefix_rule: Option<Vec<String>>,
+    pub(crate) always_prompt_regexes: &'a [Regex],
 }
 
 impl ExecPolicyManager {
@@ -130,7 +132,24 @@ impl ExecPolicyManager {
             sandbox_policy,
             sandbox_permissions,
             prefix_rule,
+            always_prompt_regexes,
         } = req;
+
+        // Config-driven override: always prompt for commands matching user-defined regexes,
+        // even when approvals are otherwise disabled (e.g. `AskForApproval::Never` / YOLO).
+        if !always_prompt_regexes.is_empty() {
+            let rendered = shlex_try_join(command.iter().map(String::as_str))
+                .unwrap_or_else(|_| command.join(" "));
+            if always_prompt_regexes.iter().any(|re| re.is_match(&rendered)) {
+                return ExecApprovalRequirement::NeedsApproval {
+                    reason: Some(format!(
+                        "`{rendered}` requires approval (matched approvals.always_prompt_regex)"
+                    )),
+                    proposed_execpolicy_amendment: None,
+                };
+            }
+        }
+
         let exec_policy = self.current();
         let commands =
             parse_shell_lc_plain_commands(command).unwrap_or_else(|| vec![command.to_vec()]);
@@ -815,6 +834,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -854,6 +874,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -884,6 +905,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -915,6 +937,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -922,6 +945,41 @@ prefix_rule(
             requirement,
             ExecApprovalRequirement::Forbidden {
                 reason: PROMPT_CONFLICT_REASON.to_string()
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn always_prompt_regex_overrides_approval_policy_never() {
+        let policy_src = r#"prefix_rule(pattern=["rm"], decision="prompt")"#;
+        let mut parser = PolicyParser::new();
+        parser
+            .parse("test.rules", policy_src)
+            .expect("parse policy");
+        let policy = Arc::new(parser.build());
+        let command = vec!["rm".to_string()];
+        let regexes = vec![Regex::new(r"\brm\b").expect("regex")];
+
+        let manager = ExecPolicyManager::new(policy);
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                features: &Features::with_defaults(),
+                command: &command,
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: &SandboxPolicy::DangerFullAccess,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+                always_prompt_regexes: &regexes,
+            })
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: Some(
+                    "`rm` requires approval (matched approvals.always_prompt_regex)".to_string()
+                ),
+                proposed_execpolicy_amendment: None,
             }
         );
     }
@@ -939,6 +997,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::ReadOnly,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -970,6 +1029,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::ReadOnly,
                 sandbox_permissions: SandboxPermissions::RequireEscalated,
                 prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1008,6 +1068,7 @@ prefix_rule(
                     sandbox_policy: &SandboxPolicy::DangerFullAccess,
                     sandbox_permissions: SandboxPermissions::UseDefault,
                     prefix_rule: None,
+                    always_prompt_regexes: &[],
                 })
                 .await,
             ExecApprovalRequirement::NeedsApproval {
@@ -1083,6 +1144,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::ReadOnly,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1111,6 +1173,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::ReadOnly,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1142,6 +1205,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1170,6 +1234,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::ReadOnly,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1209,6 +1274,7 @@ prefix_rule(
                     sandbox_policy: &SandboxPolicy::ReadOnly,
                     sandbox_permissions: SandboxPermissions::UseDefault,
                     prefix_rule: None,
+                    always_prompt_regexes: &[],
                 })
                 .await,
             ExecApprovalRequirement::NeedsApproval {
@@ -1233,6 +1299,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::ReadOnly,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1264,6 +1331,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::ReadOnly,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1288,6 +1356,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1356,6 +1425,7 @@ prefix_rule(
                     sandbox_policy: &SandboxPolicy::ReadOnly,
                     sandbox_permissions: permissions,
                     prefix_rule: None,
+                    always_prompt_regexes: &[],
                 })
                 .await,
             "{pwsh_approval_reason}"
@@ -1380,6 +1450,7 @@ prefix_rule(
                     sandbox_policy: &SandboxPolicy::ReadOnly,
                     sandbox_permissions: permissions,
                     prefix_rule: None,
+                    always_prompt_regexes: &[],
                 })
                 .await,
             r#"On all platforms, a forbidden command should require approval
@@ -1400,6 +1471,7 @@ prefix_rule(
                     sandbox_policy: &SandboxPolicy::ReadOnly,
                     sandbox_permissions: permissions,
                     prefix_rule: None,
+                    always_prompt_regexes: &[],
                 })
                 .await,
             r#"On all platforms, a forbidden command should require approval

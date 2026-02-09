@@ -304,6 +304,10 @@ impl ShellHandler {
                 sandbox_policy: &turn.sandbox_policy,
                 sandbox_permissions: exec_params.sandbox_permissions,
                 prefix_rule,
+                always_prompt_regexes: session
+                    .services
+                    .approvals_always_prompt_regex
+                    .as_ref(),
             })
             .await;
 

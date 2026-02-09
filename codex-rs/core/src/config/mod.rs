@@ -142,6 +142,13 @@ pub struct Config {
 
     pub sandbox_policy: Constrained<SandboxPolicy>,
 
+    /// Regex patterns that force Codex to prompt for approval before executing
+    /// a model-generated shell command, even when approvals are otherwise disabled.
+    ///
+    /// This is intentionally stored as raw strings in the config; compilation and
+    /// validation happens at runtime in the session layer.
+    pub approvals_always_prompt_regex: Vec<String>,
+
     /// enforce_residency means web traffic cannot be routed outside of a
     /// particular geography. HTTP clients should direct their requests
     /// using backend-specific headers or URLs to enforce this.
@@ -818,6 +825,10 @@ pub struct ConfigToml {
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
 
+    /// Approval-related settings.
+    #[serde(default)]
+    pub approvals: Option<ApprovalsToml>,
+
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
     /// Optional override for which shell binary to use.
@@ -1008,6 +1019,16 @@ pub struct ConfigToml {
     pub experimental_use_freeform_apply_patch: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
     pub oss_provider: Option<String>,
+}
+
+/// Approval-related settings deserialized from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ApprovalsToml {
+    /// Regex patterns. If any matches the displayed command string, Codex will
+    /// always prompt for approval for that command, even in YOLO mode.
+    #[serde(default)]
+    pub always_prompt_regex: Option<Vec<String>>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -1642,6 +1663,21 @@ impl Config {
             cwd: resolved_cwd,
             approval_policy: constrained_approval_policy.value,
             sandbox_policy: constrained_sandbox_policy.value,
+            approvals_always_prompt_regex: cfg
+                .approvals
+                .as_ref()
+                .and_then(|a| a.always_prompt_regex.clone())
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|pattern| {
+                    let trimmed = pattern.trim();
+                    if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    }
+                })
+                .collect(),
             enforce_residency: enforce_residency.value,
             did_user_set_custom_approval_policy_or_sandbox_mode,
             forced_auto_mode_downgraded_on_windows,
@@ -3879,6 +3915,7 @@ model_verbosity = "high"
                 model_provider: fixture.openai_provider.clone(),
                 approval_policy: Constrained::allow_any(AskForApproval::Never),
                 sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+                approvals_always_prompt_regex: Vec::new(),
                 enforce_residency: Constrained::allow_any(None),
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
                 forced_auto_mode_downgraded_on_windows: false,
@@ -3967,6 +4004,7 @@ model_verbosity = "high"
             model_provider: fixture.openai_custom_provider.clone(),
             approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+            approvals_always_prompt_regex: Vec::new(),
             enforce_residency: Constrained::allow_any(None),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
@@ -4070,6 +4108,7 @@ model_verbosity = "high"
             model_provider: fixture.openai_provider.clone(),
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+            approvals_always_prompt_regex: Vec::new(),
             enforce_residency: Constrained::allow_any(None),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
@@ -4159,6 +4198,7 @@ model_verbosity = "high"
             model_provider: fixture.openai_provider.clone(),
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+            approvals_always_prompt_regex: Vec::new(),
             enforce_residency: Constrained::allow_any(None),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,

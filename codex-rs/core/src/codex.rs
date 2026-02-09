@@ -74,6 +74,7 @@ use codex_rmcp_client::OAuthCredentialsStoreMode;
 use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
+use regex::Regex;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::PaginatedRequestParam;
@@ -97,6 +98,26 @@ use tracing::instrument;
 use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
+
+fn compile_always_prompt_regexes(patterns: &[String]) -> Arc<Vec<Regex>> {
+    if patterns.is_empty() {
+        return Arc::new(Vec::new());
+    }
+    let mut out: Vec<Regex> = Vec::new();
+    for raw in patterns {
+        let pattern = raw.trim();
+        if pattern.is_empty() {
+            continue;
+        }
+        match Regex::new(pattern) {
+            Ok(re) => out.push(re),
+            Err(err) => {
+                warn!(pattern, %err, "invalid approvals.always_prompt_regex pattern; ignoring");
+            }
+        }
+    }
+    Arc::new(out)
+}
 
 use crate::ModelProviderInfo;
 use crate::client::ModelClient;
@@ -1011,6 +1032,9 @@ impl Session {
         session_configuration.thread_name = thread_name.clone();
         let state = SessionState::new(session_configuration.clone());
 
+        let approvals_always_prompt_regex =
+            compile_always_prompt_regexes(&config.approvals_always_prompt_regex);
+
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
@@ -1024,6 +1048,7 @@ impl Session {
             user_shell: Arc::new(default_shell),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
+            approvals_always_prompt_regex,
             auth_manager: Arc::clone(&auth_manager),
             otel_manager,
             models_manager: Arc::clone(&models_manager),
@@ -5756,6 +5781,8 @@ mod tests {
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
         let file_watcher = Arc::new(FileWatcher::noop());
+        let approvals_always_prompt_regex =
+            compile_always_prompt_regexes(&config.approvals_always_prompt_regex);
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
@@ -5769,6 +5796,7 @@ mod tests {
             user_shell: Arc::new(default_user_shell()),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
+            approvals_always_prompt_regex,
             auth_manager: auth_manager.clone(),
             otel_manager: otel_manager.clone(),
             models_manager: Arc::clone(&models_manager),
@@ -5886,6 +5914,8 @@ mod tests {
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
         let file_watcher = Arc::new(FileWatcher::noop());
+        let approvals_always_prompt_regex =
+            compile_always_prompt_regexes(&config.approvals_always_prompt_regex);
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
@@ -5899,6 +5929,7 @@ mod tests {
             user_shell: Arc::new(default_user_shell()),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
+            approvals_always_prompt_regex,
             auth_manager: Arc::clone(&auth_manager),
             otel_manager: otel_manager.clone(),
             models_manager: Arc::clone(&models_manager),
