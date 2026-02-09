@@ -33,10 +33,24 @@ pub(crate) enum HighlightLanguage {
     Kotlin,
     Dart,
     Hcl,
+    Markdown,
+    Xml,
+    Dockerfile,
+    Dotenv,
+    Ini,
 }
 
 impl HighlightLanguage {
     pub(crate) fn from_path(path: &Path) -> Option<Self> {
+        let file_name = path.file_name().and_then(|name| name.to_str())?;
+        let file_name = file_name.to_ascii_lowercase();
+        if file_name == "dockerfile" || file_name.starts_with("dockerfile.") {
+            return Some(Self::Dockerfile);
+        }
+        if file_name == ".env" || file_name.starts_with(".env.") {
+            return Some(Self::Dotenv);
+        }
+
         let ext = path.extension()?.to_str()?.to_ascii_lowercase();
         match ext.as_str() {
             "sh" | "bash" => Some(Self::Bash),
@@ -45,6 +59,7 @@ impl HighlightLanguage {
             "ts" => Some(Self::TypeScript),
             "tsx" => Some(Self::Tsx),
             "json" => Some(Self::Json),
+            "md" => Some(Self::Markdown),
             "toml" => Some(Self::Toml),
             "yml" | "yaml" => Some(Self::Yaml),
             "rs" => Some(Self::Rust),
@@ -53,6 +68,8 @@ impl HighlightLanguage {
             // in this workspace; fall back to CSS highlighting.
             "scss" => Some(Self::Css),
             "html" | "htm" => Some(Self::Html),
+            "xml" | "svg" => Some(Self::Xml),
+            "ini" => Some(Self::Ini),
             "sql" => Some(Self::Sql),
             "java" => Some(Self::Java),
             "kt" | "kts" => Some(Self::Kotlin),
@@ -76,17 +93,22 @@ impl HighlightLanguage {
             "ts" | "typescript" => Some(Self::TypeScript),
             "tsx" => Some(Self::Tsx),
             "json" => Some(Self::Json),
+            "md" | "markdown" => Some(Self::Markdown),
             "toml" => Some(Self::Toml),
             "yml" | "yaml" => Some(Self::Yaml),
             "rs" | "rust" => Some(Self::Rust),
             "css" => Some(Self::Css),
             "scss" => Some(Self::Css),
             "html" => Some(Self::Html),
+            "xml" => Some(Self::Xml),
             "sql" => Some(Self::Sql),
             "java" => Some(Self::Java),
             "kotlin" | "kt" => Some(Self::Kotlin),
             "dart" | "flutter" => Some(Self::Dart),
             "hcl" | "terraform" => Some(Self::Hcl),
+            "dockerfile" => Some(Self::Dockerfile),
+            "dotenv" | "env" => Some(Self::Dotenv),
+            "ini" => Some(Self::Ini),
             _ => None,
         }
     }
@@ -419,6 +441,19 @@ fn config_hcl() -> &'static HighlightConfiguration {
     })
 }
 
+const XML_HIGHLIGHTS_QUERY: &str = include_str!("queries/xml_highlights.scm");
+fn config_xml() -> &'static HighlightConfiguration {
+    static CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
+    CONFIG.get_or_init(|| {
+        let language = tree_sitter_xml::LANGUAGE_XML.into();
+        #[expect(clippy::expect_used)]
+        let mut config = HighlightConfiguration::new(language, "xml", XML_HIGHLIGHTS_QUERY, "", "")
+            .expect("load xml highlight query");
+        config.configure(HIGHLIGHT_NAMES);
+        config
+    })
+}
+
 fn highlight_name_for(highlight: Highlight) -> &'static str {
     HIGHLIGHT_NAMES
         .get(highlight.0)
@@ -490,11 +525,18 @@ fn highlight_config(lang: HighlightLanguage) -> &'static HighlightConfiguration 
         HighlightLanguage::Rust => config_rust(),
         HighlightLanguage::Css => config_css(),
         HighlightLanguage::Html => config_html(),
+        HighlightLanguage::Xml => config_xml(),
         HighlightLanguage::Sql => config_sql(),
         HighlightLanguage::Java => config_java(),
         HighlightLanguage::Kotlin => config_kotlin(),
         HighlightLanguage::Dart => config_dart(),
         HighlightLanguage::Hcl => config_hcl(),
+        // Markdown/Dockerfile/Dotenv/INI are handled by lightweight tokenizers (see highlight_to_lines).
+        // These match arms should never be hit, but must exist for exhaustiveness.
+        HighlightLanguage::Markdown
+        | HighlightLanguage::Dockerfile
+        | HighlightLanguage::Dotenv
+        | HighlightLanguage::Ini => config_bash(),
     }
 }
 
@@ -524,6 +566,14 @@ pub(crate) fn highlight_bash_to_lines(script: &str) -> Vec<Line<'static>> {
 }
 
 pub(crate) fn highlight_to_lines(lang: HighlightLanguage, source: &str) -> Vec<Line<'static>> {
+    match lang {
+        HighlightLanguage::Markdown => return highlight_markdown_to_lines(source),
+        HighlightLanguage::Dockerfile => return highlight_dockerfile_to_lines(source),
+        HighlightLanguage::Dotenv => return highlight_dotenv_to_lines(source),
+        HighlightLanguage::Ini => return highlight_ini_to_lines(source),
+        _ => {}
+    }
+
     let mut highlighter = Highlighter::new();
     let iterator =
         match highlighter.highlight(highlight_config(lang), source.as_bytes(), None, |_| None) {
@@ -559,6 +609,426 @@ pub(crate) fn highlight_to_lines(lang: HighlightLanguage, source: &str) -> Vec<L
     } else {
         lines
     }
+}
+
+fn highlight_markdown_to_lines(source: &str) -> Vec<Line<'static>> {
+    let heading_style = style_for_capture(HighlightLanguage::Markdown, "keyword");
+    let list_marker_style = style_for_capture(HighlightLanguage::Markdown, "punctuation.special");
+    let backtick_style = style_for_capture(HighlightLanguage::Markdown, "punctuation.special");
+    let code_style = style_for_capture(HighlightLanguage::Markdown, "string");
+
+    fn push_inline_with_code(
+        line: &mut Line<'static>,
+        s: &str,
+        base_style: Option<Style>,
+        backtick_style: Style,
+        code_style: Style,
+    ) {
+        let mut buf = String::new();
+        let mut in_code = false;
+        for ch in s.chars() {
+            if ch == '`' {
+                if !buf.is_empty() {
+                    let style = if in_code { Some(code_style) } else { base_style };
+                    line.spans.push(match style {
+                        Some(style) => Span::styled(std::mem::take(&mut buf), style),
+                        None => std::mem::take(&mut buf).into(),
+                    });
+                }
+                line.spans.push(Span::styled("`".to_string(), backtick_style));
+                in_code = !in_code;
+                continue;
+            }
+            buf.push(ch);
+        }
+        if !buf.is_empty() {
+            let style = if in_code { Some(code_style) } else { base_style };
+            line.spans.push(match style {
+                Some(style) => Span::styled(buf, style),
+                None => buf.into(),
+            });
+        }
+    }
+
+    let mut out = Vec::new();
+    for raw in source.split('\n') {
+        let mut line = Line::from("");
+        if raw.is_empty() {
+            out.push(line);
+            continue;
+        }
+
+        let trimmed = raw.trim_start();
+        let indent_len = raw.len() - trimmed.len();
+        if indent_len > 0 {
+            line.spans.push(raw[..indent_len].to_string().into());
+        }
+
+        // Fences: ```lang
+        if trimmed.starts_with("```") {
+            line.spans.push(Span::styled(trimmed.to_string(), list_marker_style));
+            out.push(line);
+            continue;
+        }
+
+        // Heading: # ... (only treat as heading when there is at least one space after hashes)
+        let hash_count = trimmed.chars().take_while(|c| *c == '#').count();
+        if hash_count > 0 {
+            let after = &trimmed[hash_count..];
+            if after.starts_with(' ') || after.starts_with('\t') {
+                line.spans.push(Span::styled("#".repeat(hash_count), list_marker_style));
+                push_inline_with_code(
+                    &mut line,
+                    after,
+                    Some(heading_style),
+                    backtick_style,
+                    code_style,
+                );
+                out.push(line);
+                continue;
+            }
+        }
+
+        // List marker (common)
+        let is_bullet = trimmed.starts_with("- ")
+            || trimmed.starts_with("* ")
+            || trimmed.starts_with("+ ");
+        let is_ordered = trimmed
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .count()
+            > 0
+            && (trimmed.contains(". ") || trimmed.contains(") "));
+        if is_bullet {
+            line.spans
+                .push(Span::styled(trimmed[..1].to_string(), list_marker_style));
+            push_inline_with_code(
+                &mut line,
+                &trimmed[1..],
+                None,
+                backtick_style,
+                code_style,
+            );
+            out.push(line);
+            continue;
+        }
+        if is_ordered {
+            // Highlight leading "<digits>." or "<digits>)" marker.
+            let mut marker_end = 0usize;
+            for (i, ch) in trimmed.char_indices() {
+                marker_end = i + ch.len_utf8();
+                if ch == '.' || ch == ')' {
+                    break;
+                }
+                if !ch.is_ascii_digit() {
+                    marker_end = 0;
+                    break;
+                }
+            }
+            if marker_end > 0 && trimmed[marker_end..].starts_with(' ') {
+                line.spans.push(Span::styled(
+                    trimmed[..marker_end].to_string(),
+                    list_marker_style,
+                ));
+                push_inline_with_code(
+                    &mut line,
+                    &trimmed[marker_end..],
+                    None,
+                    backtick_style,
+                    code_style,
+                );
+                out.push(line);
+                continue;
+            }
+        }
+
+        // Default: just inline-code highlighting.
+        push_inline_with_code(&mut line, trimmed, None, backtick_style, code_style);
+        out.push(line);
+    }
+    out
+}
+
+fn highlight_dockerfile_to_lines(source: &str) -> Vec<Line<'static>> {
+    let comment_style = style_for_capture(HighlightLanguage::Dockerfile, "comment");
+    let keyword_style = style_for_capture(HighlightLanguage::Dockerfile, "keyword");
+    let op_style = style_for_capture(HighlightLanguage::Dockerfile, "operator");
+    let string_style = style_for_capture(HighlightLanguage::Dockerfile, "string");
+    let var_style = style_for_capture(HighlightLanguage::Dockerfile, "variable");
+
+    // Keep this list aligned with common Dockerfile instructions.
+    const KEYWORDS: &[&str] = &[
+        "FROM", "AS", "RUN", "CMD", "LABEL", "EXPOSE", "ENV", "ADD", "COPY", "ENTRYPOINT",
+        "VOLUME", "USER", "WORKDIR", "ARG", "ONBUILD", "STOPSIGNAL", "HEALTHCHECK", "SHELL",
+        "MAINTAINER",
+    ];
+
+    fn is_keyword(tok: &str) -> bool {
+        KEYWORDS.iter().any(|k| tok.eq_ignore_ascii_case(k))
+    }
+
+    let mut out = Vec::new();
+    for raw in source.split('\n') {
+        let mut line = Line::from("");
+        if raw.is_empty() {
+            out.push(line);
+            continue;
+        }
+        let trimmed = raw.trim_start();
+        let indent_len = raw.len() - trimmed.len();
+        if indent_len > 0 {
+            line.spans.push(raw[..indent_len].to_string().into());
+        }
+        if trimmed.starts_with('#') {
+            line.spans.push(Span::styled(trimmed.to_string(), comment_style));
+            out.push(line);
+            continue;
+        }
+
+        // Highlight first token if it matches a Dockerfile instruction.
+        let mut rest = trimmed;
+        let first_ws = trimmed
+            .char_indices()
+            .find_map(|(idx, ch)| ch.is_whitespace().then_some(idx));
+        if let Some(ws_idx) = first_ws {
+            let tok = &trimmed[..ws_idx];
+            if is_keyword(tok) {
+                line.spans.push(Span::styled(tok.to_string(), keyword_style));
+                rest = &trimmed[ws_idx..];
+            }
+        } else if is_keyword(trimmed) {
+            line.spans.push(Span::styled(trimmed.to_string(), keyword_style));
+            out.push(line);
+            continue;
+        }
+
+        // Highlight simple variable expansions ($VAR / ${VAR}) and quoted strings.
+        let mut buf = String::new();
+        let mut chars = rest.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '$' {
+                if !buf.is_empty() {
+                    line.spans.push(std::mem::take(&mut buf).into());
+                }
+                line.spans.push(Span::styled("$".to_string(), op_style));
+                if chars.peek() == Some(&'{') {
+                    chars.next();
+                    line.spans.push(Span::styled("{".to_string(), op_style));
+                    let mut name = String::new();
+                    while let Some(&c) = chars.peek() {
+                        if c == '}' {
+                            break;
+                        }
+                        name.push(c);
+                        chars.next();
+                    }
+                    if !name.is_empty() {
+                        line.spans.push(Span::styled(name, var_style));
+                    }
+                    if chars.peek() == Some(&'}') {
+                        chars.next();
+                        line.spans.push(Span::styled("}".to_string(), op_style));
+                    }
+                    continue;
+                }
+                let mut name = String::new();
+                while let Some(&c) = chars.peek() {
+                    if !(c.is_ascii_alphanumeric() || c == '_') {
+                        break;
+                    }
+                    name.push(c);
+                    chars.next();
+                }
+                if !name.is_empty() {
+                    line.spans.push(Span::styled(name, var_style));
+                }
+                continue;
+            }
+            if ch == '"' || ch == '\'' {
+                if !buf.is_empty() {
+                    line.spans.push(std::mem::take(&mut buf).into());
+                }
+                let quote = ch;
+                let mut s = String::new();
+                s.push(quote);
+                while let Some(c) = chars.next() {
+                    s.push(c);
+                    if c == quote {
+                        break;
+                    }
+                }
+                line.spans.push(Span::styled(s, string_style));
+                continue;
+            }
+            buf.push(ch);
+        }
+        if !buf.is_empty() {
+            line.spans.push(buf.into());
+        }
+        out.push(line);
+    }
+    out
+}
+
+fn highlight_dotenv_to_lines(source: &str) -> Vec<Line<'static>> {
+    let comment_style = style_for_capture(HighlightLanguage::Dotenv, "comment");
+    let key_style = style_for_capture(HighlightLanguage::Dotenv, "attribute");
+    let op_style = style_for_capture(HighlightLanguage::Dotenv, "operator");
+    let string_style = style_for_capture(HighlightLanguage::Dotenv, "string");
+    let number_style = style_for_capture(HighlightLanguage::Dotenv, "number");
+
+    let mut out = Vec::new();
+    for line in source.split('\n') {
+        let mut rendered = Line::from("");
+        if line.is_empty() {
+            out.push(rendered);
+            continue;
+        }
+
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('#') {
+            rendered
+                .spans
+                .push(Span::styled(line.to_string(), comment_style));
+            out.push(rendered);
+            continue;
+        }
+
+        // Parse: optional "export", KEY, '=', VALUE
+        let idx = if trimmed.starts_with("export ") {
+            let export_prefix_len = line.len() - trimmed.len() + "export ".len();
+            rendered.spans.push(Span::styled(
+                line[..export_prefix_len].to_string(),
+                style_for_capture(HighlightLanguage::Dotenv, "keyword"),
+            ));
+            export_prefix_len
+        } else {
+            line.len() - trimmed.len()
+        };
+
+        // Find '=' (first occurrence) after idx
+        let Some(eq_pos) = line[idx..].find('=') else {
+            rendered.spans.push(line.to_string().into());
+            out.push(rendered);
+            continue;
+        };
+        let eq_pos = idx + eq_pos;
+
+        // Key segment (including whitespace before '=')
+        let key_segment = &line[..eq_pos];
+        // Attempt to find key token end (strip trailing whitespace)
+        let key_token = key_segment.trim_end();
+        let key_ws = &key_segment[key_token.len()..];
+        if !key_token.is_empty() {
+            rendered
+                .spans
+                .push(Span::styled(key_token.to_string(), key_style));
+        }
+        if !key_ws.is_empty() {
+            rendered.spans.push(key_ws.to_string().into());
+        }
+
+        // '='
+        rendered
+            .spans
+            .push(Span::styled("=".to_string(), op_style));
+
+        // Value (preserve leading spaces)
+        let value = &line[eq_pos + 1..];
+        if value.is_empty() {
+            out.push(rendered);
+            continue;
+        }
+        let value_trimmed = value.trim_start();
+        let leading = &value[..value.len() - value_trimmed.len()];
+        if !leading.is_empty() {
+            rendered.spans.push(leading.to_string().into());
+        }
+
+        let value_style = if value_trimmed.starts_with('"')
+            || value_trimmed.starts_with('\'')
+            || value_trimmed.contains('/')
+            || value_trimmed.contains('.')
+        {
+            string_style
+        } else if value_trimmed.chars().all(|c| c.is_ascii_digit()) {
+            number_style
+        } else {
+            string_style
+        };
+        rendered
+            .spans
+            .push(Span::styled(value_trimmed.to_string(), value_style));
+        out.push(rendered);
+    }
+    out
+}
+
+fn highlight_ini_to_lines(source: &str) -> Vec<Line<'static>> {
+    let comment_style = style_for_capture(HighlightLanguage::Ini, "comment");
+    let section_style = style_for_capture(HighlightLanguage::Ini, "keyword");
+    let key_style = style_for_capture(HighlightLanguage::Ini, "attribute");
+    let op_style = style_for_capture(HighlightLanguage::Ini, "operator");
+    let string_style = style_for_capture(HighlightLanguage::Ini, "string");
+
+    let mut out = Vec::new();
+    for line in source.split('\n') {
+        let mut rendered = Line::from("");
+        if line.is_empty() {
+            out.push(rendered);
+            continue;
+        }
+        let trimmed = line.trim_start();
+        if trimmed.starts_with(';') || trimmed.starts_with('#') {
+            rendered
+                .spans
+                .push(Span::styled(line.to_string(), comment_style));
+            out.push(rendered);
+            continue;
+        }
+        if trimmed.starts_with('[') && trimmed.ends_with(']') && trimmed.len() >= 2 {
+            rendered
+                .spans
+                .push(Span::styled(line.to_string(), section_style));
+            out.push(rendered);
+            continue;
+        }
+        // key=value or key: value
+        let Some((sep_idx, sep_ch)) = trimmed
+            .char_indices()
+            .find_map(|(i, ch)| (ch == '=' || ch == ':').then_some((i, ch)))
+        else {
+            rendered.spans.push(line.to_string().into());
+            out.push(rendered);
+            continue;
+        };
+        let leading_ws_len = line.len() - trimmed.len();
+        if leading_ws_len > 0 {
+            rendered
+                .spans
+                .push(line[..leading_ws_len].to_string().into());
+        }
+        let key_part = &trimmed[..sep_idx];
+        let key_token = key_part.trim_end();
+        let key_ws = &key_part[key_token.len()..];
+        if !key_token.is_empty() {
+            rendered
+                .spans
+                .push(Span::styled(key_token.to_string(), key_style));
+        }
+        if !key_ws.is_empty() {
+            rendered.spans.push(key_ws.to_string().into());
+        }
+        rendered.spans.push(Span::styled(sep_ch.to_string(), op_style));
+        let value = &trimmed[sep_idx + 1..];
+        if !value.is_empty() {
+            rendered
+                .spans
+                .push(Span::styled(value.to_string(), string_style));
+        }
+        out.push(rendered);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -660,6 +1130,7 @@ mod tests {
             ("foo.ts", HighlightLanguage::TypeScript),
             ("foo.tsx", HighlightLanguage::Tsx),
             ("foo.json", HighlightLanguage::Json),
+            ("README.md", HighlightLanguage::Markdown),
             ("foo.toml", HighlightLanguage::Toml),
             ("foo.yml", HighlightLanguage::Yaml),
             ("foo.rs", HighlightLanguage::Rust),
@@ -670,6 +1141,13 @@ mod tests {
             ("foo.css", HighlightLanguage::Css),
             ("foo.scss", HighlightLanguage::Css),
             ("foo.html", HighlightLanguage::Html),
+            ("foo.xml", HighlightLanguage::Xml),
+            ("icon.svg", HighlightLanguage::Xml),
+            ("Dockerfile", HighlightLanguage::Dockerfile),
+            ("Dockerfile.dev", HighlightLanguage::Dockerfile),
+            (".env", HighlightLanguage::Dotenv),
+            (".env.local", HighlightLanguage::Dotenv),
+            ("settings.ini", HighlightLanguage::Ini),
             ("main.tf", HighlightLanguage::Hcl),
         ];
         for (path, expected) in cases {
@@ -685,11 +1163,14 @@ mod tests {
             ("ts", HighlightLanguage::TypeScript),
             ("tsx", HighlightLanguage::Tsx),
             ("json", HighlightLanguage::Json),
+            ("markdown", HighlightLanguage::Markdown),
+            ("md", HighlightLanguage::Markdown),
             ("toml", HighlightLanguage::Toml),
             ("yaml", HighlightLanguage::Yaml),
             ("rust", HighlightLanguage::Rust),
             ("dart", HighlightLanguage::Dart),
             ("flutter", HighlightLanguage::Dart),
+            ("xml", HighlightLanguage::Xml),
             ("sql", HighlightLanguage::Sql),
             ("java", HighlightLanguage::Java),
             ("kotlin", HighlightLanguage::Kotlin),
@@ -697,6 +1178,10 @@ mod tests {
             ("scss", HighlightLanguage::Css),
             ("html", HighlightLanguage::Html),
             ("terraform", HighlightLanguage::Hcl),
+            ("dockerfile", HighlightLanguage::Dockerfile),
+            ("dotenv", HighlightLanguage::Dotenv),
+            ("env", HighlightLanguage::Dotenv),
+            ("ini", HighlightLanguage::Ini),
         ];
         for (fence, expected) in cases {
             let lang = HighlightLanguage::from_fence_info(fence).expect("language");
@@ -716,6 +1201,11 @@ mod tests {
             (HighlightLanguage::Css, "body { color: red; }"),
             (HighlightLanguage::Html, "<div class='x'>hi</div>"),
             (HighlightLanguage::Hcl, "resource \"x\" \"y\" { name = \"z\" }"),
+            (HighlightLanguage::Markdown, "# Title\n- item\n`code`\n"),
+            (HighlightLanguage::Xml, "<a href=\"/\">hi</a>"),
+            (HighlightLanguage::Dockerfile, "FROM alpine\nRUN echo hi\n"),
+            (HighlightLanguage::Dotenv, "FOO=bar\n# comment\n"),
+            (HighlightLanguage::Ini, "[sec]\nkey=value\n"),
         ];
 
         for (lang, src) in cases {
