@@ -129,6 +129,30 @@ fn unicode_tables_use_terminal_width_when_wrap_width_missing() {
 }
 
 #[test]
+fn unicode_tables_synthesize_separator_with_empty_header_cell() {
+    let prev_tables_enabled = crate::markdown_render::tables_enabled();
+    crate::markdown_render::set_tables_enabled(true);
+
+    // Some tables intentionally leave the first header cell blank (e.g. row numbers).
+    // When the model omits the separator row, we synthesize it. That must preserve the
+    // correct column count including empty header cells so pulldown-cmark recognizes a table.
+    let md = "|  | Col |\n| 1 | a |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|l| l.spans.iter().map(|s| s.content.clone()).collect::<String>())
+        .collect();
+
+    assert!(
+        lines.iter().any(|l| l.starts_with('┌')) && lines.iter().any(|l| l.starts_with('└')),
+        "expected box table rendered from markdown; got: {lines:?}"
+    );
+
+    crate::markdown_render::set_tables_enabled(prev_tables_enabled);
+}
+
+#[test]
 fn headings() {
     let md = "# Heading 1\n## Heading 2\n### Heading 3\n#### Heading 4\n##### Heading 5\n###### Heading 6\n";
     let text = render_markdown_text(md);
