@@ -15,6 +15,7 @@
 //! - Context usage (remaining %, used %, window size)
 //! - Usage limits (5-hour, weekly)
 //! - Session info (ID, tokens used)
+//! - Rollout JSONL path (home-redacted)
 //! - Application version
 
 use ratatui::buffer::Buffer;
@@ -44,6 +45,7 @@ use crate::render::renderable::Renderable;
 /// - Git-related items only show when in a git repository
 /// - Context/limit items only show when data is available from the API
 /// - Session ID only shows after a session has started
+/// - Rollout path only shows for persistent (non-ephemeral) sessions
 #[derive(EnumIter, EnumString, Display, Debug, Clone, Eq, PartialEq)]
 #[strum(serialize_all = "kebab_case")]
 pub(crate) enum StatusLineItem {
@@ -91,6 +93,9 @@ pub(crate) enum StatusLineItem {
 
     /// Full session UUID.
     SessionId,
+
+    /// Current rollout JSONL path (if available).
+    RolloutPath,
 }
 
 impl StatusLineItem {
@@ -124,6 +129,7 @@ impl StatusLineItem {
             StatusLineItem::SessionId => {
                 "Current session identifier (omitted until session starts)"
             }
+            StatusLineItem::RolloutPath => "Current rollout JSONL path (omitted when unavailable)",
         }
     }
 
@@ -148,6 +154,7 @@ impl StatusLineItem {
             StatusLineItem::TotalInputTokens => "17,588 in",
             StatusLineItem::TotalOutputTokens => "265 out",
             StatusLineItem::SessionId => "019c19bd-ceb6-73b0-adc8-8ec0397b85cf",
+            StatusLineItem::RolloutPath => "~/.codex/sessions/2026/01/01/rollout-1234.jsonl",
         }
     }
 }
@@ -274,5 +281,27 @@ impl Renderable for StatusLineSetupView {
 
     fn desired_height(&self, width: u16) -> u16 {
         self.picker.desired_height(width)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn rollout_path_item_has_home_redacted_preview() {
+        assert_eq!(
+            StatusLineItem::RolloutPath.render(),
+            "~/.codex/sessions/2026/01/01/rollout-1234.jsonl"
+        );
+    }
+
+    #[test]
+    fn rollout_path_item_description_mentions_omission_behavior() {
+        assert_eq!(
+            StatusLineItem::RolloutPath.description(),
+            "Current rollout JSONL path (omitted when unavailable)"
+        );
     }
 }

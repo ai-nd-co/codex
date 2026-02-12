@@ -4129,6 +4129,17 @@ impl ChatWidget {
         })
     }
 
+    fn status_line_rollout_path_display(&self) -> Option<String> {
+        self.current_rollout_path.as_ref().map(|path| {
+            let absolute = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                self.status_line_cwd().join(path)
+            };
+            format_directory_display(&absolute, None)
+        })
+    }
+
     /// Resets git-branch cache state when the status-line cwd changes.
     ///
     /// The branch cache is keyed by cwd because branch lookup is performed relative to that path.
@@ -4231,6 +4242,7 @@ impl ChatWidget {
                 format_tokens_compact(self.status_line_total_usage().output_tokens)
             )),
             StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
+            StatusLineItem::RolloutPath => self.status_line_rollout_path_display(),
         }
     }
 

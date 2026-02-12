@@ -5016,6 +5016,39 @@ async fn status_line_branch_refreshes_after_interrupt() {
 }
 
 #[tokio::test]
+async fn status_line_rollout_path_is_omitted_when_unavailable() {
+    let (chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    assert_eq!(
+        chat.status_line_value_for_item(&StatusLineItem::RolloutPath),
+        None
+    );
+}
+
+#[tokio::test]
+async fn status_line_rollout_path_uses_home_redaction() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let home = dirs::home_dir().expect("home dir should be available");
+    let rollout_path = home
+        .join(".codex")
+        .join("sessions")
+        .join("2026")
+        .join("02")
+        .join("12")
+        .join("rollout-1234.jsonl");
+    chat.current_rollout_path = Some(rollout_path);
+
+    let sep = std::path::MAIN_SEPARATOR;
+    let expected =
+        format!("~{sep}.codex{sep}sessions{sep}2026{sep}02{sep}12{sep}rollout-1234.jsonl");
+
+    assert_eq!(
+        chat.status_line_value_for_item(&StatusLineItem::RolloutPath),
+        Some(expected)
+    );
+}
+
+#[tokio::test]
 async fn stream_recovery_restores_previous_status_header() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.handle_codex_event(Event {
