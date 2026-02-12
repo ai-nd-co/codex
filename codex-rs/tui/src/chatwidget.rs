@@ -678,6 +678,16 @@ pub(crate) struct ChatWidget {
     status_line_branch_pending: bool,
     // True once we've attempted a branch lookup for the current CWD.
     status_line_branch_lookup_complete: bool,
+    // Start timestamp for the currently running live turn.
+    turn_started_at: Option<Instant>,
+    // First observed assistant token timestamp for the current live turn.
+    turn_first_token_at: Option<Instant>,
+    // TTFT snapshot from the last completed live turn.
+    last_turn_ttft: Option<Duration>,
+    // Output-token TPS snapshot from the last completed live turn.
+    last_turn_output_tps: Option<f64>,
+    // Reasoning-token TPS snapshot from the last completed live turn.
+    last_turn_reasoning_tps: Option<f64>,
     external_editor_state: ExternalEditorState,
     realtime_conversation: RealtimeConversationUiState,
     last_rendered_user_message_event: Option<RenderedUserMessageEvent>,
@@ -1288,6 +1298,7 @@ impl ChatWidget {
         // If we have a stream_controller, then the final agent message is redundant and will be a
         // duplicate of what has already been streamed.
         if self.stream_controller.is_none() && !message.is_empty() {
+            self.mark_first_token_if_needed(&message);
             self.handle_streaming_delta(message);
         }
         self.flush_answer_stream_with_separator();
@@ -1296,10 +1307,12 @@ impl ChatWidget {
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
+        self.mark_first_token_if_needed(&delta);
         self.handle_streaming_delta(delta);
     }
 
     fn on_plan_delta(&mut self, delta: String) {
+        self.mark_first_token_if_needed(&delta);
         if self.active_mode_kind() != ModeKind::Plan {
             return;
         }
@@ -1362,6 +1375,7 @@ impl ChatWidget {
     }
 
     fn on_agent_reasoning_delta(&mut self, delta: String) {
+        self.mark_first_token_if_needed(&delta);
         // For reasoning deltas, do not stream to history. Accumulate the
         // current reasoning block and extract the first bold element
         // (between **/**) as the chunk header. Show this header as status.
@@ -1423,6 +1437,8 @@ impl ChatWidget {
         self.pending_status_indicator_restore = false;
         self.bottom_pane.set_interrupt_hint_visible(true);
         self.set_status_header(String::from("Working"));
+        self.turn_started_at = Some(Instant::now());
+        self.turn_first_token_at = None;
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
         self.request_redraw();
@@ -1434,6 +1450,7 @@ impl ChatWidget {
         {
             self.last_copyable_output = Some(message.clone());
         }
+        let completed_at = Instant::now();
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
         if let Some(mut controller) = self.plan_stream_controller.take()
@@ -1446,6 +1463,7 @@ impl ChatWidget {
             self.collect_runtime_metrics_delta();
             let runtime_metrics =
                 (!self.turn_runtime_metrics.is_empty()).then_some(self.turn_runtime_metrics);
+            self.capture_last_completed_turn_metrics(completed_at, runtime_metrics);
             let show_work_separator = self.needs_final_message_separator && self.had_work_activity;
             if show_work_separator || runtime_metrics.is_some() {
                 let elapsed_seconds = if show_work_separator {
@@ -1465,6 +1483,10 @@ impl ChatWidget {
             self.needs_final_message_separator = false;
             self.had_work_activity = false;
             self.request_status_line_branch_refresh();
+            self.refresh_status_line();
+        } else {
+            self.turn_started_at = None;
+            self.turn_first_token_at = None;
         }
         // Mark task stopped and request redraw now that all content is in history.
         self.pending_status_indicator_restore = false;
@@ -1493,6 +1515,71 @@ impl ChatWidget {
         });
 
         self.maybe_show_pending_rate_limit_prompt();
+    }
+
+    fn mark_first_token_if_needed(&mut self, chunk: &str) {
+        if chunk.is_empty() {
+            return;
+        }
+        if self.turn_started_at.is_none() || self.turn_first_token_at.is_some() {
+            return;
+        }
+        self.turn_first_token_at = Some(Instant::now());
+    }
+
+    fn capture_last_completed_turn_metrics(
+        &mut self,
+        completed_at: Instant,
+        runtime_metrics: Option<RuntimeMetricsSummary>,
+    ) {
+        self.last_turn_ttft = self
+            .turn_started_at
+            .zip(self.turn_first_token_at)
+            .map(|(start, first)| first.saturating_duration_since(start));
+
+        let (output_tokens, reasoning_tokens) = self
+            .token_info
+            .as_ref()
+            .map(|info| {
+                (
+                    info.last_token_usage.output_tokens.max(0),
+                    info.last_token_usage.reasoning_output_tokens.max(0),
+                )
+            })
+            .unwrap_or((0, 0));
+        let denom_s = self.turn_tps_denominator_seconds(completed_at, runtime_metrics);
+        self.last_turn_output_tps = self.compute_tokens_per_second(output_tokens, denom_s);
+        self.last_turn_reasoning_tps = self.compute_tokens_per_second(reasoning_tokens, denom_s);
+
+        self.turn_started_at = None;
+        self.turn_first_token_at = None;
+    }
+
+    fn turn_tps_denominator_seconds(
+        &self,
+        completed_at: Instant,
+        runtime_metrics: Option<RuntimeMetricsSummary>,
+    ) -> Option<f64> {
+        let inference_seconds = runtime_metrics
+            .map(|summary| summary.responses_api_inference_time_ms)
+            .filter(|ms| *ms > 0)
+            .map(|ms| Duration::from_millis(ms).as_secs_f64());
+        let wall_clock_seconds = self
+            .turn_first_token_at
+            .map(|first| completed_at.saturating_duration_since(first).as_secs_f64())
+            .filter(|seconds| *seconds > 0.0);
+        inference_seconds
+            .or(wall_clock_seconds)
+            .map(|s| s.max(0.001))
+    }
+
+    fn compute_tokens_per_second(&self, tokens: i64, denom_s: Option<f64>) -> Option<f64> {
+        if tokens <= 0 {
+            return None;
+        }
+        denom_s
+            .map(|seconds| tokens as f64 / seconds)
+            .filter(|tps| tps.is_finite() && *tps > 0.0)
     }
 
     fn maybe_prompt_plan_implementation(&mut self) {
@@ -1708,6 +1795,8 @@ impl ChatWidget {
         // Reset running state and clear streaming buffers.
         self.agent_turn_running = false;
         self.turn_sleep_inhibitor.set_turn_running(false);
+        self.turn_started_at = None;
+        self.turn_first_token_at = None;
         self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
@@ -2909,6 +2998,11 @@ impl ChatWidget {
             status_line_branch_cwd: None,
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
+            turn_started_at: None,
+            turn_first_token_at: None,
+            last_turn_ttft: None,
+            last_turn_output_tps: None,
+            last_turn_reasoning_tps: None,
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_event: None,
@@ -3094,6 +3188,11 @@ impl ChatWidget {
             status_line_branch_cwd: None,
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
+            turn_started_at: None,
+            turn_first_token_at: None,
+            last_turn_ttft: None,
+            last_turn_output_tps: None,
+            last_turn_reasoning_tps: None,
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_event: None,
@@ -3268,6 +3367,11 @@ impl ChatWidget {
             status_line_branch_cwd: None,
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
+            turn_started_at: None,
+            turn_first_token_at: None,
+            last_turn_ttft: None,
+            last_turn_output_tps: None,
+            last_turn_reasoning_tps: None,
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_event: None,
@@ -4399,6 +4503,10 @@ impl ChatWidget {
                 if !is_resume_initial_replay {
                     self.on_task_started();
                 }
+                if from_replay {
+                    self.turn_started_at = None;
+                    self.turn_first_token_at = None;
+                }
             }
             EventMsg::TurnComplete(TurnCompleteEvent {
                 last_agent_message, ..
@@ -4961,6 +5069,9 @@ impl ChatWidget {
             )),
             StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
             StatusLineItem::RolloutPath => self.status_line_rollout_path_display(),
+            StatusLineItem::TurnTtft => self.status_line_turn_ttft_display(),
+            StatusLineItem::TurnTps => self.status_line_turn_tps_display(),
+            StatusLineItem::TurnReasoningTps => self.status_line_turn_reasoning_tps_display(),
         }
     }
 
@@ -4998,6 +5109,39 @@ impl ChatWidget {
             .as_ref()
             .map(|info| info.total_token_usage.clone())
             .unwrap_or_default()
+    }
+
+    fn status_line_turn_ttft_display(&self) -> Option<String> {
+        let seconds = self.last_turn_ttft?.as_secs_f64();
+        if seconds < 10.0 {
+            Some(format!("ttft {seconds:.1}s"))
+        } else {
+            Some(format!("ttft {seconds:.0}s"))
+        }
+    }
+
+    fn status_line_turn_tps_display(&self) -> Option<String> {
+        let tps = self.last_turn_output_tps?;
+        if !tps.is_finite() || tps <= 0.0 {
+            return None;
+        }
+        if tps < 10.0 {
+            Some(format!("tps {tps:.1}/s"))
+        } else {
+            Some(format!("tps {tps:.0}/s"))
+        }
+    }
+
+    fn status_line_turn_reasoning_tps_display(&self) -> Option<String> {
+        let tps = self.last_turn_reasoning_tps?;
+        if !tps.is_finite() || tps <= 0.0 {
+            return None;
+        }
+        if tps < 10.0 {
+            Some(format!("rtps {tps:.1}/s"))
+        } else {
+            Some(format!("rtps {tps:.0}/s"))
+        }
     }
 
     fn status_line_limit_display(

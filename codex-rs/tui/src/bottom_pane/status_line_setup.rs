@@ -16,6 +16,7 @@
 //! - Usage limits (5-hour, weekly)
 //! - Session info (ID, tokens used)
 //! - Rollout JSONL path (home-redacted)
+//! - Turn performance (TTFT, TPS)
 //! - Application version
 
 use ratatui::buffer::Buffer;
@@ -96,6 +97,15 @@ pub(crate) enum StatusLineItem {
 
     /// Current rollout JSONL path (if available).
     RolloutPath,
+
+    /// Time to first token for the last completed turn.
+    TurnTtft,
+
+    /// Output tokens per second for the last completed turn.
+    TurnTps,
+
+    /// Reasoning tokens per second for the last completed turn.
+    TurnReasoningTps,
 }
 
 impl StatusLineItem {
@@ -130,6 +140,15 @@ impl StatusLineItem {
                 "Current session identifier (omitted until session starts)"
             }
             StatusLineItem::RolloutPath => "Current rollout JSONL path (omitted when unavailable)",
+            StatusLineItem::TurnTtft => {
+                "Time to first token for the last completed turn (omitted when unavailable)"
+            }
+            StatusLineItem::TurnTps => {
+                "Output tokens per second for the last completed turn (omitted when unavailable)"
+            }
+            StatusLineItem::TurnReasoningTps => {
+                "Reasoning tokens per second for the last completed turn (omitted when unavailable)"
+            }
         }
     }
 
@@ -155,6 +174,9 @@ impl StatusLineItem {
             StatusLineItem::TotalOutputTokens => "265 out",
             StatusLineItem::SessionId => "019c19bd-ceb6-73b0-adc8-8ec0397b85cf",
             StatusLineItem::RolloutPath => "~/.codex/sessions/2026/01/01/rollout-1234.jsonl",
+            StatusLineItem::TurnTtft => "ttft 0.8s",
+            StatusLineItem::TurnTps => "tps 42/s",
+            StatusLineItem::TurnReasoningTps => "rtps 30/s",
         }
     }
 }
@@ -288,6 +310,43 @@ impl Renderable for StatusLineSetupView {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn turn_statusline_items_parse_from_kebab_case() {
+        assert_eq!(
+            "turn-ttft".parse::<StatusLineItem>().ok(),
+            Some(StatusLineItem::TurnTtft)
+        );
+        assert_eq!(
+            "turn-tps".parse::<StatusLineItem>().ok(),
+            Some(StatusLineItem::TurnTps)
+        );
+        assert_eq!(
+            "turn-reasoning-tps".parse::<StatusLineItem>().ok(),
+            Some(StatusLineItem::TurnReasoningTps)
+        );
+    }
+
+    #[test]
+    fn turn_statusline_items_have_preview_and_description() {
+        assert_eq!(
+            StatusLineItem::TurnTtft.description(),
+            "Time to first token for the last completed turn (omitted when unavailable)"
+        );
+        assert_eq!(StatusLineItem::TurnTtft.render(), "ttft 0.8s");
+
+        assert_eq!(
+            StatusLineItem::TurnTps.description(),
+            "Output tokens per second for the last completed turn (omitted when unavailable)"
+        );
+        assert_eq!(StatusLineItem::TurnTps.render(), "tps 42/s");
+
+        assert_eq!(
+            StatusLineItem::TurnReasoningTps.description(),
+            "Reasoning tokens per second for the last completed turn (omitted when unavailable)"
+        );
+        assert_eq!(StatusLineItem::TurnReasoningTps.render(), "rtps 30/s");
+    }
 
     #[test]
     fn rollout_path_item_has_home_redacted_preview() {
