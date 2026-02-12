@@ -144,6 +144,8 @@ const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
 const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
+const MAX_PENDING_LOCAL_USER_MESSAGE_ACKS: usize = 64;
+const MAX_SEEN_USER_MESSAGE_EVENT_IDS: usize = 1024;
 
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
@@ -550,6 +552,15 @@ pub(crate) struct ChatWidget {
     suppress_session_configured_redraw: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
+    // Local user messages that were already rendered optimistically in the UI and are awaiting a
+    // matching upstream user-message event.
+    pending_local_user_message_acks: VecDeque<PendingLocalUserMessageAck>,
+    // Recently seen upstream user-message event ids (legacy `EventMsg::UserMessage` and
+    // `ItemCompleted(TurnItem::UserMessage)`) used to suppress duplicate rendering across mixed
+    // event streams.
+    seen_user_message_event_ids: HashSet<String>,
+    // Insertion order for `seen_user_message_event_ids` so we can cap memory.
+    seen_user_message_event_id_order: VecDeque<String>,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
     /// When `Some`, the user has pressed a quit shortcut and the second press
@@ -649,6 +660,13 @@ pub(crate) struct UserMessage {
     local_images: Vec<LocalImageAttachment>,
     text_elements: Vec<TextElement>,
     mention_paths: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct PendingLocalUserMessageAck {
+    message: String,
+    text_elements: Vec<TextElement>,
+    local_images: Vec<PathBuf>,
 }
 
 impl From<String> for UserMessage {
@@ -1258,6 +1276,9 @@ impl ChatWidget {
             self.add_boxed_history(cell);
         }
         self.flush_unified_exec_wait_streak();
+        // Keep explored/tool-call groups bounded to a single turn: once a turn completes, any
+        // remaining active cell must be committed before the next user/agent activity begins.
+        self.flush_active_cell();
         if !from_replay {
             let runtime_metrics = self.otel_manager.runtime_metrics_summary();
             self.capture_last_completed_turn_metrics(completed_at, runtime_metrics);
@@ -2280,6 +2301,10 @@ impl ChatWidget {
             .unwrap_or(true);
         if needs_new {
             let verbose_tool_calls = self.config.features.enabled(Feature::VerboseToolCalls);
+            let disable_explored_compaction = self
+                .config
+                .features
+                .enabled(Feature::DisableExploredCompaction);
             self.flush_active_cell();
             self.active_cell = Some(Box::new(new_active_exec_command(
                 ev.call_id.clone(),
@@ -2289,6 +2314,7 @@ impl ChatWidget {
                 ev.interaction_input.clone(),
                 self.config.animations,
                 verbose_tool_calls,
+                disable_explored_compaction,
             )));
         }
 
@@ -2446,6 +2472,10 @@ impl ChatWidget {
             self.bump_active_cell_revision();
         } else {
             let verbose_tool_calls = self.config.features.enabled(Feature::VerboseToolCalls);
+            let disable_explored_compaction = self
+                .config
+                .features
+                .enabled(Feature::DisableExploredCompaction);
             self.flush_active_cell();
 
             self.active_cell = Some(Box::new(new_active_exec_command(
@@ -2456,6 +2486,7 @@ impl ChatWidget {
                 interaction_input,
                 self.config.animations,
                 verbose_tool_calls,
+                disable_explored_compaction,
             )));
             self.bump_active_cell_revision();
         }
@@ -2611,6 +2642,9 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
+            pending_local_user_message_acks: VecDeque::new(),
+            seen_user_message_event_ids: HashSet::new(),
+            seen_user_message_event_id_order: VecDeque::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -2787,6 +2821,9 @@ impl ChatWidget {
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
+            pending_local_user_message_acks: VecDeque::new(),
+            seen_user_message_event_ids: HashSet::new(),
+            seen_user_message_event_id_order: VecDeque::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -2944,6 +2981,9 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
+            pending_local_user_message_acks: VecDeque::new(),
+            seen_user_message_event_ids: HashSet::new(),
+            seen_user_message_event_id_order: VecDeque::new(),
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
             pending_notification: None,
@@ -3758,7 +3798,13 @@ impl ChatWidget {
 
         // Only show the text portion in conversation history.
         if !text.is_empty() {
-            let local_image_paths = local_images.into_iter().map(|img| img.path).collect();
+            let local_image_paths: Vec<PathBuf> =
+                local_images.into_iter().map(|img| img.path).collect();
+            self.record_pending_local_user_message_ack(
+                &text,
+                text_elements.as_slice(),
+                local_image_paths.as_slice(),
+            );
             self.add_to_history(history_cell::new_user_prompt(
                 text,
                 text_elements,
@@ -3965,11 +4011,7 @@ impl ChatWidget {
                 additional_details,
                 ..
             }) => self.on_stream_error(message, additional_details),
-            EventMsg::UserMessage(ev) => {
-                if from_replay {
-                    self.on_user_message_event(ev);
-                }
-            }
+            EventMsg::UserMessage(ev) => self.on_user_message_event(ev, id.as_deref(), from_replay),
             EventMsg::EnteredReviewMode(review_request) => {
                 self.on_entered_review_mode(review_request, from_replay)
             }
@@ -3992,11 +4034,22 @@ impl ChatWidget {
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::DynamicToolCallRequest(_) => {}
-            EventMsg::ItemCompleted(event) => {
-                if let codex_protocol::items::TurnItem::Plan(plan_item) = event.item {
+            EventMsg::ItemCompleted(event) => match event.item {
+                codex_protocol::items::TurnItem::Plan(plan_item) => {
                     self.on_plan_item_completed(plan_item.text);
                 }
-            }
+                codex_protocol::items::TurnItem::UserMessage(user_item) => {
+                    let source_id = user_item.id.clone();
+                    if let EventMsg::UserMessage(user_event) = user_item.as_legacy_event() {
+                        self.on_user_message_event(
+                            user_event,
+                            Some(source_id.as_str()),
+                            from_replay,
+                        );
+                    }
+                }
+                _ => {}
+            },
         }
     }
 
@@ -4053,8 +4106,70 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_user_message_event(&mut self, event: UserMessageEvent) {
-        if !event.message.trim().is_empty() {
+    fn remember_user_message_event_id(&mut self, source_id: Option<&str>) -> bool {
+        let Some(source_id) = source_id.filter(|id| !id.is_empty()) else {
+            return true;
+        };
+        if !self
+            .seen_user_message_event_ids
+            .insert(source_id.to_string())
+        {
+            return false;
+        }
+        self.seen_user_message_event_id_order
+            .push_back(source_id.to_string());
+        while self.seen_user_message_event_id_order.len() > MAX_SEEN_USER_MESSAGE_EVENT_IDS {
+            if let Some(removed) = self.seen_user_message_event_id_order.pop_front() {
+                self.seen_user_message_event_ids.remove(&removed);
+            }
+        }
+        true
+    }
+
+    fn record_pending_local_user_message_ack(
+        &mut self,
+        message: &str,
+        text_elements: &[TextElement],
+        local_images: &[PathBuf],
+    ) {
+        self.pending_local_user_message_acks
+            .push_back(PendingLocalUserMessageAck {
+                message: message.to_string(),
+                text_elements: text_elements.to_vec(),
+                local_images: local_images.to_vec(),
+            });
+        while self.pending_local_user_message_acks.len() > MAX_PENDING_LOCAL_USER_MESSAGE_ACKS {
+            self.pending_local_user_message_acks.pop_front();
+        }
+    }
+
+    fn consume_pending_local_user_message_ack(&mut self, event: &UserMessageEvent) -> bool {
+        let idx = self
+            .pending_local_user_message_acks
+            .iter()
+            .position(|pending| {
+                pending.message == event.message
+                    && pending.text_elements == event.text_elements
+                    && pending.local_images == event.local_images
+            });
+        if let Some(idx) = idx {
+            self.pending_local_user_message_acks.remove(idx);
+            return true;
+        }
+        false
+    }
+
+    fn on_user_message_event(
+        &mut self,
+        event: UserMessageEvent,
+        source_id: Option<&str>,
+        from_replay: bool,
+    ) {
+        let already_seen = !self.remember_user_message_event_id(source_id);
+        let matches_local_echo =
+            !from_replay && self.consume_pending_local_user_message_ack(&event);
+
+        if !already_seen && !matches_local_echo && !event.message.trim().is_empty() {
             self.add_to_history(history_cell::new_user_prompt(
                 event.message,
                 event.text_elements,

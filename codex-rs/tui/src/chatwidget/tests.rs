@@ -943,6 +943,9 @@ async fn make_chatwidget_manual(
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),
+        pending_local_user_message_acks: VecDeque::new(),
+        seen_user_message_event_ids: HashSet::new(),
+        seen_user_message_event_id_order: VecDeque::new(),
         suppress_session_configured_redraw: false,
         pending_notification: None,
         quit_shortcut_expires_at: None,
@@ -2201,6 +2204,192 @@ async fn exec_history_shows_unified_exec_tool_calls() {
 
     let blob = active_blob(&chat);
     assert_eq!(blob, "• Explored\n  └ List ls\n");
+}
+
+#[tokio::test]
+async fn disable_explored_compaction_feature_prevents_cross_call_grouping() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config
+        .features
+        .enable(Feature::DisableExploredCompaction);
+    chat.on_task_started();
+
+    let first = begin_exec_with_source(
+        &mut chat,
+        "call-first",
+        "ls",
+        ExecCommandSource::UnifiedExecStartup,
+    );
+    end_exec(&mut chat, first, "", "", 0);
+    assert_eq!(active_blob(&chat), "• Explored\n  └ List ls\n");
+
+    let second = begin_exec_with_source(
+        &mut chat,
+        "call-second",
+        "rg needle",
+        ExecCommandSource::UnifiedExecStartup,
+    );
+    end_exec(&mut chat, second, "", "", 0);
+
+    let committed = drain_insert_history(&mut rx);
+    let committed_blob = committed
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        committed_blob.contains("List ls"),
+        "expected first explored call to flush instead of grouping: {committed_blob:?}"
+    );
+
+    let active = active_blob(&chat);
+    assert!(
+        active.contains("Search needle"),
+        "expected second call to be rendered independently: {active:?}"
+    );
+    assert!(
+        !active.contains("List ls"),
+        "expected no cross-call grouping when feature is enabled: {active:?}"
+    );
+}
+
+#[tokio::test]
+async fn explored_cells_do_not_merge_across_turn_complete() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    let first = begin_exec_with_source(
+        &mut chat,
+        "call-first",
+        "ls",
+        ExecCommandSource::UnifiedExecStartup,
+    );
+    end_exec(&mut chat, first, "", "", 0);
+    assert_eq!(active_blob(&chat), "• Explored\n  └ List ls\n");
+
+    chat.on_task_complete(None, false);
+    let committed = drain_insert_history(&mut rx);
+    let committed_blob = committed
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        committed_blob.contains("List ls"),
+        "expected first explored group to flush at turn completion: {committed_blob:?}"
+    );
+    assert!(
+        chat.active_cell.is_none(),
+        "expected no active explored group after turn completion"
+    );
+
+    chat.on_task_started();
+    let second = begin_exec_with_source(
+        &mut chat,
+        "call-second",
+        "rg needle",
+        ExecCommandSource::UnifiedExecStartup,
+    );
+    end_exec(&mut chat, second, "", "", 0);
+    let active = active_blob(&chat);
+    assert!(
+        active.contains("Search needle"),
+        "expected second turn to start a new explored group: {active:?}"
+    );
+    assert!(
+        !active.contains("List ls"),
+        "expected prior-turn explored call to stay committed, not re-coalesce: {active:?}"
+    );
+}
+
+#[tokio::test]
+async fn live_user_message_event_matching_local_echo_is_suppressed() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.submit_user_message(UserMessage::from("hello local".to_string()));
+    let cells = drain_insert_history(&mut rx);
+    let local_blob = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        local_blob.contains("hello local"),
+        "expected optimistic local echo to render: {local_blob:?}"
+    );
+
+    let message = UserMessageEvent {
+        message: "hello local".to_string(),
+        images: None,
+        text_elements: Vec::new(),
+        local_images: Vec::new(),
+    };
+    chat.handle_codex_event(Event {
+        id: "user-msg-1".to_string(),
+        msg: EventMsg::UserMessage(message.clone()),
+    });
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "expected matching upstream user message ack to be suppressed"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "user-msg-1".to_string(),
+        msg: EventMsg::UserMessage(message),
+    });
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "expected duplicate upstream user message id to be suppressed"
+    );
+}
+
+#[tokio::test]
+async fn item_completed_user_message_renders_once_across_mixed_event_forms() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    chat.handle_codex_event(Event {
+        id: "user-item-1".to_string(),
+        msg: EventMsg::ItemCompleted(codex_core::protocol::ItemCompletedEvent {
+            thread_id,
+            turn_id: "turn-1".to_string(),
+            item: codex_protocol::items::TurnItem::UserMessage(
+                codex_protocol::items::UserMessageItem {
+                    id: "user-item-1".to_string(),
+                    content: vec![UserInput::Text {
+                        text: "remote from item".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                },
+            ),
+        }),
+    });
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("remote from item"),
+        "expected item-completed user message to render: {rendered:?}"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "user-item-1".to_string(),
+        msg: EventMsg::UserMessage(UserMessageEvent {
+            message: "remote from item".to_string(),
+            images: None,
+            text_elements: Vec::new(),
+            local_images: Vec::new(),
+        }),
+    });
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "expected duplicate user message across mixed event forms to render once"
+    );
 }
 
 #[tokio::test]

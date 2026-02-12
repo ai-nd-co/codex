@@ -45,8 +45,9 @@ pub(crate) fn new_active_exec_command(
     interaction_input: Option<String>,
     animations_enabled: bool,
     verbose_tool_calls: bool,
+    disable_explored_compaction: bool,
 ) -> ExecCell {
-    ExecCell::new(
+    ExecCell::new_with_explored_compaction(
         ExecCall {
             call_id,
             command,
@@ -59,6 +60,7 @@ pub(crate) fn new_active_exec_command(
         },
         animations_enabled,
         verbose_tool_calls,
+        disable_explored_compaction,
     )
 }
 
@@ -342,11 +344,13 @@ impl ExecCell {
         ]));
 
         let verbose_tool_calls = self.verbose_tool_calls();
+        let disable_explored_compaction = self.disable_explored_compaction();
         let mut calls = self.calls.clone();
         let mut out_indented = Vec::new();
         while !calls.is_empty() {
             let mut call = calls.remove(0);
-            if !verbose_tool_calls
+            if !disable_explored_compaction
+                && !verbose_tool_calls
                 && call
                     .parsed
                     .iter()
@@ -371,7 +375,9 @@ impl ExecCell {
                 .iter()
                 .all(|parsed| matches!(parsed, ParsedCommand::Read { .. }));
 
-            let call_lines: Vec<(&str, Vec<Span<'static>>)> = if reads_only {
+            let call_lines: Vec<(&str, Vec<Span<'static>>)> = if reads_only
+                && !disable_explored_compaction
+            {
                 let names = call
                     .parsed
                     .iter()
@@ -869,5 +875,49 @@ mod tests {
         assert!(contains_text(&lines, "demo.py"));
         assert!(contains_text(&lines, "line1"));
         assert!(contains_text(&lines, "line2"));
+    }
+
+    #[test]
+    fn disable_explored_compaction_shows_each_read_line() {
+        let call = ExecCall {
+            call_id: "call-id".to_string(),
+            command: vec!["bash".into(), "-lc".into(), "cat a.txt && cat b.txt".into()],
+            parsed: vec![
+                ParsedCommand::Read {
+                    cmd: "cat a.txt".to_string(),
+                    name: "a.txt".to_string(),
+                    path: PathBuf::from("/tmp/a.txt"),
+                },
+                ParsedCommand::Read {
+                    cmd: "cat b.txt".to_string(),
+                    name: "b.txt".to_string(),
+                    path: PathBuf::from("/tmp/b.txt"),
+                },
+            ],
+            output: None,
+            source: ExecCommandSource::Agent,
+            start_time: None,
+            duration: None,
+            interaction_input: None,
+        };
+        let cell = ExecCell::new_with_explored_compaction(call, false, false, true);
+        let lines = cell.display_lines(80);
+        let rendered = lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("Read a.txt"));
+        assert!(rendered.contains("Read b.txt"));
+        assert!(
+            !rendered.contains("a.txt, b.txt"),
+            "expected read lines to stay uncollapsed when compaction is disabled: {rendered:?}"
+        );
     }
 }
