@@ -3161,8 +3161,10 @@ impl ChatComposer {
                     let Some(indicator) = indicator else {
                         return truncate_line_with_ellipsis_if_overflow(base.clone(), max_width);
                     };
-                    let suffix =
-                        Line::from(vec![Span::from(" · ").dim(), indicator.styled_span(show_cycle_hint)]);
+                    let suffix = Line::from(vec![
+                        Span::from(" · ").dim(),
+                        indicator.styled_span(show_cycle_hint),
+                    ]);
                     let suffix_width = suffix.width();
                     if suffix_width >= max_width {
                         return truncate_line_with_ellipsis_if_overflow(
@@ -3171,13 +3173,16 @@ impl ChatComposer {
                         );
                     }
                     let prefix_budget = max_width.saturating_sub(suffix_width);
-                    let mut out = truncate_line_with_ellipsis_if_overflow(base.clone(), prefix_budget);
+                    let mut out =
+                        truncate_line_with_ellipsis_if_overflow(base.clone(), prefix_budget);
                     out.extend(suffix.spans);
                     out
                 }
 
-                let status_line_base =
-                    footer_props.status_line_value.as_ref().map(|line| line.clone().dim());
+                let status_line_base = footer_props
+                    .status_line_value
+                    .as_ref()
+                    .map(|line| line.clone().dim());
                 let mut truncated_status_line = if status_line_candidate {
                     status_line_base.as_ref().map(|base| {
                         truncate_status_line_with_mode_indicator(
@@ -3310,7 +3315,12 @@ impl ChatComposer {
                         SummaryLeft::Custom(line) => {
                             render_footer_line(hint_rect, buf, line);
                         }
-                        SummaryLeft::None => {}
+                        SummaryLeft::None => {
+                            if status_line_active && let Some(line) = truncated_status_line.clone()
+                            {
+                                render_footer_line(hint_rect, buf, line);
+                            }
+                        }
                     }
                 } else if self.footer_flash_visible() {
                     if let Some(flash) = self.footer_flash.as_ref() {
@@ -3676,6 +3686,8 @@ mod tests {
         );
 
         snapshot_composer_state("footer_mode_hidden_while_typing", true, |composer| {
+            composer.set_status_line_enabled(true);
+            composer.set_status_line(Some(Line::from("Status line content".to_string())));
             type_chars_humanlike(composer, &['h']);
         });
     }
