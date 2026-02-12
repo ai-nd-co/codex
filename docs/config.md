@@ -28,6 +28,23 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.
 
+## TUI experimental feature flags
+
+Some TUI behavior is gated behind feature flags that can be toggled via `/experimental` or in
+`~/.codex/config.toml` under `[features]`.
+
+### Disable explored compaction
+
+If you want the transcript to show each individual `Explored`/`Exploring` tool-call line (no
+collapsing of reads/searches/lists into summaries), enable:
+
+```toml
+[features]
+disable_explored_compaction = true
+```
+
+This does **not** change output truncation behavior (max-lines + ellipsis).
+
 ## Notices
 
 Codex stores "do not show again" flags for some UI prompts under the `[notice]` table.

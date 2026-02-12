@@ -34,6 +34,7 @@ pub(crate) struct ExecCell {
 }
 
 impl ExecCell {
+    #[allow(dead_code)]
     pub(crate) fn new(call: ExecCall, animations_enabled: bool, verbose_tool_calls: bool) -> Self {
         Self::new_with_explored_compaction(call, animations_enabled, verbose_tool_calls, false)
     }
