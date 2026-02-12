@@ -140,6 +140,10 @@ pub enum Feature {
     Steer,
     /// Allow request_user_input in Default collaboration mode.
     DefaultModeRequestUserInput,
+    /// Disable explored/tool-call collapse compaction in the TUI transcript.
+    DisableExploredCompaction,
+    /// Skip automatic and manual context compaction.
+    DisableCompaction,
     /// Enable collaboration modes (Plan, Default).
     /// Kept for config backward compatibility; behavior is always collaboration-modes-enabled.
     CollaborationModes,
@@ -738,6 +742,26 @@ pub const FEATURES: &[FeatureSpec] = &[
             name: "Verbose tool calls",
             menu_description: "Show output for Search, Read, and List tool calls.",
             announcement: "NEW! Show verbose tool call output. Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::DisableExploredCompaction,
+        key: "disable_explored_compaction",
+        stage: Stage::Experimental {
+            name: "Disable explored compaction",
+            menu_description: "Show each explored tool call line without collapsing read/search/list summaries.",
+            announcement: "NEW! Disable explored collapse compaction. Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::DisableCompaction,
+        key: "disable_compaction",
+        stage: Stage::Experimental {
+            name: "Disable compaction",
+            menu_description: "Skip automatic and manual context compaction.",
+            announcement: "NEW! Disable compaction (advanced). Enable in /experimental!",
         },
         default_enabled: false,
     },

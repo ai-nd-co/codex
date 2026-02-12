@@ -1001,6 +1001,7 @@ mod tests {
             None,
             true,
             false,
+            false,
         );
         exec_cell.complete_call(
             "exec-1",
