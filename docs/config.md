@@ -36,6 +36,23 @@ Codex stores the SQLite-backed state DB under `sqlite_home` (config key) or the
 `CODEX_SQLITE_HOME` environment variable. When unset, WorkspaceWrite sandbox
 sessions default to a temp directory; other modes default to `CODEX_HOME`.
 
+## TUI experimental feature flags
+
+Some TUI behavior is gated behind feature flags that can be toggled via `/experimental` or in
+`~/.codex/config.toml` under `[features]`.
+
+### Disable explored compaction
+
+If you want the transcript to show each individual `Explored`/`Exploring` tool-call line (no
+collapsing of reads/searches/lists into summaries), enable:
+
+```toml
+[features]
+disable_explored_compaction = true
+```
+
+This does **not** change output truncation behavior (max-lines + ellipsis).
+
 ## Notices
 
 Codex stores "do not show again" flags for some UI prompts under the `[notice]` table.
