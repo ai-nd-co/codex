@@ -30,14 +30,25 @@ pub(crate) struct ExecCell {
     pub(crate) calls: Vec<ExecCall>,
     animations_enabled: bool,
     verbose_tool_calls: bool,
+    disable_explored_compaction: bool,
 }
 
 impl ExecCell {
     pub(crate) fn new(call: ExecCall, animations_enabled: bool, verbose_tool_calls: bool) -> Self {
+        Self::new_with_explored_compaction(call, animations_enabled, verbose_tool_calls, false)
+    }
+
+    pub(crate) fn new_with_explored_compaction(
+        call: ExecCall,
+        animations_enabled: bool,
+        verbose_tool_calls: bool,
+        disable_explored_compaction: bool,
+    ) -> Self {
         Self {
             calls: vec![call],
             animations_enabled,
             verbose_tool_calls,
+            disable_explored_compaction,
         }
     }
 
@@ -59,11 +70,15 @@ impl ExecCell {
             duration: None,
             interaction_input,
         };
-        if self.is_exploring_cell() && Self::is_exploring_call(&call) {
+        if !self.disable_explored_compaction
+            && self.is_exploring_cell()
+            && Self::is_exploring_call(&call)
+        {
             Some(Self {
                 calls: [self.calls.clone(), vec![call]].concat(),
                 animations_enabled: self.animations_enabled,
                 verbose_tool_calls: self.verbose_tool_calls,
+                disable_explored_compaction: self.disable_explored_compaction,
             })
         } else {
             None
@@ -126,6 +141,10 @@ impl ExecCell {
 
     pub(crate) fn verbose_tool_calls(&self) -> bool {
         self.verbose_tool_calls
+    }
+
+    pub(crate) fn disable_explored_compaction(&self) -> bool {
+        self.disable_explored_compaction
     }
 
     pub(crate) fn iter_calls(&self) -> impl Iterator<Item = &ExecCall> {
