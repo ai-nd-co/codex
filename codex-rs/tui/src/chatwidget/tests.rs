@@ -62,6 +62,7 @@ use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_otel::OtelManager;
+use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::CollaborationMode;
@@ -965,6 +966,11 @@ async fn make_chatwidget_manual(
         status_line_branch_cwd: None,
         status_line_branch_pending: false,
         status_line_branch_lookup_complete: false,
+        turn_started_at: None,
+        turn_first_token_at: None,
+        last_turn_ttft: None,
+        last_turn_output_tps: None,
+        last_turn_reasoning_tps: None,
         external_editor_state: ExternalEditorState::Closed,
     };
     widget.set_model(&resolved_model);
@@ -1053,6 +1059,20 @@ fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUsageInfo {
         total_token_usage: usage(total_tokens),
         last_token_usage: usage(total_tokens),
         model_context_window: Some(context_window),
+    }
+}
+
+fn make_last_token_info(output_tokens: i64, reasoning_output_tokens: i64) -> TokenUsageInfo {
+    let usage = TokenUsage {
+        output_tokens,
+        reasoning_output_tokens,
+        total_tokens: output_tokens + reasoning_output_tokens,
+        ..TokenUsage::default()
+    };
+    TokenUsageInfo {
+        total_token_usage: usage.clone(),
+        last_token_usage: usage,
+        model_context_window: Some(200_000),
     }
 }
 
@@ -5045,6 +5065,93 @@ async fn status_line_rollout_path_uses_home_redaction() {
     assert_eq!(
         chat.status_line_value_for_item(&StatusLineItem::RolloutPath),
         Some(expected)
+    );
+}
+
+#[tokio::test]
+async fn status_line_turn_metrics_formatting() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.last_turn_ttft = Some(std::time::Duration::from_millis(850));
+    chat.last_turn_output_tps = Some(41.7);
+    chat.last_turn_reasoning_tps = Some(29.6);
+    assert_eq!(
+        chat.status_line_value_for_item(&StatusLineItem::TurnTtft),
+        Some("ttft 0.8s".to_string())
+    );
+    assert_eq!(
+        chat.status_line_value_for_item(&StatusLineItem::TurnTps),
+        Some("tps 42/s".to_string())
+    );
+    assert_eq!(
+        chat.status_line_value_for_item(&StatusLineItem::TurnReasoningTps),
+        Some("rtps 30/s".to_string())
+    );
+
+    chat.last_turn_ttft = Some(std::time::Duration::from_secs(12));
+    chat.last_turn_output_tps = Some(4.65);
+    chat.last_turn_reasoning_tps = Some(3.35);
+    assert_eq!(
+        chat.status_line_value_for_item(&StatusLineItem::TurnTtft),
+        Some("ttft 12s".to_string())
+    );
+    assert_eq!(
+        chat.status_line_value_for_item(&StatusLineItem::TurnTps),
+        Some("tps 4.7/s".to_string())
+    );
+    assert_eq!(
+        chat.status_line_value_for_item(&StatusLineItem::TurnReasoningTps),
+        Some("rtps 3.4/s".to_string())
+    );
+}
+
+#[tokio::test]
+async fn turn_tps_prefers_inference_time_metric_when_available() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let completed_at = std::time::Instant::now();
+    chat.turn_started_at = Some(completed_at - std::time::Duration::from_secs(5));
+    chat.turn_first_token_at = Some(completed_at - std::time::Duration::from_secs(4));
+    chat.token_info = Some(make_last_token_info(84, 60));
+
+    chat.capture_last_completed_turn_metrics(
+        completed_at,
+        Some(RuntimeMetricsSummary {
+            responses_api_inference_time_ms: 2_000,
+            ..RuntimeMetricsSummary::default()
+        }),
+    );
+
+    assert_eq!(
+        chat.status_line_value_for_item(&StatusLineItem::TurnTps),
+        Some("tps 42/s".to_string())
+    );
+    assert_eq!(
+        chat.status_line_value_for_item(&StatusLineItem::TurnReasoningTps),
+        Some("rtps 30/s".to_string())
+    );
+    assert_eq!(
+        chat.status_line_value_for_item(&StatusLineItem::TurnTtft),
+        Some("ttft 1.0s".to_string())
+    );
+}
+
+#[tokio::test]
+async fn turn_tps_falls_back_to_wall_clock_when_inference_time_missing() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let completed_at = std::time::Instant::now();
+    chat.turn_started_at = Some(completed_at - std::time::Duration::from_secs(5));
+    chat.turn_first_token_at = Some(completed_at - std::time::Duration::from_secs(2));
+    chat.token_info = Some(make_last_token_info(30, 20));
+
+    chat.capture_last_completed_turn_metrics(completed_at, None);
+
+    assert_eq!(
+        chat.status_line_value_for_item(&StatusLineItem::TurnTps),
+        Some("tps 15/s".to_string())
+    );
+    assert_eq!(
+        chat.status_line_value_for_item(&StatusLineItem::TurnReasoningTps),
+        Some("rtps 10/s".to_string())
     );
 }
 
