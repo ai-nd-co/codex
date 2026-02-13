@@ -76,7 +76,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@1.93
-      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
+      - uses: taiki-e/install-action@d4422f254e595ee762a758628fe4f16ce050fa2e # v2
         with:
           tool: cargo-shear
           version: 1.5.1
