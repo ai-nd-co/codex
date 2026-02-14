@@ -2183,6 +2183,70 @@ async fn exec_history_shows_unified_exec_tool_calls() {
     assert_eq!(blob, "• Explored\n  └ List ls\n");
 }
 
+
+#[tokio::test]
+async fn disable_explored_compaction_prevents_new_explored_group_coalescing() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    chat.set_feature_enabled(Feature::DisableExploredCompaction, true);
+
+    let first = begin_exec(&mut chat, "call-1", "rg shimmer_spans");
+    end_exec(&mut chat, first, "", "", 0);
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "first explored call should stay active"
+    );
+
+    let _second = begin_exec(&mut chat, "call-2", "cat shimmer.rs");
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "starting a second explored call should flush the previous explored cell"
+    );
+    let first_blob = lines_to_single_string(&cells[0]);
+    assert!(
+        first_blob.contains("Search shimmer_spans"),
+        "expected flushed cell to contain first call details: {first_blob}"
+    );
+    assert!(
+        !first_blob.contains("Read shimmer.rs"),
+        "flushed first cell should not include second call details: {first_blob}"
+    );
+}
+
+#[tokio::test]
+async fn disable_explored_compaction_toggle_reformats_active_explored_cell() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    let first = begin_exec(&mut chat, "call-1", "cat auth.rs");
+    end_exec(&mut chat, first, "", "", 0);
+    let second = begin_exec(&mut chat, "call-2", "cat shimmer.rs");
+    end_exec(&mut chat, second, "", "", 0);
+
+    let compacted = active_blob(&chat);
+    assert!(
+        compacted.contains("Read auth.rs, shimmer.rs"),
+        "expected default explored compaction before toggle: {compacted}"
+    );
+
+    chat.set_feature_enabled(Feature::DisableExploredCompaction, true);
+
+    let expanded = active_blob(&chat);
+    assert!(
+        expanded.contains("Read auth.rs"),
+        "expected first read after toggle: {expanded}"
+    );
+    assert!(
+        expanded.contains("Read shimmer.rs"),
+        "expected second read after toggle: {expanded}"
+    );
+    assert!(
+        !expanded.contains("Read auth.rs, shimmer.rs"),
+        "expected read summary compaction to be disabled: {expanded}"
+    );
+}
 #[tokio::test]
 async fn unified_exec_end_after_task_complete_is_suppressed() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;

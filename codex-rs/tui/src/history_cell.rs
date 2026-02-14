@@ -3045,6 +3045,7 @@ mod tests {
             },
             true,
             false,
+            false,
         );
         // Mark call complete so markers are ✓
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
@@ -3072,6 +3073,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            false,
             false,
         );
         // Call 1: Search only
@@ -3143,11 +3145,92 @@ mod tests {
             },
             true,
             false,
+            false,
         );
         cell.complete_call("c1", CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(80);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn disable_explored_compaction_keeps_reads_separate() {
+        let mut cell = ExecCell::new(
+            ExecCall {
+                call_id: "c1".to_string(),
+                command: vec!["bash".into(), "-lc".into(), "echo".into()],
+                parsed: vec![
+                    ParsedCommand::Read {
+                        name: "auth.rs".into(),
+                        cmd: "cat auth.rs".into(),
+                        path: "auth.rs".into(),
+                    },
+                    ParsedCommand::Read {
+                        name: "auth.rs".into(),
+                        cmd: "cat auth.rs".into(),
+                        path: "auth.rs".into(),
+                    },
+                    ParsedCommand::Read {
+                        name: "shimmer.rs".into(),
+                        cmd: "cat shimmer.rs".into(),
+                        path: "shimmer.rs".into(),
+                    },
+                ],
+                output: None,
+                source: ExecCommandSource::Agent,
+                start_time: Some(Instant::now()),
+                duration: None,
+                interaction_input: None,
+            },
+            true,
+            false,
+            true,
+        );
+        cell.complete_call("c1", CommandOutput::default(), Duration::from_millis(1));
+
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+        assert_eq!(rendered.matches("Read auth.rs").count(), 2);
+        assert!(rendered.contains("Read shimmer.rs"));
+        assert!(!rendered.contains("Read auth.rs, shimmer.rs"));
+    }
+
+    #[test]
+    fn disable_explored_compaction_prevents_cross_call_coalescing() {
+        let cell = ExecCell::new(
+            ExecCall {
+                call_id: "c1".to_string(),
+                command: vec!["bash".into(), "-lc".into(), "echo".into()],
+                parsed: vec![ParsedCommand::Read {
+                    name: "auth.rs".into(),
+                    cmd: "cat auth.rs".into(),
+                    path: "auth.rs".into(),
+                }],
+                output: None,
+                source: ExecCommandSource::Agent,
+                start_time: Some(Instant::now()),
+                duration: None,
+                interaction_input: None,
+            },
+            true,
+            false,
+            true,
+        );
+
+        let merged = cell.with_added_call(
+            "c2".into(),
+            vec!["bash".into(), "-lc".into(), "echo".into()],
+            vec![ParsedCommand::Read {
+                name: "shimmer.rs".into(),
+                cmd: "cat shimmer.rs".into(),
+                path: "shimmer.rs".into(),
+            }],
+            ExecCommandSource::Agent,
+            None,
+        );
+        assert!(
+            merged.is_none(),
+            "exploring calls should not coalesce when compaction is disabled"
+        );
     }
 
     #[test]
@@ -3170,6 +3253,7 @@ mod tests {
             },
             true,
             true,
+            false,
         );
         cell.complete_call(
             &call_id,
@@ -3204,6 +3288,7 @@ mod tests {
             },
             true,
             false,
+            false,
         );
         // Mark call complete so it renders as "Ran"
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
@@ -3231,6 +3316,7 @@ mod tests {
             },
             true,
             false,
+            false,
         );
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         // Wide enough that it fits inline
@@ -3256,6 +3342,7 @@ mod tests {
             },
             true,
             false,
+            false,
         );
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(24);
@@ -3279,6 +3366,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            false,
             false,
         );
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
@@ -3305,6 +3393,7 @@ mod tests {
             },
             true,
             false,
+            false,
         );
         cell.complete_call(&call_id, CommandOutput::default(), Duration::from_millis(1));
         let lines = cell.display_lines(28);
@@ -3329,6 +3418,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            false,
             false,
         );
         let stderr: String = (1..=10)
@@ -3380,6 +3470,7 @@ mod tests {
                 interaction_input: None,
             },
             true,
+            false,
             false,
         );
 

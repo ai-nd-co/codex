@@ -45,6 +45,7 @@ pub(crate) fn new_active_exec_command(
     interaction_input: Option<String>,
     animations_enabled: bool,
     verbose_tool_calls: bool,
+    disable_explored_compaction: bool,
 ) -> ExecCell {
     ExecCell::new(
         ExecCall {
@@ -59,6 +60,7 @@ pub(crate) fn new_active_exec_command(
         },
         animations_enabled,
         verbose_tool_calls,
+        disable_explored_compaction,
     )
 }
 
@@ -342,11 +344,13 @@ impl ExecCell {
         ]));
 
         let verbose_tool_calls = self.verbose_tool_calls();
+        let disable_explored_compaction = self.disable_explored_compaction();
         let mut calls = self.calls.clone();
         let mut out_indented = Vec::new();
         while !calls.is_empty() {
             let mut call = calls.remove(0);
             if !verbose_tool_calls
+                && !disable_explored_compaction
                 && call
                     .parsed
                     .iter()
@@ -371,7 +375,9 @@ impl ExecCell {
                 .iter()
                 .all(|parsed| matches!(parsed, ParsedCommand::Read { .. }));
 
-            let call_lines: Vec<(&str, Vec<Span<'static>>)> = if reads_only {
+            let call_lines: Vec<(&str, Vec<Span<'static>>)> = if reads_only
+                && !disable_explored_compaction
+            {
                 let names = call
                     .parsed
                     .iter()
@@ -813,7 +819,7 @@ mod tests {
             "expected unbounded wrapping to produce more than {USER_SHELL_TOOL_CALL_MAX_LINES} screen lines, got {full_screen_lines}",
         );
 
-        let cell = ExecCell::new(call, false, false);
+        let cell = ExecCell::new(call, false, false, false);
 
         // Use a narrow width so each logical line wraps into many on-screen lines.
         let lines = cell.command_display_lines(width);
@@ -856,7 +862,7 @@ mod tests {
             duration: None,
             interaction_input: None,
         };
-        let cell = ExecCell::new(call, false, false);
+        let cell = ExecCell::new(call, false, false, false);
         let lines = cell.display_lines(80);
 
         fn contains_text(lines: &[Line<'static>], needle: &str) -> bool {

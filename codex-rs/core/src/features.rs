@@ -131,6 +131,8 @@ pub enum Feature {
     EnableMarkdownTables,
     /// Show output for Search, Read, and List tool calls.
     VerboseToolCalls,
+    /// Disable explored tool-call compaction in the TUI transcript.
+    DisableExploredCompaction,
     /// Skip automatic and manual context compaction.
     DisableCompaction,
     /// Enable collaboration modes (Plan, Default).
@@ -602,6 +604,16 @@ pub const FEATURES: &[FeatureSpec] = &[
             name: "Verbose tool calls",
             menu_description: "Show output for Search, Read, and List tool calls.",
             announcement: "NEW! Show verbose tool call output. Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::DisableExploredCompaction,
+        key: "disable_explored_compaction",
+        stage: Stage::Experimental {
+            name: "Disable explored compaction",
+            menu_description: "Show explored tool calls as separate entries without collapsing read summaries.",
+            announcement: "NEW! Disable explored compaction for tool-call history. Enable in /experimental!",
         },
         default_enabled: false,
     },

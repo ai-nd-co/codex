@@ -2190,6 +2190,10 @@ impl ChatWidget {
             .unwrap_or(true);
         if needs_new {
             let verbose_tool_calls = self.config.features.enabled(Feature::VerboseToolCalls);
+            let disable_explored_compaction = self
+                .config
+                .features
+                .enabled(Feature::DisableExploredCompaction);
             self.flush_active_cell();
             self.active_cell = Some(Box::new(new_active_exec_command(
                 ev.call_id.clone(),
@@ -2199,6 +2203,7 @@ impl ChatWidget {
                 ev.interaction_input.clone(),
                 self.config.animations,
                 verbose_tool_calls,
+                disable_explored_compaction,
             )));
         }
 
@@ -2356,6 +2361,10 @@ impl ChatWidget {
             self.bump_active_cell_revision();
         } else {
             let verbose_tool_calls = self.config.features.enabled(Feature::VerboseToolCalls);
+            let disable_explored_compaction = self
+                .config
+                .features
+                .enabled(Feature::DisableExploredCompaction);
             self.flush_active_cell();
 
             self.active_cell = Some(Box::new(new_active_exec_command(
@@ -2366,6 +2375,7 @@ impl ChatWidget {
                 interaction_input,
                 self.config.animations,
                 verbose_tool_calls,
+                disable_explored_compaction,
             )));
             self.bump_active_cell_revision();
         }
@@ -5750,6 +5760,17 @@ impl ChatWidget {
         }
         if feature == Feature::Steer {
             self.bottom_pane.set_steer_enabled(enabled);
+        }
+        if feature == Feature::DisableExploredCompaction {
+            if let Some(cell) = self
+                .active_cell
+                .as_mut()
+                .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
+            {
+                cell.set_disable_explored_compaction(enabled);
+                self.bump_active_cell_revision();
+                self.request_redraw();
+            }
         }
         if feature == Feature::CollaborationModes {
             self.bottom_pane.set_collaboration_modes_enabled(enabled);
