@@ -2623,6 +2623,44 @@ async fn unified_exec_non_empty_then_empty_snapshots() {
     assert_snapshot!("unified_exec_non_empty_then_empty_after", combined);
 }
 
+#[tokio::test]
+async fn unified_exec_footer_shows_command_snippet_and_ps_hint() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    begin_unified_exec_startup(
+        &mut chat,
+        "call-footer-1",
+        "proc-1",
+        "cargo test -p codex-core",
+    );
+    begin_unified_exec_startup(&mut chat, "call-footer-2", "proc-2", "rg foo src");
+
+    let width: u16 = 80;
+    let height = chat.desired_height(width);
+    let mut terminal =
+        ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("render chat");
+
+    let screen = terminal.backend().vt100().screen().contents();
+    let collapsed = screen.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        collapsed.contains("background terminals running: cargo test -p codex-core"),
+        "expected footer to show command snippet: {collapsed:?}"
+    );
+    assert!(
+        collapsed.contains("(+1 more)"),
+        "expected footer to show additional process count: {collapsed:?}"
+    );
+    assert!(
+        collapsed.contains("/ps"),
+        "expected footer to include /ps hint: {collapsed:?}"
+    );
+}
+
 /// Selecting the custom prompt option from the review popup sends
 /// OpenReviewCustomPrompt to the app event channel.
 #[tokio::test]
