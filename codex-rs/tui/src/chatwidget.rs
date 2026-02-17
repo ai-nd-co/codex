@@ -1244,6 +1244,12 @@ impl ChatWidget {
     // Raw reasoning uses the same flow as summarized reasoning
 
     fn on_task_started(&mut self) {
+        // Defensive turn-boundary hardening: if a previous turn failed to emit a
+        // user-message boundary or turn-complete event, commit any lingering
+        // unified-exec streak/cell now so explored groups cannot bleed forward.
+        self.flush_unified_exec_wait_streak();
+        self.flush_active_cell();
+
         self.agent_turn_running = true;
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
@@ -4168,6 +4174,14 @@ impl ChatWidget {
         let already_seen = !self.remember_user_message_event_id(source_id);
         let matches_local_echo =
             !from_replay && self.consume_pending_local_user_message_ack(&event);
+
+        // Preserve a hard transcript boundary at user-message events even when the
+        // message body itself is suppressed (e.g., matching local echo ack). Without
+        // this, an in-flight explored/wait cell can visually bleed across turns.
+        if !already_seen {
+            self.flush_unified_exec_wait_streak();
+            self.flush_active_cell();
+        }
 
         if !already_seen && !matches_local_echo && !event.message.trim().is_empty() {
             self.add_to_history(history_cell::new_user_prompt(
