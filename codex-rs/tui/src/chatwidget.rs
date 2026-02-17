@@ -4169,6 +4169,14 @@ impl ChatWidget {
         let matches_local_echo =
             !from_replay && self.consume_pending_local_user_message_ack(&event);
 
+        // Preserve a hard transcript boundary at user-message events even when the
+        // message body itself is suppressed (e.g., matching local echo ack). Without
+        // this, an in-flight explored/wait cell can visually bleed across turns.
+        if !already_seen {
+            self.flush_unified_exec_wait_streak();
+            self.flush_active_cell();
+        }
+
         if !already_seen && !matches_local_echo && !event.message.trim().is_empty() {
             self.add_to_history(history_cell::new_user_prompt(
                 event.message,

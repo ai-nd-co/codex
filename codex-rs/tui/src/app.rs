@@ -1309,6 +1309,7 @@ impl App {
                 if let Err(err) = self.server.remove_and_close_all_threads().await {
                     tracing::warn!(error = %err, "failed to close all threads");
                 }
+                self.reset_for_thread_switch(tui)?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: self.config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -1391,6 +1392,7 @@ impl App {
                         {
                             Ok(resumed) => {
                                 self.shutdown_current_thread().await;
+                                self.reset_for_thread_switch(tui)?;
                                 self.config = resume_config;
                                 tui.set_notification_method(self.config.tui_notification_method);
                                 self.file_search.update_search_dir(self.config.cwd.clone());
@@ -1451,6 +1453,7 @@ impl App {
                     {
                         Ok(forked) => {
                             self.shutdown_current_thread().await;
+                            self.reset_for_thread_switch(tui)?;
                             let init = self.chatwidget_init_for_forked_or_resumed_thread(
                                 tui,
                                 self.config.clone(),

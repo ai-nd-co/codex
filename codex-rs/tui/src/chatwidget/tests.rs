@@ -2345,6 +2345,57 @@ async fn live_user_message_event_matching_local_echo_is_suppressed() {
 }
 
 #[tokio::test]
+async fn user_message_ack_suppression_still_flushes_active_explored_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    let begin = begin_exec_with_source(
+        &mut chat,
+        "call-local-echo-boundary",
+        "ls",
+        ExecCommandSource::UnifiedExecStartup,
+    );
+    end_exec(&mut chat, begin, "", "", 0);
+    assert!(
+        active_blob(&chat).contains("List ls"),
+        "expected active explored cell before user ack"
+    );
+
+    let text_elements: Vec<TextElement> = Vec::new();
+    let local_images: Vec<PathBuf> = Vec::new();
+    chat.record_pending_local_user_message_ack("hello local", &text_elements, &local_images);
+
+    chat.handle_codex_event(Event {
+        id: "user-msg-boundary-1".to_string(),
+        msg: EventMsg::UserMessage(UserMessageEvent {
+            message: "hello local".to_string(),
+            images: None,
+            text_elements: Vec::new(),
+            local_images: Vec::new(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("List ls"),
+        "expected explored cell to flush on user-message boundary: {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("hello local"),
+        "expected matching user-message ack to stay suppressed: {rendered:?}"
+    );
+    assert!(
+        chat.active_cell.is_none(),
+        "expected no active explored cell after user-message boundary flush"
+    );
+}
+
+#[tokio::test]
 async fn item_completed_user_message_renders_once_across_mixed_event_forms() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     let thread_id = ThreadId::new();
