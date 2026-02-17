@@ -1362,7 +1362,7 @@ impl App {
         self.chat_widget.set_pending_thread_approvals(Vec::new());
     }
 
-    async fn start_fresh_session_with_summary_hint(&mut self, tui: &mut tui::Tui) {
+    async fn start_fresh_session_with_summary_hint(&mut self, tui: &mut tui::Tui) -> Result<()> {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history.
         let model = self.chat_widget.current_model().to_string();
@@ -1375,6 +1375,7 @@ impl App {
         if let Err(err) = self.server.remove_and_close_all_threads().await {
             tracing::warn!(error = %err, "failed to close all threads");
         }
+        self.reset_for_thread_switch(tui)?;
         let init = crate::chatwidget::ChatWidgetInit {
             config: self.config.clone(),
             frame_requester: tui.frame_requester(),
@@ -1403,6 +1404,7 @@ impl App {
             self.chat_widget.add_plain_history_lines(lines);
         }
         tui.frame_requester().schedule_frame();
+        Ok(())
     }
 
     async fn drain_active_thread_events(&mut self, tui: &mut tui::Tui) -> Result<()> {
@@ -1914,13 +1916,13 @@ impl App {
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
         match event {
             AppEvent::NewSession => {
-                self.start_fresh_session_with_summary_hint(tui).await;
+                self.start_fresh_session_with_summary_hint(tui).await?;
             }
             AppEvent::ClearUi => {
                 self.clear_terminal_ui(tui, false)?;
                 self.reset_app_ui_state_after_clear();
 
-                self.start_fresh_session_with_summary_hint(tui).await;
+                self.start_fresh_session_with_summary_hint(tui).await?;
             }
             AppEvent::OpenResumePicker => {
                 match crate::resume_picker::run_resume_picker(tui, &self.config, false).await? {
@@ -1974,6 +1976,7 @@ impl App {
                         {
                             Ok(resumed) => {
                                 self.shutdown_current_thread().await;
+                                self.reset_for_thread_switch(tui)?;
                                 self.config = resume_config;
                                 tui.set_notification_method(self.config.tui_notification_method);
                                 self.file_search.update_search_dir(self.config.cwd.clone());
@@ -2037,6 +2040,7 @@ impl App {
                         {
                             Ok(forked) => {
                                 self.shutdown_current_thread().await;
+                                self.reset_for_thread_switch(tui)?;
                                 let init = self.chatwidget_init_for_forked_or_resumed_thread(
                                     tui,
                                     self.config.clone(),
