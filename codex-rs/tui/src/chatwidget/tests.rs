@@ -2345,6 +2345,43 @@ async fn live_user_message_event_matching_local_echo_is_suppressed() {
 }
 
 #[tokio::test]
+async fn turn_started_flushes_lingering_explored_cell_boundary() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_task_started();
+    let begin = begin_exec_with_source(
+        &mut chat,
+        "call-turn-start-boundary",
+        "ls",
+        ExecCommandSource::UnifiedExecStartup,
+    );
+    end_exec(&mut chat, begin, "", "", 0);
+    assert!(
+        active_blob(&chat).contains("List ls"),
+        "expected active explored cell before next turn start"
+    );
+
+    // Simulate a missing turn-complete/user-message boundary from the prior turn.
+    // Starting a new turn should still force a hard transcript boundary.
+    chat.on_task_started();
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("List ls"),
+        "expected lingering explored cell to flush on new turn start: {rendered:?}"
+    );
+    assert!(
+        chat.active_cell.is_none(),
+        "expected no lingering active explored cell after new turn start boundary"
+    );
+}
+
+#[tokio::test]
 async fn user_message_ack_suppression_still_flushes_active_explored_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());

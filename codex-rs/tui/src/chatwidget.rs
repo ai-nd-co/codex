@@ -1244,6 +1244,12 @@ impl ChatWidget {
     // Raw reasoning uses the same flow as summarized reasoning
 
     fn on_task_started(&mut self) {
+        // Defensive turn-boundary hardening: if a previous turn failed to emit a
+        // user-message boundary or turn-complete event, commit any lingering
+        // unified-exec streak/cell now so explored groups cannot bleed forward.
+        self.flush_unified_exec_wait_streak();
+        self.flush_active_cell();
+
         self.agent_turn_running = true;
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
