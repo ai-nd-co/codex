@@ -4410,6 +4410,88 @@ async fn unified_exec_non_empty_then_empty_snapshots() {
     assert_snapshot!("unified_exec_non_empty_then_empty_after", combined);
 }
 
+#[tokio::test]
+async fn unified_exec_footer_shows_details_and_live_chunks() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    begin_unified_exec_startup(
+        &mut chat,
+        "call-footer-1",
+        "proc-1",
+        "cargo test -p codex-core",
+    );
+    begin_unified_exec_startup(&mut chat, "call-footer-2", "proc-2", "rg foo src");
+
+    chat.handle_codex_event(Event {
+        id: "call-footer-1-delta-1".into(),
+        msg: EventMsg::ExecCommandOutputDelta(codex_core::protocol::ExecCommandOutputDeltaEvent {
+            call_id: "call-footer-1".to_string(),
+            chunk: b"Compiling codex-core\n".to_vec(),
+            stream: codex_core::protocol::ExecOutputStream::Stdout,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "call-footer-2-delta-1".into(),
+        msg: EventMsg::ExecCommandOutputDelta(codex_core::protocol::ExecCommandOutputDeltaEvent {
+            call_id: "call-footer-2".to_string(),
+            chunk: b"src/main.rs:12:foo\n".to_vec(),
+            stream: codex_core::protocol::ExecOutputStream::Stdout,
+        }),
+    });
+
+    let render_collapsed = |chat: &ChatWidget| {
+        let width: u16 = 90;
+        let height = chat.desired_height(width);
+        let mut terminal =
+            ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, width, height));
+        terminal
+            .draw(|f| chat.render(f.area(), f.buffer_mut()))
+            .expect("render chat");
+        terminal
+            .backend()
+            .vt100()
+            .screen()
+            .contents()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+
+    let collapsed = render_collapsed(&chat);
+    assert!(
+        collapsed.contains("2 background terminals running"),
+        "expected footer to show process count header: {collapsed:?}"
+    );
+    assert!(
+        collapsed.contains("cargo test -p codex-core"),
+        "expected footer to show command snippet: {collapsed:?}"
+    );
+    assert!(
+        collapsed.contains("Compiling codex-core"),
+        "expected footer to show recent output chunk: {collapsed:?}"
+    );
+    assert!(
+        !collapsed.contains("/ps"),
+        "expected footer to avoid /ps hint: {collapsed:?}"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "call-footer-1-delta-2".into(),
+        msg: EventMsg::ExecCommandOutputDelta(codex_core::protocol::ExecCommandOutputDeltaEvent {
+            call_id: "call-footer-1".to_string(),
+            chunk: b"Finished codex-core\n".to_vec(),
+            stream: codex_core::protocol::ExecOutputStream::Stdout,
+        }),
+    });
+    let updated = render_collapsed(&chat);
+    assert!(
+        updated.contains("Finished codex-core"),
+        "expected footer to update when output delta arrives: {updated:?}"
+    );
+}
+
 /// Selecting the custom prompt option from the review popup sends
 /// OpenReviewCustomPrompt to the app event channel.
 #[tokio::test]
@@ -7340,22 +7422,10 @@ async fn review_ended_keeps_unified_exec_processes() {
         }),
     });
 
-    assert_eq!(chat.unified_exec_processes.len(), 2);
-
-    chat.add_ps_output();
-    let cells = drain_insert_history(&mut rx);
-    let combined = cells
-        .iter()
-        .map(|lines| lines_to_single_string(lines))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        combined.contains("Background terminals"),
-        "expected /ps to remain available after review-ended abort; got {combined:?}"
-    );
-    assert!(
-        combined.contains("sleep 5") && combined.contains("sleep 6"),
-        "expected /ps to list running unified exec processes; got {combined:?}"
+    assert_eq!(
+        chat.unified_exec_processes.len(),
+        2,
+        "expected unified exec processes to persist after review-ended abort"
     );
 
     let _ = drain_insert_history(&mut rx);
@@ -7412,22 +7482,10 @@ async fn turn_complete_keeps_unified_exec_processes() {
         }),
     });
 
-    assert_eq!(chat.unified_exec_processes.len(), 2);
-
-    chat.add_ps_output();
-    let cells = drain_insert_history(&mut rx);
-    let combined = cells
-        .iter()
-        .map(|lines| lines_to_single_string(lines))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        combined.contains("Background terminals"),
-        "expected /ps to remain available after turn complete; got {combined:?}"
-    );
-    assert!(
-        combined.contains("sleep 5") && combined.contains("sleep 6"),
-        "expected /ps to list running unified exec processes; got {combined:?}"
+    assert_eq!(
+        chat.unified_exec_processes.len(),
+        2,
+        "expected unified exec processes to persist after turn complete"
     );
 
     let _ = drain_insert_history(&mut rx);

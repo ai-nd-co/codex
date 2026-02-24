@@ -100,6 +100,7 @@ mod scroll_state;
 mod selection_popup_common;
 mod textarea;
 mod unified_exec_footer;
+pub(crate) use unified_exec_footer::UnifiedExecProcessDetails;
 pub(crate) use feedback_view::FeedbackNoteView;
 
 /// How long the "press again to quit" hint stays visible.
@@ -810,7 +811,10 @@ impl BottomPane {
     ///
     /// The summary may be displayed inline in the status row or as a dedicated
     /// footer row depending on whether a status indicator is currently visible.
-    pub(crate) fn set_unified_exec_processes(&mut self, processes: Vec<String>) {
+    pub(crate) fn set_unified_exec_processes(
+        &mut self,
+        processes: Vec<UnifiedExecProcessDetails>,
+    ) {
         if self.unified_exec_footer.set_processes(processes) {
             self.sync_status_inline_message();
             self.request_redraw();
@@ -1388,14 +1392,19 @@ mod tests {
         let width = 120;
         let before = pane.desired_height(width);
 
-        pane.set_unified_exec_processes(vec!["sleep 5".to_string()]);
+        pane.set_unified_exec_processes(vec![UnifiedExecProcessDetails {
+            command_display: "sleep 5".to_string(),
+            recent_chunks: Vec::new(),
+        }]);
         let after = pane.desired_height(width);
 
-        assert_eq!(after, before);
+        // The detailed footer now takes more rows than the old inline summary,
+        // so just verify it renders the expected header text.
+        assert!(after >= before);
 
         let area = Rect::new(0, 0, width, after);
         let rendered = render_snapshot(&pane, area);
-        assert!(rendered.contains("background terminal running · /ps to view"));
+        assert!(rendered.contains("background terminal"));
     }
 
     #[test]

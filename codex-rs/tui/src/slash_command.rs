@@ -47,7 +47,6 @@ pub enum SlashCommand {
     Exit,
     Feedback,
     Rollout,
-    Ps,
     Clean,
     Clear,
     Personality,
@@ -88,7 +87,6 @@ impl SlashCommand {
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Statusline => "configure which items appear in the status line",
             SlashCommand::Theme => "choose a syntax highlighting theme",
-            SlashCommand::Ps => "list background terminals",
             SlashCommand::Clean => "stop all background terminals",
             SlashCommand::MemoryDrop => "DO NOT USE",
             SlashCommand::MemoryUpdate => "DO NOT USE",
@@ -161,7 +159,6 @@ impl SlashCommand {
             | SlashCommand::Skills
             | SlashCommand::Status
             | SlashCommand::DebugConfig
-            | SlashCommand::Ps
             | SlashCommand::Clean
             | SlashCommand::Mcp
             | SlashCommand::Apps
