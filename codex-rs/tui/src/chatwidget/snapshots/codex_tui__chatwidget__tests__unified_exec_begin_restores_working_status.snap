@@ -1,11 +1,11 @@
 ---
 source: tui/src/chatwidget/tests.rs
-assertion_line: 2004
 expression: terminal.backend()
 ---
 "                                                                                "
 "• Working (0s • esc to interrupt)                                               "
-"  1 background terminal running: sleep 2 · /ps                                  "
+"  1 background terminal running                                                 "
+"  • sleep 2                                                                     "
 "                                                                                "
 "                                                                                "
 "› Ask Codex to do anything                                                      "

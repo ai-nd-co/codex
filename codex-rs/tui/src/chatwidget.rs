@@ -170,6 +170,7 @@ use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
+use crate::bottom_pane::UnifiedExecProcessDetails;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
@@ -2000,7 +2001,10 @@ impl ChatWidget {
         let processes = self
             .unified_exec_processes
             .iter()
-            .map(|process| process.command_display.clone())
+            .map(|process| UnifiedExecProcessDetails {
+                command_display: process.command_display.clone(),
+                recent_chunks: process.recent_chunks.clone(),
+            })
             .collect();
         self.bottom_pane.set_unified_exec_processes(processes);
     }
@@ -2015,6 +2019,7 @@ impl ChatWidget {
             return;
         };
 
+        let mut changed = false;
         let text = String::from_utf8_lossy(chunk);
         for line in text
             .lines()
@@ -2022,12 +2027,18 @@ impl ChatWidget {
             .filter(|line| !line.is_empty())
         {
             process.recent_chunks.push(line.to_string());
+            changed = true;
         }
 
         const MAX_RECENT_CHUNKS: usize = 3;
         if process.recent_chunks.len() > MAX_RECENT_CHUNKS {
             let drop_count = process.recent_chunks.len() - MAX_RECENT_CHUNKS;
             process.recent_chunks.drain(0..drop_count);
+            changed = true;
+        }
+
+        if changed {
+            self.sync_unified_exec_footer();
         }
     }
 
@@ -3439,9 +3450,6 @@ impl ChatWidget {
             SlashCommand::Statusline => {
                 self.open_status_line_setup();
             }
-            SlashCommand::Ps => {
-                self.add_ps_output();
-            }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
             }
@@ -4577,18 +4585,6 @@ impl ChatWidget {
             Some(ReasoningEffortConfig::XHigh) => "xhigh",
             None | Some(ReasoningEffortConfig::None) => "default",
         }
-    }
-
-    pub(crate) fn add_ps_output(&mut self) {
-        let processes = self
-            .unified_exec_processes
-            .iter()
-            .map(|process| history_cell::UnifiedExecProcessDetails {
-                command_display: process.command_display.clone(),
-                recent_chunks: process.recent_chunks.clone(),
-            })
-            .collect();
-        self.add_to_history(history_cell::new_unified_exec_processes_output(processes));
     }
 
     fn stop_rate_limit_poller(&mut self) {

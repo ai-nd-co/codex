@@ -2712,7 +2712,7 @@ async fn unified_exec_non_empty_then_empty_snapshots() {
 }
 
 #[tokio::test]
-async fn unified_exec_footer_shows_command_snippet_and_ps_hint() {
+async fn unified_exec_footer_shows_details_and_live_chunks() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.on_task_started();
 
@@ -2724,28 +2724,72 @@ async fn unified_exec_footer_shows_command_snippet_and_ps_hint() {
     );
     begin_unified_exec_startup(&mut chat, "call-footer-2", "proc-2", "rg foo src");
 
-    let width: u16 = 80;
-    let height = chat.desired_height(width);
-    let mut terminal =
-        ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, width, height));
-    terminal
-        .draw(|f| chat.render(f.area(), f.buffer_mut()))
-        .expect("render chat");
+    chat.handle_codex_event(Event {
+        id: "call-footer-1-delta-1".into(),
+        msg: EventMsg::ExecCommandOutputDelta(codex_core::protocol::ExecCommandOutputDeltaEvent {
+            call_id: "call-footer-1".to_string(),
+            chunk: b"Compiling codex-core\n".to_vec(),
+            stream: codex_core::protocol::ExecOutputStream::Stdout,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "call-footer-2-delta-1".into(),
+        msg: EventMsg::ExecCommandOutputDelta(codex_core::protocol::ExecCommandOutputDeltaEvent {
+            call_id: "call-footer-2".to_string(),
+            chunk: b"src/main.rs:12:foo\n".to_vec(),
+            stream: codex_core::protocol::ExecOutputStream::Stdout,
+        }),
+    });
 
-    let screen = terminal.backend().vt100().screen().contents();
-    let collapsed = screen.split_whitespace().collect::<Vec<_>>().join(" ");
+    let render_collapsed = |chat: &ChatWidget| {
+        let width: u16 = 90;
+        let height = chat.desired_height(width);
+        let mut terminal =
+            ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, width, height));
+        terminal
+            .draw(|f| chat.render(f.area(), f.buffer_mut()))
+            .expect("render chat");
+        terminal
+            .backend()
+            .vt100()
+            .screen()
+            .contents()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+
+    let collapsed = render_collapsed(&chat);
     assert!(
-        collapsed.contains("background terminals running: cargo test -p codex-core"),
+        collapsed.contains("2 background terminals running"),
+        "expected footer to show process count header: {collapsed:?}"
+    );
+    assert!(
+        collapsed.contains("cargo test -p codex-core"),
         "expected footer to show command snippet: {collapsed:?}"
     );
     assert!(
-        collapsed.contains("(+1 more)"),
-        "expected footer to show additional process count: {collapsed:?}"
+        collapsed.contains("Compiling codex-core"),
+        "expected footer to show recent output chunk: {collapsed:?}"
     );
     assert!(
-        collapsed.contains("/ps"),
-        "expected footer to include /ps hint: {collapsed:?}"
+        !collapsed.contains("/ps"),
+        "expected footer to avoid /ps hint: {collapsed:?}"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "call-footer-1-delta-2".into(),
+        msg: EventMsg::ExecCommandOutputDelta(codex_core::protocol::ExecCommandOutputDeltaEvent {
+            call_id: "call-footer-1".to_string(),
+            chunk: b"Finished codex-core\n".to_vec(),
+            stream: codex_core::protocol::ExecOutputStream::Stdout,
+        }),
+    });
+    let updated = render_collapsed(&chat);
+    assert!(
+        updated.contains("Finished codex-core"),
+        "expected footer to update when output delta arrives: {updated:?}"
     );
 }
 
