@@ -42,6 +42,7 @@ use codex_protocol::ThreadId;
 
 const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
+const SEARCH_DEBOUNCE_MS: u64 = 250;
 #[derive(Debug, Clone)]
 pub enum SessionSelection {
     StartFresh,
@@ -101,7 +102,11 @@ enum BackgroundEvent {
         path: PathBuf,
         message_count: Option<usize>,
         search_token: Option<usize>,
-        matched: Option<bool>,
+        matched: Option<SearchMatchMetadata>,
+    },
+    DebouncedQueryReady {
+        token: usize,
+        query: String,
     },
 }
 
@@ -281,10 +286,14 @@ struct PickerState {
     selected: usize,
     scroll_top: usize,
     query: String,
+    active_query: String,
     search_state: SearchState,
     search_cache: Option<SearchCache>,
     next_request_token: usize,
     next_search_token: usize,
+    next_debounce_token: usize,
+    pending_debounce_token: Option<usize>,
+    search_counts: SearchMatchCounts,
     page_loader: PageLoader,
     view_rows: Option<usize>,
     default_provider: String,
@@ -325,10 +334,115 @@ enum LoadTrigger {
     Search { token: usize },
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct SearchMatchCounts {
+    exact: usize,
+    keyword: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct SearchMatchMetadata {
+    exact_match: bool,
+    keyword_match: bool,
+    latest_match_ts: Option<DateTime<Utc>>,
+}
+
+impl SearchMatchMetadata {
+    fn bump_timestamp(&mut self, timestamp: Option<DateTime<Utc>>) {
+        let Some(timestamp) = timestamp else {
+            return;
+        };
+        self.latest_match_ts = match self.latest_match_ts {
+            Some(current) if current >= timestamp => Some(current),
+            _ => Some(timestamp),
+        };
+    }
+
+    fn merge(&mut self, other: &SearchMatchMetadata) {
+        self.exact_match |= other.exact_match;
+        self.keyword_match |= other.keyword_match;
+        self.bump_timestamp(other.latest_match_ts);
+    }
+}
+
+#[derive(Clone, Debug)]
+struct QueryMatcher {
+    normalized_query: String,
+    tokens: Vec<String>,
+}
+
+impl QueryMatcher {
+    fn from_query(query: &str) -> Option<Self> {
+        let normalized_query = normalize_search_text(query);
+        let tokens = tokenize_query(query);
+        if normalized_query.is_empty() && tokens.is_empty() {
+            return None;
+        }
+        Some(Self {
+            normalized_query,
+            tokens,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct ScanRolloutResult {
+    message_count: usize,
+    matched: SearchMatchMetadata,
+}
+
+struct SearchAccumulator {
+    matcher: QueryMatcher,
+    remaining_tokens: Vec<String>,
+    matched: SearchMatchMetadata,
+}
+
+impl SearchAccumulator {
+    fn new(matcher: QueryMatcher) -> Self {
+        Self {
+            remaining_tokens: matcher.tokens.clone(),
+            matcher,
+            matched: SearchMatchMetadata::default(),
+        }
+    }
+
+    fn observe_text(&mut self, text: &str, timestamp: Option<DateTime<Utc>>) {
+        if text.trim().is_empty() {
+            return;
+        }
+
+        let normalized = normalize_search_text(text);
+        if !normalized.is_empty()
+            && !self.matcher.normalized_query.is_empty()
+            && normalized == self.matcher.normalized_query
+        {
+            self.matched.exact_match = true;
+            self.matched.bump_timestamp(timestamp);
+        }
+
+        if self.remaining_tokens.is_empty() {
+            return;
+        }
+
+        let haystack = text.to_lowercase();
+        let before = self.remaining_tokens.len();
+        self.remaining_tokens
+            .retain(|token| !haystack.contains(token));
+        if before != self.remaining_tokens.len() && self.remaining_tokens.is_empty() {
+            self.matched.keyword_match = true;
+            self.matched.bump_timestamp(timestamp);
+        }
+    }
+
+    fn into_match(self) -> SearchMatchMetadata {
+        self.matched
+    }
+}
+
 struct SearchCache {
     token: usize,
-    tokens: Vec<String>,
-    matches: HashMap<PathBuf, bool>,
+    matcher: QueryMatcher,
+    matches: HashMap<PathBuf, SearchMatchMetadata>,
     pending: HashSet<PathBuf>,
 }
 
@@ -349,13 +463,58 @@ fn tokenize_query(query: &str) -> Vec<String> {
     out
 }
 
-async fn scan_rollout_messages(path: &Path, tokens: &[String]) -> Result<(usize, bool)> {
+fn normalize_search_text(text: &str) -> String {
+    text.split_whitespace()
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn collect_search_text_values(value: &serde_json::Value, output: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(text) => {
+            if !text.trim().is_empty() {
+                output.push(text.clone());
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_search_text_values(value, output);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for (key, value) in map {
+                if key == "type" || key == "chunk" {
+                    continue;
+                }
+                collect_search_text_values(value, output);
+            }
+        }
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {}
+    }
+}
+
+fn extract_search_text_values<T: serde::Serialize>(value: &T) -> Vec<String> {
+    let Ok(value) = serde_json::to_value(value) else {
+        return Vec::new();
+    };
+    let mut output = Vec::new();
+    collect_search_text_values(&value, &mut output);
+    output
+}
+
+async fn scan_rollout_messages(
+    path: &Path,
+    matcher: Option<&QueryMatcher>,
+) -> Result<ScanRolloutResult> {
     let file = tokio::fs::File::open(path).await?;
     let reader = tokio::io::BufReader::new(file);
     let mut lines = reader.lines();
 
     let mut message_count = 0usize;
-    let mut remaining: Vec<String> = tokens.to_vec();
+    let mut search = matcher.cloned().map(SearchAccumulator::new);
 
     while let Some(line) = lines.next_line().await? {
         let trimmed = line.trim();
@@ -368,53 +527,42 @@ async fn scan_rollout_messages(path: &Path, tokens: &[String]) -> Result<(usize,
         else {
             continue;
         };
+        let timestamp = parse_timestamp_str(&rollout_line.timestamp);
 
         match rollout_line.item {
-            codex_protocol::protocol::RolloutItem::EventMsg(ev) => match ev {
-                codex_protocol::protocol::EventMsg::UserMessage(user) => {
+            codex_protocol::protocol::RolloutItem::EventMsg(ev) => {
+                if let codex_protocol::protocol::EventMsg::UserMessage(_) = &ev {
                     message_count = message_count.saturating_add(1);
-                    if !remaining.is_empty() {
-                        let haystack = user.message.to_lowercase();
-                        remaining.retain(|token| !haystack.contains(token));
+                }
+
+                if let Some(search) = search.as_mut() {
+                    for text in extract_search_text_values(&ev) {
+                        search.observe_text(&text, timestamp);
                     }
                 }
-                codex_protocol::protocol::EventMsg::AgentMessage(agent) => {
-                    if !remaining.is_empty() {
-                        let haystack = agent.message.to_lowercase();
-                        remaining.retain(|token| !haystack.contains(token));
+            }
+            codex_protocol::protocol::RolloutItem::ResponseItem(item) => {
+                if let codex_protocol::models::ResponseItem::Message { role, .. } = &item
+                    && role == "user"
+                {
+                    message_count = message_count.saturating_add(1);
+                }
+                if let Some(search) = search.as_mut() {
+                    for text in extract_search_text_values(&item) {
+                        search.observe_text(&text, timestamp);
                     }
                 }
-                _ => {}
-            },
-            codex_protocol::protocol::RolloutItem::ResponseItem(item) => match item {
-                codex_protocol::models::ResponseItem::Message { role, content, .. } => {
-                    if role == "user" {
-                        message_count = message_count.saturating_add(1);
-                    }
-                    if remaining.is_empty() {
-                        continue;
-                    }
-                    let mut pieces = Vec::new();
-                    for it in content {
-                        match it {
-                            codex_protocol::models::ContentItem::InputText { text }
-                            | codex_protocol::models::ContentItem::OutputText { text } => {
-                                pieces.push(text);
+            }
+            codex_protocol::protocol::RolloutItem::Compacted(compacted) => {
+                if let Some(search) = search.as_mut() {
+                    search.observe_text(&compacted.message, timestamp);
+                    if let Some(replacement_history) = compacted.replacement_history {
+                        for item in replacement_history {
+                            for text in extract_search_text_values(&item) {
+                                search.observe_text(&text, timestamp);
                             }
-                            codex_protocol::models::ContentItem::InputImage { .. } => {}
                         }
                     }
-                    if !pieces.is_empty() {
-                        let joined = pieces.join(" ").to_lowercase();
-                        remaining.retain(|token| !joined.contains(token));
-                    }
-                }
-                _ => {}
-            },
-            codex_protocol::protocol::RolloutItem::Compacted(compacted) => {
-                if !remaining.is_empty() {
-                    let haystack = compacted.message.to_lowercase();
-                    remaining.retain(|token| !haystack.contains(token));
                 }
             }
             codex_protocol::protocol::RolloutItem::SessionMeta(_)
@@ -422,7 +570,14 @@ async fn scan_rollout_messages(path: &Path, tokens: &[String]) -> Result<(usize,
         }
     }
 
-    Ok((message_count, remaining.is_empty()))
+    let matched = search
+        .map(SearchAccumulator::into_match)
+        .unwrap_or_default();
+
+    Ok(ScanRolloutResult {
+        message_count,
+        matched,
+    })
 }
 
 impl LoadingState {
@@ -503,10 +658,14 @@ impl PickerState {
             selected: 0,
             scroll_top: 0,
             query: String::new(),
+            active_query: String::new(),
             search_state: SearchState::Idle,
             search_cache: None,
             next_request_token: 0,
             next_search_token: 0,
+            next_debounce_token: 0,
+            pending_debounce_token: None,
+            search_counts: SearchMatchCounts::default(),
             page_loader,
             view_rows: None,
             default_provider,
@@ -577,7 +736,7 @@ impl PickerState {
             KeyCode::Backspace => {
                 let mut new_query = self.query.clone();
                 new_query.pop();
-                self.set_query(new_query);
+                self.set_raw_query(new_query);
             }
             KeyCode::Char(c) => {
                 // basic text input for search
@@ -588,7 +747,7 @@ impl PickerState {
                 {
                     let mut new_query = self.query.clone();
                     new_query.push(c);
-                    self.set_query(new_query);
+                    self.set_raw_query(new_query);
                 }
             }
             _ => {}
@@ -603,7 +762,7 @@ impl PickerState {
         self.seen_paths.clear();
         self.selected = 0;
 
-        let search_token = if self.query.is_empty() {
+        let search_token = if self.active_query.is_empty() {
             self.search_state = SearchState::Idle;
             None
         } else {
@@ -671,6 +830,13 @@ impl PickerState {
                 }
                 self.apply_filter();
                 self.continue_search_if_token_matches(search_token);
+            }
+            BackgroundEvent::DebouncedQueryReady { token, query } => {
+                if self.pending_debounce_token != Some(token) {
+                    return Ok(());
+                }
+                self.pending_debounce_token = None;
+                self.apply_search_query(query);
             }
         }
         Ok(())
@@ -757,22 +923,54 @@ impl PickerState {
             .all_rows
             .iter()
             .filter(|row| self.row_matches_filter(row));
-        if self.query.is_empty() {
+        if self.active_query.is_empty() {
             self.filtered_rows = base_iter.cloned().collect();
+            self.search_counts = SearchMatchCounts::default();
         } else {
-            let q = self.query.to_lowercase();
+            let q = self.active_query.to_lowercase();
+            let normalized_query = normalize_search_text(&self.active_query);
             let cache = self.search_cache.as_ref();
-            self.filtered_rows = base_iter
-                .filter(|row| {
-                    if row.matches_query(&q) {
-                        return true;
+            let mut exact_rows: Vec<(Option<DateTime<Utc>>, Row)> = Vec::new();
+            let mut keyword_rows: Vec<(Option<DateTime<Utc>>, Row)> = Vec::new();
+            let mut counts = SearchMatchCounts::default();
+
+            for row in base_iter {
+                let mut row_match = SearchMatchMetadata::default();
+                if row.matches_query(&q) {
+                    row_match.keyword_match = true;
+                    row_match.bump_timestamp(row.updated_at.or(row.created_at));
+                }
+                if !normalized_query.is_empty() {
+                    let preview_match = normalize_search_text(&row.preview) == normalized_query;
+                    let thread_name_match = row
+                        .thread_name
+                        .as_ref()
+                        .is_some_and(|name| normalize_search_text(name) == normalized_query);
+                    if preview_match || thread_name_match {
+                        row_match.exact_match = true;
+                        row_match.bump_timestamp(row.updated_at.or(row.created_at));
                     }
-                    cache
-                        .and_then(|cache| cache.matches.get(&row.path))
-                        .copied()
-                        .unwrap_or(false)
-                })
-                .cloned()
+                }
+                if let Some(cache_match) = cache.and_then(|cache| cache.matches.get(&row.path)) {
+                    row_match.merge(cache_match);
+                }
+
+                if row_match.exact_match {
+                    counts.exact = counts.exact.saturating_add(1);
+                    exact_rows.push((self.match_sort_timestamp(row, &row_match), row.clone()));
+                } else if row_match.keyword_match {
+                    counts.keyword = counts.keyword.saturating_add(1);
+                    keyword_rows.push((self.match_sort_timestamp(row, &row_match), row.clone()));
+                }
+            }
+
+            self.search_counts = counts;
+            self.sort_search_group(&mut exact_rows);
+            self.sort_search_group(&mut keyword_rows);
+            self.filtered_rows = exact_rows
+                .into_iter()
+                .chain(keyword_rows)
+                .map(|(_, row)| row)
                 .collect();
         }
         if self.selected >= self.filtered_rows.len() {
@@ -807,7 +1005,7 @@ impl PickerState {
     fn queue_scans_for_rows(&mut self, rows: &[Row]) {
         if let Some(cache) = self.search_cache.as_ref() {
             let token = cache.token;
-            let tokens = cache.tokens.clone();
+            let matcher = cache.matcher.clone();
             let mut to_scan = Vec::new();
             for row in rows.iter().filter(|row| self.row_matches_filter(row)) {
                 if cache.matches.contains_key(&row.path) || cache.pending.contains(&row.path) {
@@ -816,7 +1014,7 @@ impl PickerState {
                 to_scan.push(row.path.clone());
             }
             for path in to_scan {
-                if self.spawn_message_scan(path.clone(), Some(token), tokens.clone())
+                if self.spawn_message_scan(path.clone(), Some(token), Some(matcher.clone()))
                     && let Some(cache) = self.search_cache.as_mut()
                     && cache.token == token
                 {
@@ -834,7 +1032,7 @@ impl PickerState {
             to_scan.push(row.path.clone());
         }
         for path in to_scan {
-            if self.spawn_message_scan(path.clone(), None, Vec::new()) {
+            if self.spawn_message_scan(path.clone(), None, None) {
                 self.message_count_pending.insert(path);
             }
         }
@@ -844,7 +1042,7 @@ impl PickerState {
         &self,
         path: PathBuf,
         search_token: Option<usize>,
-        tokens: Vec<String>,
+        matcher: Option<QueryMatcher>,
     ) -> bool {
         // Avoid spawning scan tasks for paths that don't exist. This keeps the
         // picker responsive in cases where rollout files were deleted and
@@ -857,15 +1055,24 @@ impl PickerState {
         };
         let tx = self.background_tx.clone();
         handle.spawn(async move {
-            let result = scan_rollout_messages(&path, &tokens).await;
+            let result = scan_rollout_messages(&path, matcher.as_ref()).await;
             let (message_count, matched) = match result {
-                Ok((count, matched)) => (Some(count), Some(matched)),
-                Err(_) => (None, Some(false)),
-            };
-            let matched = if search_token.is_some() {
-                matched
-            } else {
-                None
+                Ok(result) => {
+                    let matched = if search_token.is_some() {
+                        Some(result.matched)
+                    } else {
+                        None
+                    };
+                    (Some(result.message_count), matched)
+                }
+                Err(_) => {
+                    let matched = if search_token.is_some() {
+                        Some(SearchMatchMetadata::default())
+                    } else {
+                        None
+                    };
+                    (None, matched)
+                }
             };
             let _ = tx.send(BackgroundEvent::MessageScanCompleted {
                 path,
@@ -883,11 +1090,47 @@ impl PickerState {
         }
     }
 
-    fn set_query(&mut self, new_query: String) {
+    fn set_raw_query(&mut self, new_query: String) {
         if self.query == new_query {
             return;
         }
         self.query = new_query;
+        self.selected = 0;
+        self.schedule_query_debounce();
+        self.request_frame();
+    }
+
+    fn schedule_query_debounce(&mut self) {
+        let token = self.allocate_debounce_token();
+        self.pending_debounce_token = Some(token);
+        let query = self.query.clone();
+
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            self.pending_debounce_token = None;
+            self.apply_search_query(query);
+            return;
+        };
+
+        let tx = self.background_tx.clone();
+        handle.spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(SEARCH_DEBOUNCE_MS)).await;
+            let _ = tx.send(BackgroundEvent::DebouncedQueryReady { token, query });
+        });
+    }
+
+    #[cfg(test)]
+    fn set_query(&mut self, new_query: String) {
+        self.query = new_query.clone();
+        self.pending_debounce_token = None;
+        self.apply_search_query(new_query);
+    }
+
+    fn apply_search_query(&mut self, new_query: String) {
+        if self.active_query == new_query {
+            self.apply_filter();
+            return;
+        }
+        self.active_query = new_query;
         self.selected = 0;
         self.search_state = SearchState::Idle;
         self.search_cache = None;
@@ -905,20 +1148,19 @@ impl PickerState {
             self.pagination.loading = LoadingState::Idle;
         }
 
-        let tokens = tokenize_query(&self.query);
-        if tokens.is_empty() {
-            self.query.clear();
+        let Some(matcher) = QueryMatcher::from_query(&self.active_query) else {
+            self.active_query.clear();
             self.apply_filter();
             let rows = self.all_rows.clone();
             self.queue_scans_for_rows(&rows);
             return;
-        }
+        };
 
         let token = self.allocate_search_token();
         self.search_state = SearchState::Active { token };
         self.search_cache = Some(SearchCache {
             token,
-            tokens,
+            matcher,
             matches: HashMap::new(),
             pending: HashSet::new(),
         });
@@ -933,7 +1175,7 @@ impl PickerState {
         let Some(token) = self.search_state.active_token() else {
             return;
         };
-        if !self.filtered_rows.is_empty() {
+        if self.search_counts.exact > 0 {
             self.search_state = SearchState::Idle;
             return;
         }
@@ -945,6 +1187,27 @@ impl PickerState {
             return;
         }
         self.load_more_if_needed(LoadTrigger::Search { token });
+    }
+
+    fn match_sort_timestamp(
+        &self,
+        row: &Row,
+        row_match: &SearchMatchMetadata,
+    ) -> Option<DateTime<Utc>> {
+        row_match
+            .latest_match_ts
+            .or(row.updated_at)
+            .or(row.created_at)
+    }
+
+    fn sort_search_group(&self, rows: &mut Vec<(Option<DateTime<Utc>>, Row)>) {
+        rows.sort_by(|(lhs_ts, lhs_row), (rhs_ts, rhs_row)| {
+            rhs_ts
+                .cmp(lhs_ts)
+                .then_with(|| rhs_row.updated_at.cmp(&lhs_row.updated_at))
+                .then_with(|| rhs_row.created_at.cmp(&lhs_row.created_at))
+                .then_with(|| lhs_row.path.cmp(&rhs_row.path))
+        });
     }
 
     fn continue_search_if_token_matches(&mut self, completed_token: Option<usize>) {
@@ -1059,6 +1322,12 @@ impl PickerState {
         token
     }
 
+    fn allocate_debounce_token(&mut self) -> usize {
+        let token = self.next_debounce_token;
+        self.next_debounce_token = self.next_debounce_token.wrapping_add(1);
+        token
+    }
+
     /// Cycles the sort order between creation time and last-updated time.
     ///
     /// Triggers a full reload because the backend must re-sort all sessions.
@@ -1137,15 +1406,34 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         .areas(area);
 
         // Header
-        let header_line: Line = vec![
+        let mut header_spans: Vec<Span> = vec![
             state.action.title().bold().cyan(),
             "  ".into(),
             "Sort:".dim(),
             " ".into(),
             sort_key_label(state.sort_key).magenta(),
-        ]
-        .into();
-        frame.render_widget_ref(header_line, header);
+        ];
+        if !state.active_query.is_empty() {
+            let summary = format!(
+                "Exact: {}  Keyword: {}",
+                state.search_counts.exact, state.search_counts.keyword
+            );
+            let left_width = header_spans
+                .iter()
+                .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+                .sum::<usize>();
+            let right_width = UnicodeWidthStr::width(summary.as_str());
+            let total_width = header.width as usize;
+            if total_width > left_width + right_width {
+                header_spans.push(Span::from(
+                    " ".repeat(total_width - left_width - right_width),
+                ));
+            } else {
+                header_spans.push("  ".into());
+            }
+            header_spans.push(summary.dim());
+        }
+        frame.render_widget_ref(Line::from(header_spans), header);
 
         // Search line
         let q = if state.query.is_empty() {
@@ -1353,9 +1641,10 @@ fn render_list(
 }
 
 fn render_empty_state_line(state: &PickerState) -> Line<'static> {
-    if !state.query.is_empty() {
+    if !state.query.is_empty() || !state.active_query.is_empty() {
         if state.search_state.is_active()
             || state.search_pending()
+            || state.pending_debounce_token.is_some()
             || (state.pagination.loading.is_pending() && state.pagination.next_cursor.is_some())
         {
             return vec!["Searching…".italic().dim()].into();
@@ -1654,7 +1943,9 @@ mod tests {
     use super::*;
     use chrono::Duration;
     use codex_protocol::ThreadId;
+    use codex_protocol::models::ResponseItem;
     use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::PatchApplyEndEvent;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::RolloutLine;
     use codex_protocol::protocol::SessionMeta;
@@ -2550,6 +2841,205 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn typing_search_is_debounced() {
+        let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let request_sink = recorded_requests.clone();
+        let loader: PageLoader = Arc::new(move |req: PageLoadRequest| {
+            request_sink.lock().expect("lock request sink").push(req);
+        });
+        let (bg_tx, _bg_rx) = mpsc::unbounded_channel();
+
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            bg_tx,
+            String::from("openai"),
+            true,
+            None,
+            SessionPickerAction::Resume,
+        );
+        state.reset_pagination();
+        state.ingest_page(page(
+            vec![make_item(
+                "/tmp/start.jsonl",
+                "2025-01-01T00:00:00Z",
+                "alpha",
+            )],
+            Some(cursor_from_str(
+                "2025-01-02T00-00-00|00000000-0000-0000-0000-000000000000",
+            )),
+            1,
+            false,
+        ));
+        recorded_requests.lock().expect("lock request sink").clear();
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE))
+            .await
+            .expect("type first key");
+        let first_token = state.pending_debounce_token.expect("first debounce token");
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE))
+            .await
+            .expect("type second key");
+        let second_token = state.pending_debounce_token.expect("second debounce token");
+
+        assert_ne!(first_token, second_token);
+        assert_eq!(state.active_query, "");
+        assert_eq!(
+            recorded_requests.lock().expect("lock request sink").len(),
+            0
+        );
+
+        state
+            .handle_background_event(BackgroundEvent::DebouncedQueryReady {
+                token: first_token,
+                query: "a".to_string(),
+            })
+            .await
+            .expect("handle stale debounce");
+
+        assert_eq!(state.active_query, "");
+        assert_eq!(
+            recorded_requests.lock().expect("lock request sink").len(),
+            0
+        );
+
+        state
+            .handle_background_event(BackgroundEvent::DebouncedQueryReady {
+                token: second_token,
+                query: "ab".to_string(),
+            })
+            .await
+            .expect("handle active debounce");
+
+        assert_eq!(state.active_query, "ab");
+        assert_eq!(
+            recorded_requests.lock().expect("lock request sink").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn exact_results_rank_above_keyword_results() {
+        let loader: PageLoader = Arc::new(|_| {});
+        let (bg_tx, _bg_rx) = mpsc::unbounded_channel();
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            bg_tx,
+            String::from("openai"),
+            true,
+            None,
+            SessionPickerAction::Resume,
+        );
+
+        state.all_rows = vec![
+            Row {
+                path: PathBuf::from("/tmp/keyword.jsonl"),
+                preview: "contains needle in context".to_string(),
+                thread_id: None,
+                thread_name: None,
+                created_at: parse_timestamp_str("2025-01-03T00:00:00Z"),
+                updated_at: parse_timestamp_str("2025-01-03T00:00:00Z"),
+                cwd: None,
+                git_branch: None,
+                message_count: Some(2),
+            },
+            Row {
+                path: PathBuf::from("/tmp/exact.jsonl"),
+                preview: "needle".to_string(),
+                thread_id: None,
+                thread_name: None,
+                created_at: parse_timestamp_str("2025-01-01T00:00:00Z"),
+                updated_at: parse_timestamp_str("2025-01-01T00:00:00Z"),
+                cwd: None,
+                git_branch: None,
+                message_count: Some(1),
+            },
+        ];
+        state.filtered_rows = state.all_rows.clone();
+        state.seen_paths = state
+            .all_rows
+            .iter()
+            .map(|row| row.path.clone())
+            .collect::<HashSet<_>>();
+
+        state.set_query("needle".to_string());
+
+        assert_eq!(state.search_counts.exact, 1);
+        assert_eq!(state.search_counts.keyword, 1);
+        let ordered_paths = state
+            .filtered_rows
+            .iter()
+            .map(|row| row.path.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ordered_paths,
+            vec![
+                PathBuf::from("/tmp/exact.jsonl"),
+                PathBuf::from("/tmp/keyword.jsonl"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn scan_rollout_messages_matches_tool_call_payloads() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let path = tempdir.path().join("rollout.jsonl");
+
+        let rollout = vec![
+            RolloutLine {
+                timestamp: "2025-01-01T00:00:00Z".to_string(),
+                item: RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+                    id: None,
+                    name: "shell_command".to_string(),
+                    arguments: "{\"command\":\"touch src/new_file.rs\"}".to_string(),
+                    call_id: "call-1".to_string(),
+                }),
+            },
+            RolloutLine {
+                timestamp: "2025-01-01T00:01:00Z".to_string(),
+                item: RolloutItem::EventMsg(EventMsg::PatchApplyEnd(PatchApplyEndEvent {
+                    call_id: "patch-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    stdout: "created src/new_file.rs".to_string(),
+                    stderr: "stderr: none".to_string(),
+                    success: true,
+                    changes: std::collections::HashMap::new(),
+                })),
+            },
+        ];
+
+        let mut file = String::new();
+        for line in rollout {
+            file.push_str(&serde_json::to_string(&line).expect("serialize rollout line"));
+            file.push('\n');
+        }
+        std::fs::write(&path, file).expect("write rollout");
+
+        let exact_matcher = QueryMatcher::from_query("created src/new_file.rs")
+            .expect("exact matcher should exist");
+        let exact_result = scan_rollout_messages(&path, Some(&exact_matcher))
+            .await
+            .expect("scan exact query");
+
+        assert!(exact_result.matched.exact_match);
+        assert_eq!(exact_result.message_count, 0);
+
+        let keyword_matcher = QueryMatcher::from_query("touch src/new_file.rs")
+            .expect("keyword matcher should exist");
+        let keyword_result = scan_rollout_messages(&path, Some(&keyword_matcher))
+            .await
+            .expect("scan keyword query");
+
+        assert!(keyword_result.matched.keyword_match);
+    }
+
+    #[tokio::test]
     async fn set_query_loads_until_match_and_respects_scan_cap() {
         let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
         let request_sink = recorded_requests.clone();
@@ -2583,7 +3073,7 @@ mod tests {
         ));
         recorded_requests.lock().unwrap().clear();
 
-        state.set_query("target".to_string());
+        state.set_query("target log".to_string());
         let first_request = {
             let guard = recorded_requests.lock().unwrap();
             assert_eq!(guard.len(), 1);
@@ -2640,7 +3130,11 @@ mod tests {
                 path: PathBuf::from("/tmp/match.jsonl"),
                 message_count: Some(2),
                 search_token,
-                matched: Some(true),
+                matched: Some(SearchMatchMetadata {
+                    exact_match: true,
+                    keyword_match: true,
+                    latest_match_ts: parse_timestamp_str("2025-01-03T00:00:00Z"),
+                }),
             })
             .await
             .unwrap();
