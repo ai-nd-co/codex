@@ -41,13 +41,13 @@ impl MarkdownStreamCollector {
         } else {
             return Vec::new();
         };
-        if markdown_render::tables_enabled() {
-            if let Some(truncated) = truncate_incomplete_table_source(&source) {
-                if truncated.is_empty() {
-                    return Vec::new();
-                }
-                source = truncated;
+        if markdown_render::tables_enabled()
+            && let Some(truncated) = truncate_incomplete_table_source(&source)
+        {
+            if truncated.is_empty() {
+                return Vec::new();
             }
+            source = truncated;
         }
         let mut rendered: Vec<Line<'static>> = Vec::new();
         markdown::append_markdown(&source, self.width, &mut rendered);

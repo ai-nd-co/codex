@@ -81,7 +81,7 @@ impl HighlightLanguage {
 
     pub(crate) fn from_fence_info(info: &str) -> Option<Self> {
         // "```ts" or "```typescript" or "```python"
-        let raw = info.trim().split_whitespace().next().unwrap_or("");
+        let raw = info.split_whitespace().next().unwrap_or("");
         if raw.is_empty() {
             return None;
         }
@@ -699,7 +699,7 @@ fn highlight_markdown_to_lines(source: &str) -> Vec<Line<'static>> {
         // List marker (common)
         let is_bullet =
             trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("+ ");
-        let is_ordered = trimmed.chars().take_while(|c| c.is_ascii_digit()).count() > 0
+        let is_ordered = trimmed.chars().take_while(char::is_ascii_digit).count() > 0
             && (trimmed.contains(". ") || trimmed.contains(") "));
         if is_bullet {
             line.spans
@@ -866,7 +866,7 @@ fn highlight_dockerfile_to_lines(source: &str) -> Vec<Line<'static>> {
                 let quote = ch;
                 let mut s = String::new();
                 s.push(quote);
-                while let Some(c) = chars.next() {
+                for c in chars.by_ref() {
                     s.push(c);
                     if c == quote {
                         break;

@@ -451,13 +451,6 @@ pub(crate) fn single_line_footer_layout(
     (SummaryLeft::None, true)
 }
 
-pub(crate) fn mode_indicator_line(
-    indicator: Option<CollaborationModeIndicator>,
-    show_cycle_hint: bool,
-) -> Option<Line<'static>> {
-    indicator.map(|indicator| Line::from(vec![indicator.styled_span(show_cycle_hint)]))
-}
-
 fn right_aligned_x(area: Rect, content_width: u16) -> Option<u16> {
     if area.is_empty() {
         return None;

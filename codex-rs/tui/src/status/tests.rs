@@ -88,18 +88,18 @@ fn sanitize_version(lines: Vec<String>) -> Vec<String> {
         .into_iter()
         .map(|mut line| {
             // Keep snapshots stable across version bumps.
-            if let (Some(vpos), Some(end)) = (line.find("(v"), line.rfind(')')) {
-                if vpos < end {
-                    let version_slice = &line[vpos..=end];
-                    if version_slice.starts_with("(v") {
-                        // Replace only the numeric part so spacing stays identical
-                        // for typical `X.Y.Z` versions (5 chars).
-                        if let Some(close) = line[vpos..].find(')') {
-                            let close = vpos + close;
-                            let start = (vpos + 2).min(line.len());
-                            if start < close {
-                                line.replace_range(start..close, "X.Y.Z");
-                            }
+            if let (Some(vpos), Some(end)) = (line.find("(v"), line.rfind(')'))
+                && vpos < end
+            {
+                let version_slice = &line[vpos..=end];
+                if version_slice.starts_with("(v") {
+                    // Replace only the numeric part so spacing stays identical
+                    // for typical `X.Y.Z` versions (5 chars).
+                    if let Some(close) = line[vpos..].find(')') {
+                        let close = vpos + close;
+                        let start = (vpos + 2).min(line.len());
+                        if start < close {
+                            line.replace_range(start..close, "X.Y.Z");
                         }
                     }
                 }

@@ -631,6 +631,7 @@ impl Row {
 }
 
 impl PickerState {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         codex_home: PathBuf,
         requester: FrameRequester,
@@ -1200,7 +1201,7 @@ impl PickerState {
             .or(row.created_at)
     }
 
-    fn sort_search_group(&self, rows: &mut Vec<(Option<DateTime<Utc>>, Row)>) {
+    fn sort_search_group(&self, rows: &mut [(Option<DateTime<Utc>>, Row)]) {
         rows.sort_by(|(lhs_ts, lhs_row), (rhs_ts, rhs_row)| {
             rhs_ts
                 .cmp(lhs_ts)

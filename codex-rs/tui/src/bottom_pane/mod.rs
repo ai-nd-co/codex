@@ -291,11 +291,6 @@ impl BottomPane {
         self.context_window_used_tokens
     }
 
-    #[cfg(test)]
-    pub(crate) fn context_window_total_tokens(&self) -> Option<i64> {
-        self.context_window_total_tokens
-    }
-
     fn active_view(&self) -> Option<&dyn BottomPaneView> {
         self.view_stack.last().map(std::convert::AsRef::as_ref)
     }
