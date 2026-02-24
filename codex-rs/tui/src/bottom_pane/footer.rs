@@ -786,8 +786,9 @@ pub(crate) fn context_window_line(
         let used_fmt = format_tokens_compact(tokens);
         if let Some(total) = total_tokens {
             let total_fmt = format_tokens_compact(total);
-            let mut line =
-                Line::from(vec![Span::from(format!("{used_fmt} / {total_fmt} tokens")).dim()]);
+            let mut line = Line::from(vec![
+                Span::from(format!("{used_fmt} / {total_fmt} tokens")).dim(),
+            ]);
             if let Some(percent) = percent {
                 let percent = percent.clamp(0, 100);
                 line.push_span(" · ".dim());
@@ -1122,10 +1123,8 @@ mod tests {
                         .map(|line| line.clone().dim())
                 {
                     let line = if let Some(indicator) = collaboration_mode_indicator {
-                        let suffix = Line::from(vec![
-                            Span::from(" · ").dim(),
-                            indicator.styled_span(false),
-                        ]);
+                        let suffix =
+                            Line::from(vec![Span::from(" · ").dim(), indicator.styled_span(false)]);
                         let suffix_width = suffix.width();
                         if suffix_width >= max_left as usize {
                             truncate_line_with_ellipsis_if_overflow(
@@ -1134,7 +1133,8 @@ mod tests {
                             )
                         } else {
                             let prefix_budget = (max_left as usize).saturating_sub(suffix_width);
-                            let mut out = truncate_line_with_ellipsis_if_overflow(line, prefix_budget);
+                            let mut out =
+                                truncate_line_with_ellipsis_if_overflow(line, prefix_budget);
                             out.extend(suffix.spans);
                             out
                         }

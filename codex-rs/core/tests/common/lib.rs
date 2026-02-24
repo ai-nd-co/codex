@@ -223,7 +223,13 @@ pub fn stdio_server_bin() -> anyhow::Result<String> {
 
     let status = std::process::Command::new("cargo")
         .current_dir(&codex_rs_root)
-        .args(["build", "-p", "codex-rmcp-client", "--bin", "test_stdio_server"])
+        .args([
+            "build",
+            "-p",
+            "codex-rmcp-client",
+            "--bin",
+            "test_stdio_server",
+        ])
         .status()?;
     anyhow::ensure!(status.success(), "failed to build test_stdio_server");
 

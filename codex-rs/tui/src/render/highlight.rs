@@ -328,14 +328,9 @@ fn config_css() -> &'static HighlightConfiguration {
     CONFIG.get_or_init(|| {
         let language = tree_sitter_css::LANGUAGE.into();
         #[expect(clippy::expect_used)]
-        let mut config = HighlightConfiguration::new(
-            language,
-            "css",
-            tree_sitter_css::HIGHLIGHTS_QUERY,
-            "",
-            "",
-        )
-        .expect("load css highlight query");
+        let mut config =
+            HighlightConfiguration::new(language, "css", tree_sitter_css::HIGHLIGHTS_QUERY, "", "")
+                .expect("load css highlight query");
         config.configure(HIGHLIGHT_NAMES);
         config
     })
@@ -433,9 +428,8 @@ fn config_hcl() -> &'static HighlightConfiguration {
     CONFIG.get_or_init(|| {
         let language = tree_sitter_hcl::LANGUAGE.into();
         #[expect(clippy::expect_used)]
-        let mut config =
-            HighlightConfiguration::new(language, "hcl", HCL_HIGHLIGHTS_QUERY, "", "")
-                .expect("load hcl highlight query");
+        let mut config = HighlightConfiguration::new(language, "hcl", HCL_HIGHLIGHTS_QUERY, "", "")
+            .expect("load hcl highlight query");
         config.configure(HIGHLIGHT_NAMES);
         config
     })
@@ -493,7 +487,9 @@ fn style_for_capture(lang: HighlightLanguage, capture: &str) -> Style {
             Style::default().fg(darcula_rgb(255, 198, 109))
         }
         "type" | "type.builtin" => Style::default().fg(darcula_rgb(152, 118, 170)),
-        "constant" | "constant.builtin" | "symbol" => Style::default().fg(darcula_rgb(152, 118, 170)),
+        "constant" | "constant.builtin" | "symbol" => {
+            Style::default().fg(darcula_rgb(152, 118, 170))
+        }
         "variable" | "variable.parameter" | "variable.builtin" | "parameter" => {
             Style::default().fg(darcula_rgb(169, 183, 198))
         }
@@ -629,20 +625,29 @@ fn highlight_markdown_to_lines(source: &str) -> Vec<Line<'static>> {
         for ch in s.chars() {
             if ch == '`' {
                 if !buf.is_empty() {
-                    let style = if in_code { Some(code_style) } else { base_style };
+                    let style = if in_code {
+                        Some(code_style)
+                    } else {
+                        base_style
+                    };
                     line.spans.push(match style {
                         Some(style) => Span::styled(std::mem::take(&mut buf), style),
                         None => std::mem::take(&mut buf).into(),
                     });
                 }
-                line.spans.push(Span::styled("`".to_string(), backtick_style));
+                line.spans
+                    .push(Span::styled("`".to_string(), backtick_style));
                 in_code = !in_code;
                 continue;
             }
             buf.push(ch);
         }
         if !buf.is_empty() {
-            let style = if in_code { Some(code_style) } else { base_style };
+            let style = if in_code {
+                Some(code_style)
+            } else {
+                base_style
+            };
             line.spans.push(match style {
                 Some(style) => Span::styled(buf, style),
                 None => buf.into(),
@@ -666,7 +671,8 @@ fn highlight_markdown_to_lines(source: &str) -> Vec<Line<'static>> {
 
         // Fences: ```lang
         if trimmed.starts_with("```") {
-            line.spans.push(Span::styled(trimmed.to_string(), list_marker_style));
+            line.spans
+                .push(Span::styled(trimmed.to_string(), list_marker_style));
             out.push(line);
             continue;
         }
@@ -676,7 +682,8 @@ fn highlight_markdown_to_lines(source: &str) -> Vec<Line<'static>> {
         if hash_count > 0 {
             let after = &trimmed[hash_count..];
             if after.starts_with(' ') || after.starts_with('\t') {
-                line.spans.push(Span::styled("#".repeat(hash_count), list_marker_style));
+                line.spans
+                    .push(Span::styled("#".repeat(hash_count), list_marker_style));
                 push_inline_with_code(
                     &mut line,
                     after,
@@ -690,25 +697,14 @@ fn highlight_markdown_to_lines(source: &str) -> Vec<Line<'static>> {
         }
 
         // List marker (common)
-        let is_bullet = trimmed.starts_with("- ")
-            || trimmed.starts_with("* ")
-            || trimmed.starts_with("+ ");
-        let is_ordered = trimmed
-            .chars()
-            .take_while(|c| c.is_ascii_digit())
-            .count()
-            > 0
+        let is_bullet =
+            trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("+ ");
+        let is_ordered = trimmed.chars().take_while(|c| c.is_ascii_digit()).count() > 0
             && (trimmed.contains(". ") || trimmed.contains(") "));
         if is_bullet {
             line.spans
                 .push(Span::styled(trimmed[..1].to_string(), list_marker_style));
-            push_inline_with_code(
-                &mut line,
-                &trimmed[1..],
-                None,
-                backtick_style,
-                code_style,
-            );
+            push_inline_with_code(&mut line, &trimmed[1..], None, backtick_style, code_style);
             out.push(line);
             continue;
         }
@@ -758,8 +754,24 @@ fn highlight_dockerfile_to_lines(source: &str) -> Vec<Line<'static>> {
 
     // Keep this list aligned with common Dockerfile instructions.
     const KEYWORDS: &[&str] = &[
-        "FROM", "AS", "RUN", "CMD", "LABEL", "EXPOSE", "ENV", "ADD", "COPY", "ENTRYPOINT",
-        "VOLUME", "USER", "WORKDIR", "ARG", "ONBUILD", "STOPSIGNAL", "HEALTHCHECK", "SHELL",
+        "FROM",
+        "AS",
+        "RUN",
+        "CMD",
+        "LABEL",
+        "EXPOSE",
+        "ENV",
+        "ADD",
+        "COPY",
+        "ENTRYPOINT",
+        "VOLUME",
+        "USER",
+        "WORKDIR",
+        "ARG",
+        "ONBUILD",
+        "STOPSIGNAL",
+        "HEALTHCHECK",
+        "SHELL",
         "MAINTAINER",
     ];
 
@@ -780,7 +792,8 @@ fn highlight_dockerfile_to_lines(source: &str) -> Vec<Line<'static>> {
             line.spans.push(raw[..indent_len].to_string().into());
         }
         if trimmed.starts_with('#') {
-            line.spans.push(Span::styled(trimmed.to_string(), comment_style));
+            line.spans
+                .push(Span::styled(trimmed.to_string(), comment_style));
             out.push(line);
             continue;
         }
@@ -793,11 +806,13 @@ fn highlight_dockerfile_to_lines(source: &str) -> Vec<Line<'static>> {
         if let Some(ws_idx) = first_ws {
             let tok = &trimmed[..ws_idx];
             if is_keyword(tok) {
-                line.spans.push(Span::styled(tok.to_string(), keyword_style));
+                line.spans
+                    .push(Span::styled(tok.to_string(), keyword_style));
                 rest = &trimmed[ws_idx..];
             }
         } else if is_keyword(trimmed) {
-            line.spans.push(Span::styled(trimmed.to_string(), keyword_style));
+            line.spans
+                .push(Span::styled(trimmed.to_string(), keyword_style));
             out.push(line);
             continue;
         }
@@ -929,9 +944,7 @@ fn highlight_dotenv_to_lines(source: &str) -> Vec<Line<'static>> {
         }
 
         // '='
-        rendered
-            .spans
-            .push(Span::styled("=".to_string(), op_style));
+        rendered.spans.push(Span::styled("=".to_string(), op_style));
 
         // Value (preserve leading spaces)
         let value = &line[eq_pos + 1..];
@@ -1019,7 +1032,9 @@ fn highlight_ini_to_lines(source: &str) -> Vec<Line<'static>> {
         if !key_ws.is_empty() {
             rendered.spans.push(key_ws.to_string().into());
         }
-        rendered.spans.push(Span::styled(sep_ch.to_string(), op_style));
+        rendered
+            .spans
+            .push(Span::styled(sep_ch.to_string(), op_style));
         let value = &trimmed[sep_idx + 1..];
         if !value.is_empty() {
             rendered
@@ -1194,13 +1209,22 @@ mod tests {
         // This mainly ensures our highlight queries compile + the highlighter doesn't
         // choke on representative snippets.
         let cases: &[(HighlightLanguage, &str)] = &[
-            (HighlightLanguage::Dart, "class A { final int x = 1; A(this.x); }"),
-            (HighlightLanguage::Sql, "select * from drivers where id = 1;"),
+            (
+                HighlightLanguage::Dart,
+                "class A { final int x = 1; A(this.x); }",
+            ),
+            (
+                HighlightLanguage::Sql,
+                "select * from drivers where id = 1;",
+            ),
             (HighlightLanguage::Java, "class A { int x = 1; }"),
             (HighlightLanguage::Kotlin, "data class A(val x: Int = 1)"),
             (HighlightLanguage::Css, "body { color: red; }"),
             (HighlightLanguage::Html, "<div class='x'>hi</div>"),
-            (HighlightLanguage::Hcl, "resource \"x\" \"y\" { name = \"z\" }"),
+            (
+                HighlightLanguage::Hcl,
+                "resource \"x\" \"y\" { name = \"z\" }",
+            ),
             (HighlightLanguage::Markdown, "# Title\n- item\n`code`\n"),
             (HighlightLanguage::Xml, "<a href=\"/\">hi</a>"),
             (HighlightLanguage::Dockerfile, "FROM alpine\nRUN echo hi\n"),

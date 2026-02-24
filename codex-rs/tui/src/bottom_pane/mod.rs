@@ -86,8 +86,8 @@ mod scroll_state;
 mod selection_popup_common;
 mod textarea;
 mod unified_exec_footer;
-pub(crate) use unified_exec_footer::UnifiedExecProcessDetails;
 pub(crate) use feedback_view::FeedbackNoteView;
+pub(crate) use unified_exec_footer::UnifiedExecProcessDetails;
 
 /// How long the "press again to quit" hint stays visible.
 ///
@@ -667,10 +667,7 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub(crate) fn set_unified_exec_processes(
-        &mut self,
-        processes: Vec<UnifiedExecProcessDetails>,
-    ) {
+    pub(crate) fn set_unified_exec_processes(&mut self, processes: Vec<UnifiedExecProcessDetails>) {
         if self.unified_exec_footer.set_processes(processes) {
             self.request_redraw();
         }

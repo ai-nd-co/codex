@@ -29,8 +29,8 @@ use crate::features::Feature;
 use crate::features::Features;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::sandboxing::ExecApprovalRequirement;
-use shlex::try_join as shlex_try_join;
 use regex::Regex;
+use shlex::try_join as shlex_try_join;
 
 const PROMPT_CONFLICT_REASON: &str =
     "approval required by policy, but AskForApproval is set to Never";
@@ -140,7 +140,10 @@ impl ExecPolicyManager {
         if !always_prompt_regexes.is_empty() {
             let rendered = shlex_try_join(command.iter().map(String::as_str))
                 .unwrap_or_else(|_| command.join(" "));
-            if always_prompt_regexes.iter().any(|re| re.is_match(&rendered)) {
+            if always_prompt_regexes
+                .iter()
+                .any(|re| re.is_match(&rendered))
+            {
                 return ExecApprovalRequirement::NeedsApproval {
                     reason: Some(format!(
                         "`{rendered}` requires approval (matched approvals.always_prompt_regex)"

@@ -1702,11 +1702,11 @@ impl ExistingEventState {
     }
 
     fn consume(map: &mut HashMap<String, usize>, key: &str) -> bool {
-        if let Some(count) = map.get_mut(key) {
-            if *count > 0 {
-                *count -= 1;
-                return true;
-            }
+        if let Some(count) = map.get_mut(key)
+            && *count > 0
+        {
+            *count -= 1;
+            return true;
         }
         false
     }
@@ -1856,20 +1856,20 @@ impl ResumeEventCollector {
             events.push(EventMsg::AgentReasoning(AgentReasoningEvent { text }));
         }
 
-        if self.state.should_include_raw_reasoning() {
-            if let Some(content) = content {
-                for entry in content {
-                    let text = match entry {
-                        ReasoningItemContent::ReasoningText { text }
-                        | ReasoningItemContent::Text { text } => text.clone(),
-                    };
-                    if self.state.consume_raw_reasoning_message(&text) {
-                        continue;
-                    }
-                    events.push(EventMsg::AgentReasoningRawContent(
-                        AgentReasoningRawContentEvent { text },
-                    ));
+        if self.state.should_include_raw_reasoning()
+            && let Some(content) = content
+        {
+            for entry in content {
+                let text = match entry {
+                    ReasoningItemContent::ReasoningText { text }
+                    | ReasoningItemContent::Text { text } => text.clone(),
+                };
+                if self.state.consume_raw_reasoning_message(&text) {
+                    continue;
                 }
+                events.push(EventMsg::AgentReasoningRawContent(
+                    AgentReasoningRawContentEvent { text },
+                ));
             }
         }
 
@@ -1911,22 +1911,22 @@ impl ResumeEventCollector {
             return Vec::new();
         }
 
-        if name == VIEW_IMAGE_TOOL_NAME {
-            if let Some(path) = parse_view_image_path(arguments) {
-                let call_id = call_id.to_string();
-                self.suppressed_call_ids.insert(call_id.clone());
-                return vec![EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
-                    call_id,
-                    path,
-                })];
-            }
+        if name == VIEW_IMAGE_TOOL_NAME
+            && let Some(path) = parse_view_image_path(arguments)
+        {
+            let call_id = call_id.to_string();
+            self.suppressed_call_ids.insert(call_id.clone());
+            return vec![EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
+                call_id,
+                path,
+            })];
         }
 
-        let spec = exec_spec_for_function_call(name, arguments, &self.current_cwd);
+        let spec = exec_spec_for_function_call(name, arguments, self.current_cwd.as_path());
         let pending = PendingExecCall {
-            command: spec.command.clone(),
-            parsed_cmd: spec.parsed_cmd.clone(),
-            cwd: spec.cwd.clone(),
+            command: spec.command,
+            parsed_cmd: spec.parsed_cmd,
+            cwd: spec.cwd,
             source: ExecCommandSource::Agent,
         };
         self.pending_exec_calls
@@ -1954,11 +1954,11 @@ impl ResumeEventCollector {
             return Vec::new();
         }
 
-        let spec = exec_spec_for_custom_tool_call(name, input, &self.current_cwd);
+        let spec = exec_spec_for_custom_tool_call(name, input, self.current_cwd.as_path());
         let pending = PendingExecCall {
-            command: spec.command.clone(),
-            parsed_cmd: spec.parsed_cmd.clone(),
-            cwd: spec.cwd.clone(),
+            command: spec.command,
+            parsed_cmd: spec.parsed_cmd,
+            cwd: spec.cwd,
             source: ExecCommandSource::Agent,
         };
         self.pending_exec_calls
@@ -2277,7 +2277,7 @@ fn parse_view_image_path(arguments: &str) -> Option<PathBuf> {
     Some(PathBuf::from(args.path))
 }
 
-fn exec_spec_for_function_call(name: &str, arguments: &str, current_cwd: &PathBuf) -> ExecCallSpec {
+fn exec_spec_for_function_call(name: &str, arguments: &str, current_cwd: &Path) -> ExecCallSpec {
     match name {
         "exec_command" => {
             let args = serde_json::from_str::<ExecCommandArgs>(arguments).ok();
@@ -2286,7 +2286,7 @@ fn exec_spec_for_function_call(name: &str, arguments: &str, current_cwd: &PathBu
                     .workdir
                     .as_ref()
                     .map(PathBuf::from)
-                    .unwrap_or_else(|| current_cwd.clone());
+                    .unwrap_or_else(|| current_cwd.to_path_buf());
                 return ExecCallSpec {
                     command: vec![args.cmd],
                     parsed_cmd: Vec::new(),
@@ -2301,7 +2301,7 @@ fn exec_spec_for_function_call(name: &str, arguments: &str, current_cwd: &PathBu
                     .workdir
                     .as_ref()
                     .map(PathBuf::from)
-                    .unwrap_or_else(|| current_cwd.clone());
+                    .unwrap_or_else(|| current_cwd.to_path_buf());
                 return ExecCallSpec {
                     command: args.command,
                     parsed_cmd: Vec::new(),
@@ -2316,7 +2316,7 @@ fn exec_spec_for_function_call(name: &str, arguments: &str, current_cwd: &PathBu
                     .workdir
                     .as_ref()
                     .map(PathBuf::from)
-                    .unwrap_or_else(|| current_cwd.clone());
+                    .unwrap_or_else(|| current_cwd.to_path_buf());
                 return ExecCallSpec {
                     command: vec![args.command],
                     parsed_cmd: Vec::new(),
@@ -2339,7 +2339,7 @@ fn exec_spec_for_function_call(name: &str, arguments: &str, current_cwd: &PathBu
                         name,
                         path,
                     }],
-                    cwd: current_cwd.clone(),
+                    cwd: current_cwd.to_path_buf(),
                 };
             }
         }
@@ -2352,7 +2352,7 @@ fn exec_spec_for_function_call(name: &str, arguments: &str, current_cwd: &PathBu
                         cmd: format!("list_dir {}", args.dir_path),
                         path: Some(args.dir_path),
                     }],
-                    cwd: current_cwd.clone(),
+                    cwd: current_cwd.to_path_buf(),
                 };
             }
         }
@@ -2366,7 +2366,7 @@ fn exec_spec_for_function_call(name: &str, arguments: &str, current_cwd: &PathBu
                         query: Some(args.pattern),
                         path: args.path,
                     }],
-                    cwd: current_cwd.clone(),
+                    cwd: current_cwd.to_path_buf(),
                 };
             }
         }
@@ -2384,14 +2384,14 @@ fn exec_spec_for_function_call(name: &str, arguments: &str, current_cwd: &PathBu
             return ExecCallSpec {
                 command,
                 parsed_cmd: Vec::new(),
-                cwd: current_cwd.clone(),
+                cwd: current_cwd.to_path_buf(),
             };
         }
         "apply_patch" => {
             return ExecCallSpec {
                 command: vec!["apply_patch".to_string()],
                 parsed_cmd: Vec::new(),
-                cwd: current_cwd.clone(),
+                cwd: current_cwd.to_path_buf(),
             };
         }
         _ => {}
@@ -2400,15 +2400,15 @@ fn exec_spec_for_function_call(name: &str, arguments: &str, current_cwd: &PathBu
     ExecCallSpec {
         command: vec![name.to_string()],
         parsed_cmd: Vec::new(),
-        cwd: current_cwd.clone(),
+        cwd: current_cwd.to_path_buf(),
     }
 }
 
-fn exec_spec_for_custom_tool_call(name: &str, _input: &str, current_cwd: &PathBuf) -> ExecCallSpec {
+fn exec_spec_for_custom_tool_call(name: &str, _input: &str, current_cwd: &Path) -> ExecCallSpec {
     ExecCallSpec {
         command: vec![name.to_string()],
         parsed_cmd: Vec::new(),
-        cwd: current_cwd.clone(),
+        cwd: current_cwd.to_path_buf(),
     }
 }
 
