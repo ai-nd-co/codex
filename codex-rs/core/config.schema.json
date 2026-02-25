@@ -184,6 +184,9 @@
             "disable_compaction": {
               "type": "boolean"
             },
+            "disable_explored_compaction": {
+              "type": "boolean"
+            },
             "disable_system_prompt": {
               "type": "boolean"
             },
@@ -1236,6 +1239,9 @@
           "type": "boolean"
         },
         "disable_compaction": {
+          "type": "boolean"
+        },
+        "disable_explored_compaction": {
           "type": "boolean"
         },
         "disable_system_prompt": {

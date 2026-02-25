@@ -336,10 +336,14 @@ async fn test_list_and_resume_conversations() -> Result<()> {
         unreachable!("expected sessionConfigured notification");
     };
     assert_eq!(model, "o3");
-    assert!(
-        session_initial_messages.as_ref().is_none_or(Vec::is_empty),
-        "expected no initial messages when resuming from explicit history but got {session_initial_messages:#?}"
-    );
+    let session_initial_messages = session_initial_messages
+        .expect("expected initial messages when explicit history is provided");
+    match session_initial_messages.as_slice() {
+        [EventMsg::UserMessage(message)] => {
+            assert_eq!(message.message, fork_history_text);
+        }
+        other => panic!("unexpected initial messages from explicit history resume: {other:#?}"),
+    }
     let resume_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(resume_with_history_req_id)),
@@ -353,10 +357,14 @@ async fn test_list_and_resume_conversations() -> Result<()> {
     } = to_response::<ResumeConversationResponse>(resume_resp)?;
     assert!(!history_conversation_id.to_string().is_empty());
     assert_eq!(history_model, "o3");
-    assert!(
-        history_initial_messages.as_ref().is_none_or(Vec::is_empty),
-        "expected no initial messages in resume response when history is provided but got {history_initial_messages:#?}"
-    );
+    let history_initial_messages = history_initial_messages
+        .expect("expected initial messages in resume response when history is provided");
+    match history_initial_messages.as_slice() {
+        [EventMsg::UserMessage(message)] => {
+            assert_eq!(message.message, fork_history_text);
+        }
+        other => panic!("unexpected initial messages in history resume response: {other:#?}"),
+    }
 
     Ok(())
 }

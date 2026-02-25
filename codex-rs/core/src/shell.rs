@@ -1,6 +1,7 @@
 use crate::shell_snapshot::ShellSnapshot;
 use serde::Deserialize;
 use serde::Serialize;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -113,16 +114,16 @@ fn get_user_shell_path() -> Option<PathBuf> {
     None
 }
 
-fn file_exists(path: &PathBuf) -> Option<PathBuf> {
+fn file_exists(path: &Path) -> Option<PathBuf> {
     if std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file()) {
-        Some(PathBuf::from(path))
+        Some(path.to_path_buf())
     } else {
         None
     }
 }
 
 #[cfg(target_os = "windows")]
-fn is_wsl_bash_path(path: &PathBuf) -> bool {
+fn is_wsl_bash_path(path: &Path) -> bool {
     let normalized = path.to_string_lossy().to_lowercase().replace('/', "\\");
     normalized.ends_with("\\windows\\system32\\bash.exe")
         || normalized.ends_with("\\windows\\sysnative\\bash.exe")
@@ -136,7 +137,7 @@ fn get_shell_path(
     fallback_paths: Vec<&str>,
 ) -> Option<PathBuf> {
     // If exact provided path exists, use it
-    if provided_path.and_then(file_exists).is_some() {
+    if provided_path.and_then(|path| file_exists(path)).is_some() {
         return provided_path.cloned();
     }
 
@@ -156,7 +157,7 @@ fn get_shell_path(
 
     for path in fallback_paths {
         //check exists
-        if let Some(path) = file_exists(&PathBuf::from(path)) {
+        if let Some(path) = file_exists(Path::new(path)) {
             return Some(path);
         }
     }
@@ -184,7 +185,7 @@ fn get_bash_shell(path: Option<&PathBuf>) -> Option<Shell> {
         }
     }
 
-    if let Some(path) = path.and_then(file_exists) {
+    if let Some(path) = path.and_then(|path| file_exists(path)) {
         return Some(make_shell(path));
     }
 
@@ -196,15 +197,15 @@ fn get_bash_shell(path: Option<&PathBuf>) -> Option<Shell> {
         "C:\\Program Files (x86)\\Git\\usr\\bin\\bash.exe",
     ];
     for candidate in fallback_paths {
-        if let Some(path) = file_exists(&PathBuf::from(candidate)) {
+        if let Some(path) = file_exists(Path::new(candidate)) {
             return Some(make_shell(path));
         }
     }
 
-    if let Ok(path) = which::which("bash") {
-        if !is_wsl_bash_path(&path) {
-            return Some(make_shell(path));
-        }
+    if let Ok(path) = which::which("bash")
+        && !is_wsl_bash_path(&path)
+    {
+        return Some(make_shell(path));
     }
 
     None

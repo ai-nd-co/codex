@@ -37,6 +37,7 @@ pub(crate) struct OutputLinesParams {
     pub(crate) include_prefix: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn new_active_exec_command(
     call_id: String,
     command: Vec<String>,

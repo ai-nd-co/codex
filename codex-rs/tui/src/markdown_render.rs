@@ -232,10 +232,10 @@ fn normalize_table_blocks(input: &str) -> String {
             break;
         }
 
-        if !rows.iter().any(|row| is_pipe_table_separator(row)) {
-            if let Some(separator) = build_pipe_table_separator(&rows) {
-                rows.insert(1, separator);
-            }
+        if !rows.iter().any(|row| is_pipe_table_separator(row))
+            && let Some(separator) = build_pipe_table_separator(&rows)
+        {
+            rows.insert(1, separator);
         }
 
         out.extend(rows);
