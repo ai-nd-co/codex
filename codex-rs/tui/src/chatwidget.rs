@@ -3303,9 +3303,6 @@ impl ChatWidget {
             SlashCommand::Resume => {
                 self.app_event_tx.send(AppEvent::OpenResumePicker);
             }
-            SlashCommand::Rerender => {
-                self.app_event_tx.send(AppEvent::RerenderCurrentSession);
-            }
             SlashCommand::Fork => {
                 self.app_event_tx.send(AppEvent::ForkCurrentSession);
             }

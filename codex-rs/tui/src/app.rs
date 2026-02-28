@@ -1435,51 +1435,6 @@ impl App {
                 // Leaving alt-screen may blank the inline viewport; force a redraw either way.
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::RerenderCurrentSession => {
-                let Some(path) = self.chat_widget.rollout_path() else {
-                    self.chat_widget
-                        .add_error_message("Current session is not ready to rerender yet.".into());
-                    tui.frame_requester().schedule_frame();
-                    return Ok(AppRunControl::Continue);
-                };
-
-                let mut rerender_config = self.config.clone();
-                self.apply_runtime_policy_overrides(&mut rerender_config);
-
-                match self
-                    .server
-                    .resume_thread_from_rollout(
-                        rerender_config.clone(),
-                        path.clone(),
-                        self.auth_manager.clone(),
-                    )
-                    .await
-                {
-                    Ok(resumed) => {
-                        self.shutdown_current_thread().await;
-                        self.reset_for_thread_switch(tui)?;
-                        self.config = rerender_config;
-                        tui.set_notification_method(self.config.tui_notification_method);
-                        self.file_search.update_search_dir(self.config.cwd.clone());
-                        let init = self
-                            .chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
-                        self.chat_widget = ChatWidget::new_from_existing(
-                            init,
-                            resumed.thread,
-                            resumed.session_configured,
-                        );
-                        self.reset_thread_event_state();
-                    }
-                    Err(err) => {
-                        let path_display = path.display();
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to rerender session from {path_display}: {err}"
-                        ));
-                    }
-                }
-
-                tui.frame_requester().schedule_frame();
-            }
             AppEvent::ForkCurrentSession => {
                 self.otel_manager
                     .counter("codex.thread.fork", 1, &[("source", "slash_command")]);
