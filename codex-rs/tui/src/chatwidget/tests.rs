@@ -1710,6 +1710,7 @@ async fn make_chatwidget_manual(
         queued_user_messages: VecDeque::new(),
         queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
         pending_local_user_message_acks: VecDeque::new(),
+        recent_local_user_message_acks: VecDeque::new(),
         seen_user_message_event_ids: HashSet::new(),
         seen_user_message_event_id_order: VecDeque::new(),
         suppress_session_configured_redraw: false,
@@ -4083,6 +4084,148 @@ async fn live_user_message_event_matching_local_echo_is_suppressed() {
     assert!(
         drain_insert_history(&mut rx).is_empty(),
         "expected duplicate upstream user message id to be suppressed"
+    );
+}
+
+#[tokio::test]
+async fn local_echo_suppression_handles_mixed_event_forms_with_different_ids() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    chat.submit_user_message(UserMessage::from("hello local".to_string()));
+    let local_cells = drain_insert_history(&mut rx);
+    let local_blob = local_cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        local_blob.contains("hello local"),
+        "expected optimistic local echo to render: {local_blob:?}"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "transport-item-event-1".to_string(),
+        msg: EventMsg::ItemCompleted(codex_core::protocol::ItemCompletedEvent {
+            thread_id,
+            turn_id: "turn-1".to_string(),
+            item: codex_protocol::items::TurnItem::UserMessage(
+                codex_protocol::items::UserMessageItem {
+                    id: "item-user-msg-1".to_string(),
+                    content: vec![UserInput::Text {
+                        text: "hello local".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                },
+            ),
+        }),
+    });
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "expected first upstream user-message form to be suppressed as local echo"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "transport-user-event-1".to_string(),
+        msg: EventMsg::UserMessage(UserMessageEvent {
+            message: "hello local".to_string(),
+            images: None,
+            text_elements: Vec::new(),
+            local_images: Vec::new(),
+        }),
+    });
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "expected second upstream user-message form with a different id to stay suppressed",
+    );
+}
+
+#[tokio::test]
+async fn turn_started_flushes_lingering_explored_cell_boundary() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_task_started();
+    let begin = begin_exec_with_source(
+        &mut chat,
+        "call-turn-start-boundary",
+        "ls",
+        ExecCommandSource::UnifiedExecStartup,
+    );
+    end_exec(&mut chat, begin, "", "", 0);
+    assert!(
+        active_blob(&chat).contains("List ls"),
+        "expected active explored cell before next turn start"
+    );
+
+    // Simulate a missing turn-complete/user-message boundary from the prior turn.
+    // Starting a new turn should still force a hard transcript boundary.
+    chat.on_task_started();
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("List ls"),
+        "expected lingering explored cell to flush on new turn start: {rendered:?}"
+    );
+    assert!(
+        chat.active_cell.is_none(),
+        "expected no lingering active explored cell after new turn start boundary"
+    );
+}
+
+#[tokio::test]
+async fn user_message_ack_suppression_still_flushes_active_explored_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    let begin = begin_exec_with_source(
+        &mut chat,
+        "call-local-echo-boundary",
+        "ls",
+        ExecCommandSource::UnifiedExecStartup,
+    );
+    end_exec(&mut chat, begin, "", "", 0);
+    assert!(
+        active_blob(&chat).contains("List ls"),
+        "expected active explored cell before user ack"
+    );
+
+    let text_elements: Vec<TextElement> = Vec::new();
+    let local_images: Vec<PathBuf> = Vec::new();
+    chat.record_pending_local_user_message_ack("hello local", &text_elements, &local_images);
+
+    chat.handle_codex_event(Event {
+        id: "user-msg-boundary-1".to_string(),
+        msg: EventMsg::UserMessage(UserMessageEvent {
+            message: "hello local".to_string(),
+            images: None,
+            text_elements: Vec::new(),
+            local_images: Vec::new(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("List ls"),
+        "expected explored cell to flush on user-message boundary: {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("hello local"),
+        "expected matching user-message ack to stay suppressed: {rendered:?}"
+    );
+    assert!(
+        chat.active_cell.is_none(),
+        "expected no active explored cell after user-message boundary flush"
     );
 }
 

@@ -169,6 +169,7 @@ const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
 const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
 const MAX_PENDING_LOCAL_USER_MESSAGE_ACKS: usize = 64;
+const MAX_RECENT_LOCAL_USER_MESSAGE_ACKS: usize = 64;
 const MAX_SEEN_USER_MESSAGE_EVENT_IDS: usize = 1024;
 
 /// Choose the keybinding used to edit the most-recently queued message.
@@ -624,6 +625,10 @@ pub(crate) struct ChatWidget {
     // Local user messages that were already rendered optimistically in the UI and are awaiting a
     // matching upstream user-message event.
     pending_local_user_message_acks: VecDeque<PendingLocalUserMessageAck>,
+    // Recently consumed local echo acks. Some runtimes surface the same user message through both
+    // `ItemCompleted(TurnItem::UserMessage)` and legacy `EventMsg::UserMessage` with different
+    // source ids; keep a small payload cache so the second form is also suppressed.
+    recent_local_user_message_acks: VecDeque<PendingLocalUserMessageAck>,
     // Recently seen upstream user-message event ids (legacy `EventMsg::UserMessage` and
     // `ItemCompleted(TurnItem::UserMessage)`) used to suppress duplicate rendering across mixed
     // event streams.
@@ -1519,6 +1524,8 @@ impl ChatWidget {
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
+        self.recent_local_user_message_acks.clear();
+        self.clear_unified_exec_processes();
         self.request_redraw();
 
         if !from_replay && self.queued_user_messages.is_empty() {
@@ -3015,6 +3022,7 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             queued_message_edit_binding,
             pending_local_user_message_acks: VecDeque::new(),
+            recent_local_user_message_acks: VecDeque::new(),
             seen_user_message_event_ids: HashSet::new(),
             seen_user_message_event_id_order: VecDeque::new(),
             show_welcome_banner: is_first_run,
@@ -3212,6 +3220,7 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             queued_message_edit_binding,
             pending_local_user_message_acks: VecDeque::new(),
+            recent_local_user_message_acks: VecDeque::new(),
             seen_user_message_event_ids: HashSet::new(),
             seen_user_message_event_id_order: VecDeque::new(),
             show_welcome_banner: is_first_run,
@@ -3390,6 +3399,7 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             queued_message_edit_binding,
             pending_local_user_message_acks: VecDeque::new(),
+            recent_local_user_message_acks: VecDeque::new(),
             seen_user_message_event_ids: HashSet::new(),
             seen_user_message_event_id_order: VecDeque::new(),
             show_welcome_banner: false,
@@ -4837,7 +4847,29 @@ impl ChatWidget {
                     && pending.local_images == event.local_images
             });
         if let Some(idx) = idx {
-            self.pending_local_user_message_acks.remove(idx);
+            if let Some(consumed) = self.pending_local_user_message_acks.remove(idx) {
+                self.recent_local_user_message_acks.push_back(consumed);
+                while self.recent_local_user_message_acks.len() > MAX_RECENT_LOCAL_USER_MESSAGE_ACKS
+                {
+                    self.recent_local_user_message_acks.pop_front();
+                }
+            }
+            return true;
+        }
+        false
+    }
+
+    fn consume_recent_local_user_message_ack(&mut self, event: &UserMessageEvent) -> bool {
+        let idx = self
+            .recent_local_user_message_acks
+            .iter()
+            .position(|recent| {
+                recent.message == event.message
+                    && recent.text_elements == event.text_elements
+                    && recent.local_images == event.local_images
+            });
+        if let Some(idx) = idx {
+            self.recent_local_user_message_acks.remove(idx);
             return true;
         }
         false
@@ -4855,9 +4887,23 @@ impl ChatWidget {
         let already_seen = !self.remember_user_message_event_id(source_id);
         let matches_local_echo =
             !from_replay && self.consume_pending_local_user_message_ack(&event);
+        let matches_recent_local_echo = !from_replay
+            && !matches_local_echo
+            && self.consume_recent_local_user_message_ack(&event);
 
         let remote_image_urls = event.images.unwrap_or_default();
-        if !already_seen && !matches_local_echo
+
+        // Preserve a hard transcript boundary at user-message events even when the
+        // message body itself is suppressed (e.g., matching local echo ack). Without
+        // this, an in-flight explored/wait cell can visually bleed across turns.
+        if !already_seen {
+            self.flush_unified_exec_wait_streak();
+            self.flush_active_cell();
+        }
+
+        if !already_seen
+            && !matches_local_echo
+            && !matches_recent_local_echo
             && (!event.message.trim().is_empty()
                 || !event.text_elements.is_empty()
                 || !remote_image_urls.is_empty())
