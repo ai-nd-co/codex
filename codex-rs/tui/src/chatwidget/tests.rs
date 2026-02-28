@@ -944,6 +944,7 @@ async fn make_chatwidget_manual(
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),
         pending_local_user_message_acks: VecDeque::new(),
+        recent_local_user_message_acks: VecDeque::new(),
         seen_user_message_event_ids: HashSet::new(),
         seen_user_message_event_id_order: VecDeque::new(),
         suppress_session_configured_redraw: false,
@@ -2341,6 +2342,60 @@ async fn live_user_message_event_matching_local_echo_is_suppressed() {
     assert!(
         drain_insert_history(&mut rx).is_empty(),
         "expected duplicate upstream user message id to be suppressed"
+    );
+}
+
+#[tokio::test]
+async fn local_echo_suppression_handles_mixed_event_forms_with_different_ids() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    chat.submit_user_message(UserMessage::from("hello local".to_string()));
+    let local_cells = drain_insert_history(&mut rx);
+    let local_blob = local_cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        local_blob.contains("hello local"),
+        "expected optimistic local echo to render: {local_blob:?}"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "transport-item-event-1".to_string(),
+        msg: EventMsg::ItemCompleted(codex_core::protocol::ItemCompletedEvent {
+            thread_id,
+            turn_id: "turn-1".to_string(),
+            item: codex_protocol::items::TurnItem::UserMessage(
+                codex_protocol::items::UserMessageItem {
+                    id: "item-user-msg-1".to_string(),
+                    content: vec![UserInput::Text {
+                        text: "hello local".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                },
+            ),
+        }),
+    });
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "expected first upstream user-message form to be suppressed as local echo"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "transport-user-event-1".to_string(),
+        msg: EventMsg::UserMessage(UserMessageEvent {
+            message: "hello local".to_string(),
+            images: None,
+            text_elements: Vec::new(),
+            local_images: Vec::new(),
+        }),
+    });
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "expected second upstream user-message form with a different id to stay suppressed",
     );
 }
 
