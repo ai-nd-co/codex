@@ -62,6 +62,9 @@ pub(crate) enum AppEvent {
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
 
+    /// Re-render the current session by reloading it from the rollout path.
+    RerenderCurrentSession,
+
     /// Fork the current session into a new thread.
     ForkCurrentSession,
 

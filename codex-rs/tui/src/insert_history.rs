@@ -42,6 +42,47 @@ where
     // formatting as the TUI. This avoids character-level hard wrapping by the terminal.
     let wrapped = word_wrap_lines_borrowed(&lines, area.width.max(1) as usize);
     let wrapped_lines = wrapped.len() as u16;
+
+    // When the viewport starts at row 0 there is no "above viewport" scroll region to target.
+    // In that case, fall back to full-screen scrolling at the bottom row. This preserves
+    // scrollback insertion without emitting an invalid DECSTBM region (ESC[1;0r).
+    if area.top() == 0 {
+        if screen_size.height == 0 {
+            return Ok(());
+        }
+        queue!(writer, SetScrollRegion(1..screen_size.height))?;
+        queue!(writer, MoveTo(0, screen_size.height.saturating_sub(1)))?;
+        for line in wrapped {
+            queue!(writer, Print("\r\n"))?;
+            queue!(
+                writer,
+                SetColors(Colors::new(
+                    line.style
+                        .fg
+                        .map(std::convert::Into::into)
+                        .unwrap_or(CColor::Reset),
+                    line.style
+                        .bg
+                        .map(std::convert::Into::into)
+                        .unwrap_or(CColor::Reset)
+                ))
+            )?;
+            queue!(writer, Clear(ClearType::UntilNewLine))?;
+            let merged_spans: Vec<Span> = line
+                .spans
+                .iter()
+                .map(|s| Span {
+                    style: s.style.patch(line.style),
+                    content: s.content.clone(),
+                })
+                .collect();
+            write_spans(writer, merged_spans.iter())?;
+        }
+        queue!(writer, ResetScrollRegion)?;
+        queue!(writer, MoveTo(last_cursor_pos.x, last_cursor_pos.y))?;
+        return Ok(());
+    }
+
     let cursor_top = if area.bottom() < screen_size.height {
         // If the viewport is not at the bottom of the screen, scroll it down to make room.
         // Don't scroll it past the bottom of the screen.
@@ -526,5 +567,37 @@ mod tests {
                 cell.fgcolor()
             );
         }
+    }
+
+    #[test]
+    fn full_screen_viewport_history_insert_remains_renderable() {
+        let width: u16 = 40;
+        let height: u16 = 6;
+        let backend = VT100Backend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        // Full-screen viewport (top row = 0) exercises the fallback branch.
+        let viewport = Rect::new(0, 0, width, height);
+        term.set_viewport_area(viewport);
+
+        let line: Line<'static> = Line::from("fullscreen insert test");
+        insert_history_lines(&mut term, vec![line]).expect("insert should succeed");
+
+        let screen = term.backend().vt100().screen();
+        let mut found = false;
+        for row in 0..height {
+            for col in 0..width {
+                if let Some(cell) = screen.cell(row, col)
+                    && cell.has_contents()
+                    && cell.contents() == "f"
+                {
+                    found = true;
+                    break;
+                }
+            }
+            if found {
+                break;
+            }
+        }
+        assert!(found, "expected inserted text to remain renderable");
     }
 }
