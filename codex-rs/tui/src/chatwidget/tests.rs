@@ -2536,7 +2536,7 @@ async fn item_completed_user_message_renders_once_across_mixed_event_forms() {
 }
 
 #[tokio::test]
-async fn unified_exec_end_after_task_complete_is_suppressed() {
+async fn unified_exec_end_after_task_complete_is_rendered_for_startup() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.on_task_started();
 
@@ -2549,12 +2549,22 @@ async fn unified_exec_end_after_task_complete_is_suppressed() {
     drain_insert_history(&mut rx);
 
     chat.on_task_complete(None, false);
-    end_exec(&mut chat, begin, "", "", 0);
+    drain_insert_history(&mut rx);
+    end_exec(&mut chat, begin, "startup done\n", "", 0);
 
     let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(
-        cells.is_empty(),
-        "expected unified exec end after task complete to be suppressed"
+        !cells.is_empty(),
+        "expected unified startup completion after task complete to be rendered"
+    );
+    assert!(
+        rendered.contains("startup done"),
+        "expected rendered startup output after task complete: {rendered:?}"
     );
 }
 
@@ -4648,11 +4658,11 @@ async fn interrupt_clears_unified_exec_wait_streak_snapshot() {
 }
 
 #[tokio::test]
-async fn turn_complete_clears_unified_exec_processes() {
+async fn turn_complete_keeps_unified_exec_processes_until_end() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    begin_unified_exec_startup(&mut chat, "call-1", "process-1", "sleep 5");
-    begin_unified_exec_startup(&mut chat, "call-2", "process-2", "sleep 6");
+    let begin_1 = begin_unified_exec_startup(&mut chat, "call-1", "process-1", "sleep 5");
+    let begin_2 = begin_unified_exec_startup(&mut chat, "call-2", "process-2", "sleep 6");
     assert_eq!(chat.unified_exec_processes.len(), 2);
 
     chat.handle_codex_event(Event {
@@ -4662,9 +4672,68 @@ async fn turn_complete_clears_unified_exec_processes() {
         }),
     });
 
-    assert!(chat.unified_exec_processes.is_empty());
-
+    // Turn completion should not hide still-running background terminals.
+    assert_eq!(chat.unified_exec_processes.len(), 2);
     let _ = drain_insert_history(&mut rx);
+
+    end_exec(&mut chat, begin_1, "process-1 done\n", "", 0);
+    assert_eq!(
+        chat.unified_exec_processes.len(),
+        1,
+        "expected one background process to remain after first completion"
+    );
+
+    end_exec(&mut chat, begin_2, "process-2 done\n", "", 0);
+    assert!(
+        chat.unified_exec_processes.is_empty(),
+        "expected all background processes to be cleared after final completion"
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("process-1 done") && rendered.contains("process-2 done"),
+        "expected both late startup completions in history: {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn late_unified_exec_startup_end_removes_process_and_renders_output() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let begin = begin_unified_exec_startup(&mut chat, "call-1", "process-1", "sleep 5");
+    assert_eq!(chat.unified_exec_processes.len(), 1);
+    let _ = drain_insert_history(&mut rx);
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+    assert_eq!(chat.unified_exec_processes.len(), 1);
+    let _ = drain_insert_history(&mut rx);
+
+    end_exec(&mut chat, begin, "process-1 done\n", "", 0);
+    assert!(
+        chat.unified_exec_processes.is_empty(),
+        "expected process to be removed when unified startup command ends"
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("process-1 done"),
+        "expected late unified startup completion to appear in history: {rendered:?}"
+    );
 }
 
 // Snapshot test: ChatWidget at very small heights (idle)

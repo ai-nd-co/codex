@@ -1320,7 +1320,6 @@ impl ChatWidget {
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
         self.recent_local_user_message_acks.clear();
-        self.clear_unified_exec_processes();
         self.request_redraw();
 
         if !from_replay && self.queued_user_messages.is_empty() {
@@ -1610,7 +1609,6 @@ impl ChatWidget {
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
-        self.clear_unified_exec_processes();
         self.adaptive_chunking.reset();
         self.stream_controller = None;
         self.plan_stream_controller = None;
@@ -1724,6 +1722,10 @@ impl ChatWidget {
     fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
+        if reason == TurnAbortReason::Interrupted {
+            // Interrupting a turn cancels active background terminals; clear their footer state.
+            self.clear_unified_exec_processes();
+        }
 
         if reason != TurnAbortReason::ReviewEnded {
             self.add_to_history(history_cell::new_error_event(
@@ -1959,8 +1961,12 @@ impl ChatWidget {
             {
                 self.flush_unified_exec_wait_streak();
             }
-            self.track_unified_exec_process_end(&ev);
-            if !self.bottom_pane.is_task_running() {
+            let removed_tracked_process = self.track_unified_exec_process_end(&ev);
+            let allow_late_startup_completion = ev.source == ExecCommandSource::UnifiedExecStartup
+                && removed_tracked_process;
+            let should_suppress_after_task_complete = !self.bottom_pane.is_task_running()
+                && !allow_late_startup_completion;
+            if should_suppress_after_task_complete {
                 return;
             }
         }
@@ -1993,14 +1999,16 @@ impl ChatWidget {
         self.sync_unified_exec_footer();
     }
 
-    fn track_unified_exec_process_end(&mut self, ev: &ExecCommandEndEvent) {
+    fn track_unified_exec_process_end(&mut self, ev: &ExecCommandEndEvent) -> bool {
         let key = ev.process_id.clone().unwrap_or(ev.call_id.to_string());
         let before = self.unified_exec_processes.len();
         self.unified_exec_processes
             .retain(|process| process.key != key);
-        if self.unified_exec_processes.len() != before {
+        let removed = self.unified_exec_processes.len() != before;
+        if removed {
             self.sync_unified_exec_footer();
         }
+        removed
     }
 
     fn sync_unified_exec_footer(&mut self) {
