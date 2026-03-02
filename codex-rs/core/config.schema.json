@@ -331,6 +331,12 @@
             "default_mode_request_user_input": {
               "type": "boolean"
             },
+            "disable_compaction": {
+              "type": "boolean"
+            },
+            "disable_explored_compaction": {
+              "type": "boolean"
+            },
             "elevated_windows_sandbox": {
               "type": "boolean"
             },
@@ -356,6 +362,9 @@
               "type": "boolean"
             },
             "js_repl_tools_only": {
+              "type": "boolean"
+            },
+            "markdown_tables": {
               "type": "boolean"
             },
             "memories": {
@@ -416,6 +425,9 @@
               "type": "boolean"
             },
             "skill_mcp_dependency_install": {
+              "type": "boolean"
+            },
+            "smart_compact": {
               "type": "boolean"
             },
             "sqlite": {

@@ -1248,7 +1248,6 @@ mod tests {
                 context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
-                context_window_total_tokens: None,
             },
         );
 
@@ -1267,7 +1266,6 @@ mod tests {
                 context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
-                context_window_total_tokens: None,
             },
         );
 
@@ -1286,7 +1284,6 @@ mod tests {
                 context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
-                context_window_total_tokens: None,
             },
         );
 
@@ -1305,7 +1302,6 @@ mod tests {
                 context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
-                context_window_total_tokens: None,
             },
         );
 
@@ -1324,7 +1320,6 @@ mod tests {
                 context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
-                context_window_total_tokens: None,
             },
         );
 
@@ -1343,7 +1338,6 @@ mod tests {
                 context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
-                context_window_total_tokens: None,
             },
         );
 
@@ -1362,7 +1356,6 @@ mod tests {
                 context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
-                context_window_total_tokens: None,
             },
         );
 
@@ -1380,7 +1373,6 @@ mod tests {
                 context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
-                context_window_total_tokens: None,
             },
         );
 
@@ -1417,7 +1409,6 @@ mod tests {
                 context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
-                context_window_total_tokens: None,
             },
         );
 
@@ -1434,7 +1425,6 @@ mod tests {
             context_window_total_tokens: None,
             status_line_value: None,
             status_line_enabled: false,
-            context_window_total_tokens: None,
         };
 
         snapshot_footer_with_mode_indicator(
@@ -1464,7 +1454,6 @@ mod tests {
             context_window_total_tokens: None,
             status_line_value: None,
             status_line_enabled: false,
-            context_window_total_tokens: None,
         };
 
         snapshot_footer_with_mode_indicator(
