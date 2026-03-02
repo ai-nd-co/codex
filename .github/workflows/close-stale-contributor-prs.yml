@@ -13,11 +13,11 @@ permissions:
 jobs:
   close-stale-contributor-prs:
     # Prevent scheduled runs on forks
-    if: github.repository == 'openai/codex'
+    if: github.repository == 'ai-nd-co/codex'
     runs-on: ubuntu-latest
     steps:
       - name: Close inactive PRs from contributors
-        uses: actions/github-script@v8
+        uses: ai-nd-co/github-script@v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |

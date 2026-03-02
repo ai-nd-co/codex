@@ -67,7 +67,7 @@ jobs:
               labels: codex-windows-arm64
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: ai-nd-co/checkout@v6
       - name: Print runner specs (Windows)
         shell: powershell
         run: |
@@ -92,7 +92,7 @@ jobs:
           cargo build --target ${{ matrix.target }} --release --timings ${{ matrix.build_args }}
 
       - name: Upload Cargo timings
-        uses: actions/upload-artifact@v6
+        uses: ai-nd-co/upload-artifact@v6
         with:
           name: cargo-timings-rust-release-windows-${{ matrix.target }}-${{ matrix.bundle }}
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
@@ -112,7 +112,7 @@ jobs:
           fi
 
       - name: Upload Windows binaries
-        uses: actions/upload-artifact@v6
+        uses: ai-nd-co/upload-artifact@v6
         with:
           name: windows-binaries-${{ matrix.target }}-${{ matrix.bundle }}
           path: |
@@ -147,16 +147,16 @@ jobs:
               labels: codex-windows-arm64
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: ai-nd-co/checkout@v6
 
       - name: Download prebuilt Windows primary binaries
-        uses: actions/download-artifact@v7
+        uses: ai-nd-co/download-artifact@v7
         with:
           name: windows-binaries-${{ matrix.target }}-primary
           path: codex-rs/target/${{ matrix.target }}/release
 
       - name: Download prebuilt Windows helper binaries
-        uses: actions/download-artifact@v7
+        uses: ai-nd-co/download-artifact@v7
         with:
           name: windows-binaries-${{ matrix.target }}-helpers
           path: codex-rs/target/${{ matrix.target }}/release
@@ -193,7 +193,7 @@ jobs:
           cp target/${{ matrix.target }}/release/codex-command-runner.exe "$dest/codex-command-runner-${{ matrix.target }}.exe"
 
       - name: Install DotSlash
-        uses: facebook/install-dotslash@v2
+        uses: ai-nd-co/install-dotslash@v2
 
       - name: Compress artifacts
         shell: bash
@@ -257,7 +257,7 @@ jobs:
             "${GITHUB_WORKSPACE}/.github/workflows/zstd" -T0 -19 "$dest/$base"
           done
 
-      - uses: actions/upload-artifact@v6
+      - uses: ai-nd-co/upload-artifact@v6
         with:
           name: ${{ matrix.target }}
           path: |

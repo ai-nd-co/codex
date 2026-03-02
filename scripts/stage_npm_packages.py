@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 BUILD_SCRIPT = REPO_ROOT / "codex-cli" / "scripts" / "build_npm_package.py"
 INSTALL_NATIVE_DEPS = REPO_ROOT / "codex-cli" / "scripts" / "install_native_deps.py"
 WORKFLOW_NAME = ".github/workflows/rust-release.yml"
-GITHUB_REPO = "openai/codex"
+GITHUB_REPO = "ai-nd-co/codex"
 
 _SPEC = importlib.util.spec_from_file_location("codex_build_npm_package", BUILD_SCRIPT)
 if _SPEC is None or _SPEC.loader is None:
@@ -25,8 +25,7 @@ if _SPEC is None or _SPEC.loader is None:
 _BUILD_MODULE = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_BUILD_MODULE)
 PACKAGE_NATIVE_COMPONENTS = getattr(_BUILD_MODULE, "PACKAGE_NATIVE_COMPONENTS", {})
-PACKAGE_EXPANSIONS = getattr(_BUILD_MODULE, "PACKAGE_EXPANSIONS", {})
-CODEX_PLATFORM_PACKAGES = getattr(_BUILD_MODULE, "CODEX_PLATFORM_PACKAGES", {})
+WINDOWS_ONLY_COMPONENTS = getattr(_BUILD_MODULE, "WINDOWS_ONLY_COMPONENTS", {})
 
 
 def parse_args() -> argparse.Namespace:
@@ -42,6 +41,15 @@ def parse_args() -> argparse.Namespace:
         action="append",
         required=True,
         help="Package name to stage. May be provided multiple times.",
+    )
+    parser.add_argument(
+        "--target",
+        dest="targets",
+        action="append",
+        help=(
+            "Limit native binaries to specific target triples (repeatable). "
+            "Defaults to all supported targets."
+        ),
     )
     parser.add_argument(
         "--workflow-url",
@@ -65,17 +73,8 @@ def collect_native_components(packages: list[str]) -> set[str]:
     components: set[str] = set()
     for package in packages:
         components.update(PACKAGE_NATIVE_COMPONENTS.get(package, []))
+        components.update(WINDOWS_ONLY_COMPONENTS.get(package, []))
     return components
-
-
-def expand_packages(packages: list[str]) -> list[str]:
-    expanded: list[str] = []
-    for package in packages:
-        for expanded_package in PACKAGE_EXPANSIONS.get(package, [package]):
-            if expanded_package in expanded:
-                continue
-            expanded.append(expanded_package)
-    return expanded
 
 
 def resolve_release_workflow(version: str) -> dict:
@@ -114,13 +113,23 @@ def install_native_components(
     workflow_url: str,
     components: set[str],
     vendor_root: Path,
+    targets: list[str] | None,
 ) -> None:
     if not components:
         return
 
-    cmd = [str(INSTALL_NATIVE_DEPS), "--workflow-url", workflow_url]
+    cmd = [
+        str(INSTALL_NATIVE_DEPS),
+        "--workflow-url",
+        workflow_url,
+        "--repo",
+        GITHUB_REPO,
+    ]
     for component in sorted(components):
         cmd.extend(["--component", component])
+    if targets:
+        for target in targets:
+            cmd.extend(["--target", target])
     cmd.append(str(vendor_root))
     run_command(cmd)
 
@@ -128,13 +137,6 @@ def install_native_components(
 def run_command(cmd: list[str]) -> None:
     print("+", " ".join(cmd))
     subprocess.run(cmd, cwd=REPO_ROOT, check=True)
-
-
-def tarball_name_for_package(package: str, version: str) -> str:
-    if package in CODEX_PLATFORM_PACKAGES:
-        platform = package.removeprefix("codex-")
-        return f"codex-npm-{platform}-{version}.tgz"
-    return f"{package}-npm-{version}.tgz"
 
 
 def main() -> int:
@@ -145,14 +147,15 @@ def main() -> int:
 
     runner_temp = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir()))
 
-    packages = expand_packages(list(args.packages))
+    packages = list(args.packages)
     native_components = collect_native_components(packages)
+    targets = args.targets
 
     vendor_temp_root: Path | None = None
     vendor_src: Path | None = None
     resolved_head_sha: str | None = None
 
-    final_messages = []
+    final_messsages = []
 
     try:
         if native_components:
@@ -160,7 +163,7 @@ def main() -> int:
                 args.release_version, args.workflow_url
             )
             vendor_temp_root = Path(tempfile.mkdtemp(prefix="npm-native-", dir=runner_temp))
-            install_native_components(workflow_url, native_components, vendor_temp_root)
+            install_native_components(workflow_url, native_components, vendor_temp_root, targets)
             vendor_src = vendor_temp_root / "vendor"
 
         if resolved_head_sha:
@@ -168,7 +171,7 @@ def main() -> int:
 
         for package in packages:
             staging_dir = Path(tempfile.mkdtemp(prefix=f"npm-stage-{package}-", dir=runner_temp))
-            pack_output = output_dir / tarball_name_for_package(package, args.release_version)
+            pack_output = output_dir / f"{package}-npm-{args.release_version}.tgz"
 
             cmd = [
                 str(BUILD_SCRIPT),
@@ -191,12 +194,12 @@ def main() -> int:
                 if not args.keep_staging_dirs:
                     shutil.rmtree(staging_dir, ignore_errors=True)
 
-            final_messages.append(f"Staged {package} at {pack_output}")
+            final_messsages.append(f"Staged {package} at {pack_output}")
     finally:
         if vendor_temp_root is not None and not args.keep_staging_dirs:
             shutil.rmtree(vendor_temp_root, ignore_errors=True)
 
-    for msg in final_messages:
+    for msg in final_messsages:
         print(msg)
 
     return 0
