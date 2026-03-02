@@ -48,17 +48,17 @@ jobs:
     name: Local Bazel build on ${{ matrix.os }} for ${{ matrix.target }}
 
     steps:
-      - uses: ai-nd-co/checkout@v6
+      - uses: actions/checkout@v6
 
       - name: Set up Node.js for js_repl tests
-        uses: ai-nd-co/setup-node@v6
+        uses: actions/setup-node@v6
         with:
           node-version-file: codex-rs/node-version.txt
 
       # Some integration tests rely on DotSlash being installed.
       # See https://github.com/openai/codex/pull/7617.
       - name: Install DotSlash
-        uses: ai-nd-co/install-dotslash@v2
+        uses: facebook/install-dotslash@v2
 
       - name: Make DotSlash available in PATH (Unix)
         if: runner.os != 'Windows'

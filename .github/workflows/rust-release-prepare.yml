@@ -18,7 +18,7 @@ jobs:
     if: github.repository == 'ai-nd-co/codex'
     runs-on: ubuntu-latest
     steps:
-      - uses: ai-nd-co/checkout@v6
+      - uses: actions/checkout@v6
         with:
           ref: main
           fetch-depth: 0

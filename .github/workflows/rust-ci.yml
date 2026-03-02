@@ -17,7 +17,7 @@ jobs:
       codex: ${{ steps.detect.outputs.codex }}
       workflows: ${{ steps.detect.outputs.workflows }}
     steps:
-      - uses: ai-nd-co/checkout@v6
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Detect changed paths (no external action)
@@ -58,7 +58,7 @@ jobs:
       run:
         working-directory: codex-rs
     steps:
-      - uses: ai-nd-co/checkout@v6
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@1.93.0
         with:
           components: rustfmt
@@ -74,7 +74,7 @@ jobs:
       run:
         working-directory: codex-rs
     steps:
-      - uses: ai-nd-co/checkout@v6
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@1.93.0
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
@@ -182,7 +182,7 @@ jobs:
               labels: codex-windows-arm64
 
     steps:
-      - uses: ai-nd-co/checkout@v6
+      - uses: actions/checkout@v6
       - name: Install Linux build dependencies
         if: ${{ runner.os == 'Linux' }}
         shell: bash
@@ -225,7 +225,7 @@ jobs:
       # avoid caching the large target dir on the gnu-dev job.
       - name: Restore cargo home cache
         id: cache_cargo_home_restore
-        uses: ai-nd-co/cache/restore@v5
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/.cargo/bin/
@@ -270,7 +270,7 @@ jobs:
       - name: Restore sccache cache (fallback)
         if: ${{ env.USE_SCCACHE == 'true' && env.SCCACHE_GHA_ENABLED != 'true' }}
         id: cache_sccache_restore
-        uses: ai-nd-co/cache/restore@v5
+        uses: actions/cache/restore@v5
         with:
           path: ${{ github.workspace }}/.sccache/
           key: sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ steps.lockhash.outputs.hash }}-${{ github.run_id }}
@@ -297,7 +297,7 @@ jobs:
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Restore APT cache (musl)
         id: cache_apt_restore
-        uses: ai-nd-co/cache/restore@v5
+        uses: actions/cache/restore@v5
         with:
           path: |
             /var/cache/apt
@@ -305,7 +305,7 @@ jobs:
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install Zig
-        uses: ai-nd-co/setup-zig@v2
+        uses: mlugg/setup-zig@v2
         with:
           version: 0.14.0
 
@@ -392,7 +392,7 @@ jobs:
 
       - name: Upload Cargo timings (clippy)
         if: always()
-        uses: ai-nd-co/upload-artifact@v6
+        uses: actions/upload-artifact@v6
         with:
           name: cargo-timings-rust-ci-clippy-${{ matrix.target }}-${{ matrix.profile }}
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
@@ -403,7 +403,7 @@ jobs:
       - name: Save cargo home cache
         if: always() && !cancelled() && steps.cache_cargo_home_restore.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: ai-nd-co/cache/save@v5
+        uses: actions/cache/save@v5
         with:
           path: |
             ~/.cargo/bin/
@@ -419,7 +419,7 @@ jobs:
       - name: Save sccache cache (fallback)
         if: always() && !cancelled() && env.USE_SCCACHE == 'true' && env.SCCACHE_GHA_ENABLED != 'true'
         continue-on-error: true
-        uses: ai-nd-co/cache/save@v5
+        uses: actions/cache/save@v5
         with:
           path: ${{ github.workspace }}/.sccache/
           key: sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ steps.lockhash.outputs.hash }}-${{ github.run_id }}
@@ -444,7 +444,7 @@ jobs:
       - name: Save APT cache (musl)
         if: always() && !cancelled() && (matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl') && steps.cache_apt_restore.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: ai-nd-co/cache/save@v5
+        uses: actions/cache/save@v5
         with:
           path: |
             /var/cache/apt
@@ -498,9 +498,9 @@ jobs:
               labels: codex-windows-arm64
 
     steps:
-      - uses: ai-nd-co/checkout@v6
+      - uses: actions/checkout@v6
       - name: Set up Node.js for js_repl tests
-        uses: ai-nd-co/setup-node@v6
+        uses: actions/setup-node@v6
         with:
           node-version-file: codex-rs/node-version.txt
       - name: Install Linux build dependencies
@@ -515,7 +515,7 @@ jobs:
       # Some integration tests rely on DotSlash being installed.
       # See https://github.com/openai/codex/pull/7617.
       - name: Install DotSlash
-        uses: ai-nd-co/install-dotslash@v2
+        uses: facebook/install-dotslash@v2
 
       - uses: dtolnay/rust-toolchain@1.93.0
         with:
@@ -532,7 +532,7 @@ jobs:
 
       - name: Restore cargo home cache
         id: cache_cargo_home_restore
-        uses: ai-nd-co/cache/restore@v5
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/.cargo/bin/
@@ -572,7 +572,7 @@ jobs:
       - name: Restore sccache cache (fallback)
         if: ${{ env.USE_SCCACHE == 'true' && env.SCCACHE_GHA_ENABLED != 'true' }}
         id: cache_sccache_restore
-        uses: ai-nd-co/cache/restore@v5
+        uses: actions/cache/restore@v5
         with:
           path: ${{ github.workspace }}/.sccache/
           key: sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ steps.lockhash.outputs.hash }}-${{ github.run_id }}
@@ -605,7 +605,7 @@ jobs:
 
       - name: Upload Cargo timings (nextest)
         if: always()
-        uses: ai-nd-co/upload-artifact@v6
+        uses: actions/upload-artifact@v6
         with:
           name: cargo-timings-rust-ci-nextest-${{ matrix.target }}-${{ matrix.profile }}
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
@@ -614,7 +614,7 @@ jobs:
       - name: Save cargo home cache
         if: always() && !cancelled() && steps.cache_cargo_home_restore.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: ai-nd-co/cache/save@v5
+        uses: actions/cache/save@v5
         with:
           path: |
             ~/.cargo/bin/
@@ -626,7 +626,7 @@ jobs:
       - name: Save sccache cache (fallback)
         if: always() && !cancelled() && env.USE_SCCACHE == 'true' && env.SCCACHE_GHA_ENABLED != 'true'
         continue-on-error: true
-        uses: ai-nd-co/cache/save@v5
+        uses: actions/cache/save@v5
         with:
           path: ${{ github.workspace }}/.sccache/
           key: sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ steps.lockhash.outputs.hash }}-${{ github.run_id }}

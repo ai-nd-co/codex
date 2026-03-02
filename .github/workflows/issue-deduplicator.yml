@@ -19,7 +19,7 @@ jobs:
       reason: ${{ steps.normalize-all.outputs.reason }}
       has_matches: ${{ steps.normalize-all.outputs.has_matches }}
     steps:
-      - uses: ai-nd-co/checkout@v6
+      - uses: actions/checkout@v6
 
       - name: Prepare Codex inputs
         env:
@@ -155,7 +155,7 @@ jobs:
       reason: ${{ steps.normalize-open.outputs.reason }}
       has_matches: ${{ steps.normalize-open.outputs.has_matches }}
     steps:
-      - uses: ai-nd-co/checkout@v6
+      - uses: actions/checkout@v6
 
       - name: Prepare Codex inputs
         env:
@@ -342,7 +342,7 @@ jobs:
       issues: write
     steps:
       - name: Comment on issue
-        uses: ai-nd-co/github-script@v8
+        uses: actions/github-script@v8
         env:
           CODEX_OUTPUT: ${{ needs.select-final.outputs.codex_output }}
         with:

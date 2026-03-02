@@ -25,7 +25,7 @@ jobs:
   tag-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: ai-nd-co/checkout@v6
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@1.92
       - name: Validate tag matches Cargo.toml version
         shell: bash
@@ -83,7 +83,7 @@ jobs:
             target: aarch64-unknown-linux-gnu
 
     steps:
-      - uses: ai-nd-co/checkout@v6
+      - uses: actions/checkout@v6
       - name: Print runner specs (Linux)
         if: ${{ runner.os == 'Linux' }}
         shell: bash
@@ -146,7 +146,7 @@ jobs:
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install Zig
-        uses: ai-nd-co/setup-zig@v2
+        uses: mlugg/setup-zig@v2
         with:
           version: 0.14.0
 
@@ -220,7 +220,7 @@ jobs:
           cargo build --target ${{ matrix.target }} --release --timings --bin codex --bin codex-responses-api-proxy
 
       - name: Upload Cargo timings
-        uses: ai-nd-co/upload-artifact@v6
+        uses: actions/upload-artifact@v6
         with:
           name: cargo-timings-rust-release-${{ matrix.target }}
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
@@ -361,7 +361,7 @@ jobs:
             zstd -T0 -19 --rm "$dest/$base"
           done
 
-      - uses: ai-nd-co/upload-artifact@v6
+      - uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.target }}
           # Upload the per-binary .zst files as well as the new .tar.gz
@@ -403,7 +403,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: ai-nd-co/checkout@v6
+        uses: actions/checkout@v6
 
       - name: Generate release notes from tag commit message
         id: release_notes
@@ -425,7 +425,7 @@ jobs:
 
           echo "path=${notes_path}" >> "${GITHUB_OUTPUT}"
 
-      - uses: ai-nd-co/download-artifact@v7
+      - uses: actions/download-artifact@v7
         with:
           path: dist
 
@@ -478,12 +478,12 @@ jobs:
           fi
 
       - name: Setup pnpm
-        uses: ai-nd-co/action-setup@v4
+        uses: pnpm/action-setup@v4
         with:
           run_install: false
 
       - name: Setup Node.js for npm packaging
-        uses: ai-nd-co/setup-node@v6
+        uses: actions/setup-node@v6
         with:
           node-version: 22
 
@@ -491,7 +491,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # stage_npm_packages.py requires DotSlash when staging releases.
-      - uses: ai-nd-co/install-dotslash@v2
+      - uses: facebook/install-dotslash@v2
       - name: Stage npm packages
         env:
           GH_TOKEN: ${{ github.token }}
@@ -507,7 +507,7 @@ jobs:
           cp scripts/install/install.sh dist/install.sh
 
       - name: Create GitHub Release
-        uses: ai-nd-co/action-gh-release@v2
+        uses: softprops/action-gh-release@v2
         with:
           name: ${{ steps.release_name.outputs.name }}
           tag_name: ${{ github.ref_name }}
@@ -517,7 +517,7 @@ jobs:
           # (e.g. -alpha, -beta). Otherwise publish a normal release.
           prerelease: ${{ contains(steps.release_name.outputs.name, '-') }}
 
-      - uses: ai-nd-co/dotslash-publish-release@v2
+      - uses: facebook/dotslash-publish-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -539,7 +539,7 @@ jobs:
 
     steps:
       - name: Setup Node.js
-        uses: ai-nd-co/setup-node@v6
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           registry-url: "https://registry.npmjs.org"

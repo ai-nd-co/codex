@@ -140,7 +140,7 @@ jobs:
           fi
 
       - name: Checkout repository
-        uses: ai-nd-co/checkout@v6
+        uses: actions/checkout@v6
 
       - name: Build patched Bash
         shell: bash
@@ -158,7 +158,7 @@ jobs:
           mkdir -p "$dest"
           cp bash "$dest/bash"
 
-      - uses: ai-nd-co/upload-artifact@v6
+      - uses: actions/upload-artifact@v6
         with:
           name: shell-tool-mcp-bash-${{ matrix.target }}-${{ matrix.variant }}
           path: artifacts/**
@@ -181,7 +181,7 @@ jobs:
             variant: macos-14
     steps:
       - name: Checkout repository
-        uses: ai-nd-co/checkout@v6
+        uses: actions/checkout@v6
 
       - name: Build patched Bash
         shell: bash
@@ -199,7 +199,7 @@ jobs:
           mkdir -p "$dest"
           cp bash "$dest/bash"
 
-      - uses: ai-nd-co/upload-artifact@v6
+      - uses: actions/upload-artifact@v6
         with:
           name: shell-tool-mcp-bash-${{ matrix.target }}-${{ matrix.variant }}
           path: artifacts/**
@@ -278,7 +278,7 @@ jobs:
           fi
 
       - name: Checkout repository
-        uses: ai-nd-co/checkout@v6
+        uses: actions/checkout@v6
 
       - name: Build patched zsh
         shell: bash
@@ -325,7 +325,7 @@ jobs:
           grep -Fx "smoke-zsh" "$tmpdir/stdout.txt"
           grep -Fx "/bin/echo" "$tmpdir/wrapper.log"
 
-      - uses: ai-nd-co/upload-artifact@v6
+      - uses: actions/upload-artifact@v6
         with:
           name: shell-tool-mcp-zsh-${{ matrix.target }}-${{ matrix.variant }}
           path: artifacts/**
@@ -356,7 +356,7 @@ jobs:
           fi
 
       - name: Checkout repository
-        uses: ai-nd-co/checkout@v6
+        uses: actions/checkout@v6
 
       - name: Build patched zsh
         shell: bash
@@ -403,7 +403,7 @@ jobs:
           grep -Fx "smoke-zsh" "$tmpdir/stdout.txt"
           grep -Fx "/bin/echo" "$tmpdir/wrapper.log"
 
-      - uses: ai-nd-co/upload-artifact@v6
+      - uses: actions/upload-artifact@v6
         with:
           name: shell-tool-mcp-zsh-${{ matrix.target }}-${{ matrix.variant }}
           path: artifacts/**
@@ -422,15 +422,15 @@ jobs:
       PACKAGE_VERSION: ${{ needs.metadata.outputs.version }}
     steps:
       - name: Checkout repository
-        uses: ai-nd-co/checkout@v6
+        uses: actions/checkout@v6
 
       - name: Setup pnpm
-        uses: ai-nd-co/action-setup@v4
+        uses: pnpm/action-setup@v4
         with:
           run_install: false
 
       - name: Setup Node.js
-        uses: ai-nd-co/setup-node@v6
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -441,7 +441,7 @@ jobs:
         run: pnpm --filter @ai-nd-co/codex-shell-tool-mcp run build
 
       - name: Download build artifacts
-        uses: ai-nd-co/download-artifact@v7
+        uses: actions/download-artifact@v7
         with:
           path: artifacts
 
@@ -500,7 +500,7 @@ jobs:
           filename=$(PACK_INFO="$pack_info" node -e 'const data = JSON.parse(process.env.PACK_INFO); console.log(data[0].filename);')
           mv "dist/npm/${filename}" "dist/npm/codex-shell-tool-mcp-npm-${PACKAGE_VERSION}.tgz"
 
-      - uses: ai-nd-co/upload-artifact@v6
+      - uses: actions/upload-artifact@v6
         with:
           name: codex-shell-tool-mcp-npm
           path: dist/npm/codex-shell-tool-mcp-npm-${{ env.PACKAGE_VERSION }}.tgz
@@ -518,7 +518,7 @@ jobs:
       contents: read
     steps:
       - name: Setup Node.js
-        uses: ai-nd-co/setup-node@v6
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
           registry-url: https://registry.npmjs.org
@@ -529,7 +529,7 @@ jobs:
         run: npm install -g npm@latest
 
       - name: Download npm tarball
-        uses: ai-nd-co/download-artifact@v7
+        uses: actions/download-artifact@v7
         with:
           name: codex-shell-tool-mcp-npm
           path: dist/npm

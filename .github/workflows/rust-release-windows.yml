@@ -45,7 +45,7 @@ jobs:
             build_args: --bin codex-windows-sandbox-setup --bin codex-command-runner
 
     steps:
-      - uses: ai-nd-co/checkout@v6
+      - uses: actions/checkout@v6
       - name: Print runner specs (Windows)
         shell: powershell
         run: |
@@ -70,7 +70,7 @@ jobs:
           cargo build --target ${{ matrix.target }} --release --timings ${{ matrix.build_args }}
 
       - name: Upload Cargo timings
-        uses: ai-nd-co/upload-artifact@v6
+        uses: actions/upload-artifact@v6
         with:
           name: cargo-timings-rust-release-windows-${{ matrix.target }}-${{ matrix.bundle }}
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
@@ -90,7 +90,7 @@ jobs:
           fi
 
       - name: Upload Windows binaries
-        uses: ai-nd-co/upload-artifact@v6
+        uses: actions/upload-artifact@v6
         with:
           name: windows-binaries-${{ matrix.target }}-${{ matrix.bundle }}
           path: |
@@ -116,16 +116,16 @@ jobs:
           - target: x86_64-pc-windows-msvc
 
     steps:
-      - uses: ai-nd-co/checkout@v6
+      - uses: actions/checkout@v6
 
       - name: Download prebuilt Windows primary binaries
-        uses: ai-nd-co/download-artifact@v7
+        uses: actions/download-artifact@v7
         with:
           name: windows-binaries-${{ matrix.target }}-primary
           path: codex-rs/target/${{ matrix.target }}/release
 
       - name: Download prebuilt Windows helper binaries
-        uses: ai-nd-co/download-artifact@v7
+        uses: actions/download-artifact@v7
         with:
           name: windows-binaries-${{ matrix.target }}-helpers
           path: codex-rs/target/${{ matrix.target }}/release
@@ -163,7 +163,7 @@ jobs:
           cp target/${{ matrix.target }}/release/codex-command-runner.exe "$dest/codex-command-runner-${{ matrix.target }}.exe"
 
       - name: Install DotSlash
-        uses: ai-nd-co/install-dotslash@v2
+        uses: facebook/install-dotslash@v2
 
       - name: Compress artifacts
         shell: bash
@@ -211,7 +211,7 @@ jobs:
             fi
           done
 
-      - uses: ai-nd-co/upload-artifact@v6
+      - uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.target }}
           path: |
