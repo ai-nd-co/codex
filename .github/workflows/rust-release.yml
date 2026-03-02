@@ -235,6 +235,7 @@ jobs:
 
       - if: ${{ runner.os == 'macOS' }}
         name: MacOS code signing (binaries)
+        continue-on-error: true
         uses: ./.github/actions/macos-code-sign
         with:
           target: ${{ matrix.target }}
@@ -294,6 +295,7 @@ jobs:
 
       - if: ${{ runner.os == 'macOS' }}
         name: MacOS code signing (dmg)
+        continue-on-error: true
         uses: ./.github/actions/macos-code-sign
         with:
           target: ${{ matrix.target }}
@@ -522,19 +524,6 @@ jobs:
           tag: ${{ github.ref_name }}
           config: .github/dotslash-config.json
 
-      - name: Trigger developers.openai.com deploy
-        # Only trigger the deploy if the release is not a pre-release.
-        # The deploy is used to update the developers.openai.com website with the new config schema json file.
-        if: ${{ !contains(steps.release_name.outputs.name, '-') }}
-        continue-on-error: true
-        env:
-          DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL: ${{ secrets.DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL }}
-        run: |
-          if ! curl -sS -f -o /dev/null -X POST "$DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL"; then
-            echo "::warning title=developers.openai.com deploy hook failed::Vercel deploy hook POST failed for ${GITHUB_REF_NAME}"
-            exit 1
-          fi
-
   # Publish to npm using OIDC authentication.
   # July 31, 2025: https://github.blog/changelog/2025-07-31-npm-trusted-publishing-with-oidc-is-generally-available/
   # npm docs: https://docs.npmjs.com/trusted-publishers
@@ -570,9 +559,6 @@ jobs:
           mkdir -p dist/npm
           patterns=(
             "codex-npm-${version}.tgz"
-            "codex-npm-linux-*-${version}.tgz"
-            "codex-npm-darwin-*-${version}.tgz"
-            "codex-npm-win32-*-${version}.tgz"
             "codex-responses-api-proxy-npm-${version}.tgz"
             "codex-sdk-npm-${version}.tgz"
           )
@@ -607,11 +593,6 @@ jobs:
             tag=""
 
             case "${filename}" in
-              codex-npm-linux-*-"${VERSION}".tgz|codex-npm-darwin-*-"${VERSION}".tgz|codex-npm-win32-*-"${VERSION}".tgz)
-                platform="${filename#codex-npm-}"
-                platform="${platform%-${VERSION}.tgz}"
-                tag="${prefix}${platform}"
-                ;;
               codex-npm-"${VERSION}".tgz|codex-responses-api-proxy-npm-"${VERSION}".tgz|codex-sdk-npm-"${VERSION}".tgz)
                 tag="${NPM_TAG}"
                 ;;
