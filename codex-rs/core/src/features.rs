@@ -155,6 +155,14 @@ pub enum Feature {
     ResponsesWebsockets,
     /// Enable Responses API websocket v2 mode.
     ResponsesWebsocketsV2,
+
+    // ai-nd-co fork features.
+    /// Enable smart compaction via model-driven summarization.
+    SmartCompact,
+    /// Render markdown tables as unicode box tables in TUI.
+    MarkdownTables,
+    /// Show verbose tool call output in exec cells.
+    VerboseToolCalls,
 }
 
 impl Feature {
@@ -700,6 +708,37 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::ResponsesWebsocketsV2,
         key: "responses_websockets_v2",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    // ai-nd-co fork features.
+    FeatureSpec {
+        id: Feature::SmartCompact,
+        key: "smart_compact",
+        stage: Stage::Experimental {
+            name: "Smart Compact",
+            menu_description: "Model-driven context compaction that intelligently summarizes conversation history.",
+            announcement: "NEW: Smart Compact uses the model to intelligently summarize context. Enable in /experimental and use /compact to trigger.",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::MarkdownTables,
+        key: "markdown_tables",
+        stage: Stage::Experimental {
+            name: "Markdown Tables",
+            menu_description: "Render markdown tables as unicode box tables in the TUI.",
+            announcement: "NEW: Markdown Tables renders tables as unicode boxes. Enable in /experimental.",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::VerboseToolCalls,
+        key: "verbose_tool_calls",
+        stage: Stage::Experimental {
+            name: "Verbose Tool Calls",
+            menu_description: "Show detailed tool call parameters and output in exec cells.",
+            announcement: "NEW: Verbose Tool Calls shows full tool call details. Enable in /experimental.",
+        },
         default_enabled: false,
     },
 ];
