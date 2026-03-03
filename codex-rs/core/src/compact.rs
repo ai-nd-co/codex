@@ -13,7 +13,6 @@ use crate::context_manager::ContextManager;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::protocol::CompactedItem;
-use crate::protocol::ContextCompactedEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
 use crate::protocol::TurnStartedEvent;
@@ -72,6 +71,21 @@ pub(crate) async fn run_inline_auto_compact_task(
     Ok(())
 }
 
+pub(crate) async fn run_inline_smart_auto_compact_task(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    initial_context_injection: InitialContextInjection,
+) -> CodexResult<()> {
+    let prompt = turn_context.smart_compact_prompt().to_string();
+    let input = vec![UserInput::Text {
+        text: prompt,
+        // Compaction prompt is synthesized; no UI element ranges to preserve.
+        text_elements: Vec::new(),
+    }];
+
+    run_smart_compact_task_inner(sess, turn_context, input, initial_context_injection).await
+}
+
 pub(crate) async fn run_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
@@ -96,14 +110,20 @@ pub(crate) async fn run_smart_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
-) {
+) -> CodexResult<()> {
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: turn_context.sub_id.clone(),
         model_context_window: turn_context.model_context_window(),
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, start_event).await;
-    run_smart_compact_task_inner(sess.clone(), turn_context, input).await;
+    run_smart_compact_task_inner(
+        sess.clone(),
+        turn_context,
+        input,
+        InitialContextInjection::DoNotInject,
+    )
+    .await
 }
 
 async fn run_compact_task_inner(
@@ -112,9 +132,12 @@ async fn run_compact_task_inner(
     input: Vec<UserInput>,
     initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
-    let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
-    sess.emit_turn_item_started(&turn_context, &compaction_item)
-        .await;
+    let compaction_item = ContextCompactionItem::new();
+    sess.emit_turn_item_started(
+        &turn_context,
+        &TurnItem::ContextCompaction(compaction_item.clone()),
+    )
+    .await;
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
     let mut history = sess.clone_history().await;
@@ -240,8 +263,14 @@ async fn run_compact_task_inner(
         .await;
     sess.recompute_token_usage(&turn_context).await;
 
-    sess.emit_turn_item_completed(&turn_context, compaction_item)
-        .await;
+    sess.emit_turn_item_completed(
+        &turn_context,
+        TurnItem::ContextCompaction(ContextCompactionItem {
+            id: compaction_item.id,
+            summary: Some(summary_text.clone()),
+        }),
+    )
+    .await;
     let warning = EventMsg::Warning(WarningEvent {
         message: "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.".to_string(),
     });
@@ -253,7 +282,14 @@ async fn run_smart_compact_task_inner(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
-) {
+    initial_context_injection: InitialContextInjection,
+) -> CodexResult<()> {
+    let compaction_item = ContextCompactionItem::new();
+    sess.emit_turn_item_started(
+        &turn_context,
+        &TurnItem::ContextCompaction(compaction_item.clone()),
+    )
+    .await;
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
     let history_snapshot = sess.clone_history().await;
@@ -322,7 +358,7 @@ async fn run_smart_compact_task_inner(
                 break;
             }
             Err(CodexErr::Interrupted) => {
-                return;
+                return Err(CodexErr::Interrupted);
             }
             Err(e @ CodexErr::ContextWindowExceeded) => {
                 if turn_input_len > 1 {
@@ -337,7 +373,7 @@ async fn run_smart_compact_task_inner(
                 sess.set_total_tokens_full(turn_context.as_ref()).await;
                 let event = EventMsg::Error(e.to_error_event(None));
                 sess.send_event(&turn_context, event).await;
-                return;
+                return Err(e);
             }
             Err(e) => {
                 if retries < max_retries {
@@ -354,7 +390,7 @@ async fn run_smart_compact_task_inner(
                 } else {
                     let event = EventMsg::Error(e.to_error_event(None));
                     sess.send_event(&turn_context, event).await;
-                    return;
+                    return Err(e);
                 }
             }
         }
@@ -365,26 +401,44 @@ async fn run_smart_compact_task_inner(
     let summary_suffix = get_last_assistant_message_from_turn(history_items).unwrap_or_default();
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
 
-    let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
+    let initial_context = if matches!(
+        initial_context_injection,
+        InitialContextInjection::BeforeLastUserMessage
+    ) {
+        sess.build_initial_context(turn_context.as_ref()).await
+    } else {
+        Vec::new()
+    };
     let mut new_history =
         build_smart_compacted_history(initial_context, &summary_text, &second_half);
     new_history.extend(ghost_snapshots);
 
+    let reference_context_item = match initial_context_injection {
+        InitialContextInjection::DoNotInject => None,
+        InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
+    };
     let compacted_item = CompactedItem {
         message: summary_text.clone(),
         replacement_history: Some(new_history.clone()),
     };
-    sess.replace_compacted_history(new_history, None, compacted_item)
+    sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
         .await;
     sess.recompute_token_usage(&turn_context).await;
 
-    let event = EventMsg::ContextCompacted(ContextCompactedEvent {});
-    sess.send_event(&turn_context, event).await;
+    sess.emit_turn_item_completed(
+        &turn_context,
+        TurnItem::ContextCompaction(ContextCompactionItem {
+            id: compaction_item.id,
+            summary: Some(summary_text),
+        }),
+    )
+    .await;
 
     let warning = EventMsg::Warning(WarningEvent {
         message: "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.".to_string(),
     });
     sess.send_event(&turn_context, warning).await;
+    Ok(())
 }
 
 pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {

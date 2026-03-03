@@ -29,7 +29,7 @@ impl SessionTask for SmartCompactTask {
             .services
             .otel_manager
             .counter("codex.task.smart_compact", 1, &[]);
-        crate::compact::run_smart_compact_task(session, ctx, input).await;
+        let _ = crate::compact::run_smart_compact_task(session, ctx, input).await;
         None
     }
 }

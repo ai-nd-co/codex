@@ -2,6 +2,7 @@
 use codex_core::CodexAuth;
 use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
+use codex_core::compact::SMART_COMPACT_PROMPT;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
@@ -591,10 +592,13 @@ async fn manual_compact_emits_context_compaction_items() {
 
     let mut started_item = None;
     let mut completed_item = None;
-    let mut legacy_event = false;
+    let mut legacy_summary = None;
     let mut saw_turn_complete = false;
 
-    while !saw_turn_complete || started_item.is_none() || completed_item.is_none() || !legacy_event
+    while !saw_turn_complete
+        || started_item.is_none()
+        || completed_item.is_none()
+        || legacy_summary.is_none()
     {
         let event = codex.next_event().await.unwrap();
         match event.msg {
@@ -610,8 +614,8 @@ async fn manual_compact_emits_context_compaction_items() {
             }) => {
                 completed_item = Some(item);
             }
-            EventMsg::ContextCompacted(_) => {
-                legacy_event = true;
+            EventMsg::ContextCompacted(event) => {
+                legacy_summary = event.summary;
             }
             EventMsg::TurnComplete(_) => {
                 saw_turn_complete = true;
@@ -623,7 +627,100 @@ async fn manual_compact_emits_context_compaction_items() {
     let started_item = started_item.expect("context compaction item started");
     let completed_item = completed_item.expect("context compaction item completed");
     assert_eq!(started_item.id, completed_item.id);
-    assert!(legacy_event);
+    assert_eq!(started_item.summary, None);
+    assert_eq!(
+        completed_item.summary,
+        Some(summary_with_prefix(SUMMARY_TEXT)),
+        "completed context-compaction item should include the raw summary text"
+    );
+    assert_eq!(
+        legacy_summary,
+        Some(summary_with_prefix(SUMMARY_TEXT)),
+        "legacy context-compacted event should include the raw summary text"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compact_uses_smart_compact_prompt_when_feature_enabled() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let compact_turn = sse(vec![
+        ev_assistant_message("m1", SUMMARY_TEXT),
+        ev_completed("r1"),
+    ]);
+    let request_log = mount_sse_sequence(&server, vec![compact_turn]).await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config
+            .features
+            .enable(codex_core::features::Feature::SmartCompact);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
+
+    codex.submit(Op::Compact).await.expect("run /compact");
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 1, "expected one smart compact request");
+    let body = requests[0].body_json().to_string();
+    let smart_prompt_marker = SMART_COMPACT_PROMPT
+        .lines()
+        .next()
+        .unwrap_or(SMART_COMPACT_PROMPT);
+    assert!(
+        body_contains_text(&body, smart_prompt_marker),
+        "smart compact request should include smart compact prompt"
+    );
+    assert!(
+        !body_contains_text(&body, SUMMARIZATION_PROMPT),
+        "smart compact request should not use regular compact prompt override"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compact_uses_regular_prompt_when_smart_compact_feature_disabled() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let compact_turn = sse(vec![
+        ev_assistant_message("m1", SUMMARY_TEXT),
+        ev_completed("r1"),
+    ]);
+    let request_log = mount_sse_sequence(&server, vec![compact_turn]).await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config
+            .features
+            .enable(codex_core::features::Feature::SmartCompact)
+            .disable(codex_core::features::Feature::SmartCompact);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
+
+    codex.submit(Op::Compact).await.expect("run /compact");
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 1, "expected one regular compact request");
+    let body = requests[0].body_json().to_string();
+    let smart_prompt_marker = SMART_COMPACT_PROMPT
+        .lines()
+        .next()
+        .unwrap_or(SMART_COMPACT_PROMPT);
+    assert!(
+        body_contains_text(&body, SUMMARIZATION_PROMPT),
+        "regular compact request should include regular compact prompt"
+    );
+    assert!(
+        !body_contains_text(&body, smart_prompt_marker),
+        "regular compact request should not include smart compact prompt"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -1867,6 +1867,12 @@
         {
           "description": "Conversation history was compacted (either automatically or manually).",
           "properties": {
+            "summary": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "type": {
               "enum": [
                 "context_compacted"
@@ -7202,6 +7208,12 @@
           "properties": {
             "id": {
               "type": "string"
+            },
+            "summary": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "type": {
               "enum": [
@@ -13297,6 +13309,12 @@
             "properties": {
               "id": {
                 "type": "string"
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "type": {
                 "enum": [

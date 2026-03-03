@@ -21,6 +21,7 @@ use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
 use crate::compact::InitialContextInjection;
 use crate::compact::run_inline_auto_compact_task;
+use crate::compact::run_inline_smart_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::connectors;
@@ -3825,6 +3826,7 @@ mod handlers {
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
 
+    use crate::features::Feature;
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
     use crate::review_prompts::resolve_review_request;
@@ -4322,17 +4324,29 @@ mod handlers {
 
     pub async fn compact(sess: &Arc<Session>, sub_id: String) {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
-
-        sess.spawn_task(
-            Arc::clone(&turn_context),
-            vec![UserInput::Text {
-                text: turn_context.compact_prompt().to_string(),
-                // Compaction prompt is synthesized; no UI element ranges to preserve.
-                text_elements: Vec::new(),
-            }],
-            CompactTask,
-        )
-        .await;
+        if turn_context.features.enabled(Feature::SmartCompact) {
+            sess.spawn_task(
+                Arc::clone(&turn_context),
+                vec![UserInput::Text {
+                    text: turn_context.smart_compact_prompt().to_string(),
+                    // Compaction prompt is synthesized; no UI element ranges to preserve.
+                    text_elements: Vec::new(),
+                }],
+                SmartCompactTask,
+            )
+            .await;
+        } else {
+            sess.spawn_task(
+                Arc::clone(&turn_context),
+                vec![UserInput::Text {
+                    text: turn_context.compact_prompt().to_string(),
+                    // Compaction prompt is synthesized; no UI element ranges to preserve.
+                    text_elements: Vec::new(),
+                }],
+                CompactTask,
+            )
+            .await;
+        }
     }
 
     pub async fn drop_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
@@ -5249,7 +5263,14 @@ async fn run_auto_compact(
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
-    if should_use_remote_compact_task(&turn_context.provider) {
+    if turn_context.features.enabled(Feature::SmartCompact) {
+        run_inline_smart_auto_compact_task(
+            Arc::clone(sess),
+            Arc::clone(turn_context),
+            initial_context_injection,
+        )
+        .await?;
+    } else if should_use_remote_compact_task(&turn_context.provider) {
         run_inline_remote_auto_compact_task(
             Arc::clone(sess),
             Arc::clone(turn_context),

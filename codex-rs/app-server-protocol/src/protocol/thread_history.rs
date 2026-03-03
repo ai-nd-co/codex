@@ -734,11 +734,14 @@ impl ThreadHistoryBuilder {
         });
     }
 
-    fn handle_context_compacted(&mut self, _payload: &ContextCompactedEvent) {
+    fn handle_context_compacted(&mut self, payload: &ContextCompactedEvent) {
         let id = self.next_item_id();
         self.ensure_turn()
             .items
-            .push(ThreadItem::ContextCompaction { id });
+            .push(ThreadItem::ContextCompaction {
+                id,
+                summary: payload.summary.clone(),
+            });
     }
 
     fn handle_entered_review_mode(&mut self, payload: &codex_protocol::protocol::ReviewRequest) {
@@ -1100,6 +1103,7 @@ mod tests {
     use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::CompactedItem;
+    use codex_protocol::protocol::ContextCompactedEvent;
     use codex_protocol::protocol::DynamicToolCallResponseEvent;
     use codex_protocol::protocol::ExecCommandEndEvent;
     use codex_protocol::protocol::ExecCommandSource;
@@ -2259,6 +2263,28 @@ mod tests {
                 items: Vec::new(),
             }]
         );
+    }
+
+    #[test]
+    fn context_compacted_event_preserves_summary_in_thread_item() {
+        let events = vec![EventMsg::ContextCompacted(ContextCompactedEvent {
+            summary: Some("raw compact summary".into()),
+        })];
+
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        let turns = build_turns_from_rollout_items(&items);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].items.len(), 1);
+        match &turns[0].items[0] {
+            ThreadItem::ContextCompaction { id, summary } => {
+                assert!(!id.is_empty());
+                assert_eq!(summary.as_deref(), Some("raw compact summary"));
+            }
+            item => panic!("expected context compaction item, got {item:?}"),
+        }
     }
 
     #[test]

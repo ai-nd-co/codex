@@ -58,6 +58,7 @@ use codex_protocol::protocol::AgentReasoningEvent;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::BackgroundEventEvent;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::ContextCompactedEvent;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -5219,6 +5220,45 @@ async fn slash_copy_state_clears_on_thread_rollback() {
     });
 
     assert_eq!(chat.last_copyable_output, None);
+}
+
+#[tokio::test]
+async fn context_compacted_with_summary_renders_summary_text() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let summary = "Raw compaction summary line 1\nline 2";
+
+    chat.handle_codex_event(Event {
+        id: "compact-1".into(),
+        msg: EventMsg::ContextCompacted(ContextCompactedEvent {
+            summary: Some(summary.to_string()),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one rendered compaction message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains(summary),
+        "expected compaction summary text in rendered output, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn context_compacted_without_summary_renders_fallback_text() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "compact-2".into(),
+        msg: EventMsg::ContextCompacted(ContextCompactedEvent { summary: None }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one rendered compaction message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Context compacted"),
+        "expected fallback compaction text, got {rendered:?}"
+    );
 }
 
 #[tokio::test]
