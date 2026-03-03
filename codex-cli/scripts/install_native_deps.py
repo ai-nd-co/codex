@@ -140,6 +140,17 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--repo",
+        default="ai-nd-co/codex",
+        help="GitHub repository (owner/repo) for artifact downloads.",
+    )
+    parser.add_argument(
+        "--target",
+        dest="targets",
+        action="append",
+        help="Limit to specific target triples (repeatable).",
+    )
+    parser.add_argument(
         "root",
         nargs="?",
         type=Path,
@@ -165,6 +176,9 @@ def main() -> int:
         "rg",
     ]
 
+    repo = args.repo
+    targets = args.targets
+
     workflow_url = (args.workflow_url or DEFAULT_WORKFLOW_URL).strip()
     if not workflow_url:
         workflow_url = DEFAULT_WORKFLOW_URL
@@ -175,17 +189,34 @@ def main() -> int:
     with _gha_group(f"Download native artifacts from workflow {workflow_id}"):
         with tempfile.TemporaryDirectory(prefix="codex-native-artifacts-") as artifacts_dir_str:
             artifacts_dir = Path(artifacts_dir_str)
-            _download_artifacts(workflow_id, artifacts_dir)
+            _download_artifacts(workflow_id, artifacts_dir, repo=repo)
+
+            selected = [BINARY_COMPONENTS[name] for name in components if name in BINARY_COMPONENTS]
+            if targets:
+                # Override targets for each component
+                selected = [
+                    BinaryComponent(
+                        artifact_prefix=c.artifact_prefix,
+                        dest_dir=c.dest_dir,
+                        binary_basename=c.binary_basename,
+                        targets=tuple(t for t in targets if t in (c.targets or BINARY_TARGETS)),
+                    )
+                    for c in selected
+                ]
+                # Filter out components with no matching targets
+                selected = [c for c in selected if c.targets]
+
             install_binary_components(
                 artifacts_dir,
                 vendor_dir,
-                [BINARY_COMPONENTS[name] for name in components if name in BINARY_COMPONENTS],
+                selected,
             )
 
     if "rg" in components:
+        rg_targets = targets if targets else DEFAULT_RG_TARGETS
         with _gha_group("Fetch ripgrep binaries"):
             print("Fetching ripgrep binaries...")
-            fetch_rg(vendor_dir, DEFAULT_RG_TARGETS, manifest_path=RG_MANIFEST)
+            fetch_rg(vendor_dir, rg_targets, manifest_path=RG_MANIFEST)
 
     print(f"Installed native dependencies into {vendor_dir}")
     return 0
@@ -259,7 +290,7 @@ def fetch_rg(
     return [results[target] for target in targets]
 
 
-def _download_artifacts(workflow_id: str, dest_dir: Path) -> None:
+def _download_artifacts(workflow_id: str, dest_dir: Path, repo: str = "ai-nd-co/codex") -> None:
     cmd = [
         "gh",
         "run",
@@ -267,7 +298,7 @@ def _download_artifacts(workflow_id: str, dest_dir: Path) -> None:
         "--dir",
         str(dest_dir),
         "--repo",
-        "openai/codex",
+        repo,
         workflow_id,
     ]
     subprocess.check_call(cmd)
