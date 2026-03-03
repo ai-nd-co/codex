@@ -418,6 +418,7 @@ jobs:
           prerelease: ${{ contains(steps.release_name.outputs.name, '-') }}
 
       - uses: facebook/dotslash-publish-release@v2
+        continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
