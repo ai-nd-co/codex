@@ -9,7 +9,7 @@ use crate::error::CodexErr;
 use crate::error::Result as CoreResult;
 use crate::features::Feature;
 use crate::model_provider_info::ModelProviderInfo;
-use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
+use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets_with_request_user_input_default_mode;
 use crate::models_manager::model_info;
 use crate::models_manager::model_presets::builtin_model_presets;
 use codex_api::ModelsClient;
@@ -91,8 +91,13 @@ impl ModelsManager {
     /// List collaboration mode presets.
     ///
     /// Returns a static set of presets seeded with the configured model.
-    pub fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
-        builtin_collaboration_mode_presets()
+    pub fn list_collaboration_modes(
+        &self,
+        request_user_input_in_default_mode: bool,
+    ) -> Vec<CollaborationModeMask> {
+        builtin_collaboration_mode_presets_with_request_user_input_default_mode(
+            request_user_input_in_default_mode,
+        )
     }
 
     /// Attempt to list models without blocking, using the current cached state.

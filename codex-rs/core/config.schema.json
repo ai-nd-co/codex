@@ -184,6 +184,9 @@
             "disable_compaction": {
               "type": "boolean"
             },
+            "disable_explored_compaction": {
+              "type": "boolean"
+            },
             "disable_system_prompt": {
               "type": "boolean"
             },
@@ -230,6 +233,9 @@
               "type": "boolean"
             },
             "request_rule": {
+              "type": "boolean"
+            },
+            "request_user_input_in_default_mode": {
               "type": "boolean"
             },
             "responses_websockets": {
@@ -1238,6 +1244,9 @@
         "disable_compaction": {
           "type": "boolean"
         },
+        "disable_explored_compaction": {
+          "type": "boolean"
+        },
         "disable_system_prompt": {
           "type": "boolean"
         },
@@ -1284,6 +1293,9 @@
           "type": "boolean"
         },
         "request_rule": {
+          "type": "boolean"
+        },
+        "request_user_input_in_default_mode": {
           "type": "boolean"
         },
         "responses_websockets": {

@@ -135,6 +135,8 @@ pub enum Feature {
     DisableExploredCompaction,
     /// Skip automatic and manual context compaction.
     DisableCompaction,
+    /// Allow request_user_input in Default collaboration mode.
+    RequestUserInputInDefaultMode,
     /// Enable collaboration modes (Plan, Default).
     CollaborationModes,
     /// Enable personality selection in the TUI.
@@ -624,6 +626,16 @@ pub const FEATURES: &[FeatureSpec] = &[
             name: "Disable compaction",
             menu_description: "Skip automatic and manual context compaction.",
             announcement: "NEW! Disable compaction (advanced). Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RequestUserInputInDefaultMode,
+        key: "request_user_input_in_default_mode",
+        stage: Stage::Experimental {
+            name: "Default mode request_user_input",
+            menu_description: "Allow the request_user_input tool while in Default collaboration mode.",
+            announcement: "NEW! Allow request_user_input in Default mode. Enable in /experimental!",
         },
         default_enabled: false,
     },

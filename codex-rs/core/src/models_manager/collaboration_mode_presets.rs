@@ -9,13 +9,22 @@ const COLLABORATION_MODE_DEFAULT: &str =
 const KNOWN_MODE_NAMES_PLACEHOLDER: &str = "{{KNOWN_MODE_NAMES}}";
 const REQUEST_USER_INPUT_AVAILABILITY_PLACEHOLDER: &str = "{{REQUEST_USER_INPUT_AVAILABILITY}}";
 
-pub(super) fn builtin_collaboration_mode_presets() -> Vec<CollaborationModeMask> {
-    vec![plan_preset(), default_preset()]
+pub(super) fn builtin_collaboration_mode_presets_with_request_user_input_default_mode(
+    request_user_input_in_default_mode: bool,
+) -> Vec<CollaborationModeMask> {
+    vec![
+        plan_preset(),
+        default_preset(request_user_input_in_default_mode),
+    ]
 }
 
 #[cfg(any(test, feature = "test-support"))]
-pub fn test_builtin_collaboration_mode_presets() -> Vec<CollaborationModeMask> {
-    builtin_collaboration_mode_presets()
+pub fn test_builtin_collaboration_mode_presets(
+    request_user_input_in_default_mode: bool,
+) -> Vec<CollaborationModeMask> {
+    builtin_collaboration_mode_presets_with_request_user_input_default_mode(
+        request_user_input_in_default_mode,
+    )
 }
 
 fn plan_preset() -> CollaborationModeMask {
@@ -28,20 +37,24 @@ fn plan_preset() -> CollaborationModeMask {
     }
 }
 
-fn default_preset() -> CollaborationModeMask {
+fn default_preset(request_user_input_in_default_mode: bool) -> CollaborationModeMask {
     CollaborationModeMask {
         name: ModeKind::Default.display_name().to_string(),
         mode: Some(ModeKind::Default),
         model: None,
         reasoning_effort: None,
-        developer_instructions: Some(Some(default_mode_instructions())),
+        developer_instructions: Some(Some(default_mode_instructions(
+            request_user_input_in_default_mode,
+        ))),
     }
 }
 
-fn default_mode_instructions() -> String {
+fn default_mode_instructions(request_user_input_in_default_mode: bool) -> String {
     let known_mode_names = format_mode_names(&TUI_VISIBLE_COLLABORATION_MODES);
-    let request_user_input_availability =
-        request_user_input_availability_message(ModeKind::Default);
+    let request_user_input_availability = request_user_input_availability_message(
+        ModeKind::Default,
+        request_user_input_in_default_mode,
+    );
     COLLABORATION_MODE_DEFAULT
         .replace(KNOWN_MODE_NAMES_PLACEHOLDER, &known_mode_names)
         .replace(
@@ -60,9 +73,12 @@ fn format_mode_names(modes: &[ModeKind]) -> String {
     }
 }
 
-fn request_user_input_availability_message(mode: ModeKind) -> String {
+fn request_user_input_availability_message(
+    mode: ModeKind,
+    request_user_input_in_default_mode: bool,
+) -> String {
     let mode_name = mode.display_name();
-    if mode.allows_request_user_input() {
+    if mode.allows_request_user_input_with_default_mode(request_user_input_in_default_mode) {
         format!("The `request_user_input` tool is available in {mode_name} mode.")
     } else {
         format!(
@@ -79,12 +95,12 @@ mod tests {
     #[test]
     fn preset_names_use_mode_display_names() {
         assert_eq!(plan_preset().name, ModeKind::Plan.display_name());
-        assert_eq!(default_preset().name, ModeKind::Default.display_name());
+        assert_eq!(default_preset(false).name, ModeKind::Default.display_name());
     }
 
     #[test]
     fn default_mode_instructions_replace_mode_names_placeholder() {
-        let default_instructions = default_preset()
+        let default_instructions = default_preset(false)
             .developer_instructions
             .expect("default preset should include instructions")
             .expect("default instructions should be set");
@@ -97,7 +113,19 @@ mod tests {
         assert!(default_instructions.contains(&expected_snippet));
 
         let expected_availability_message =
-            request_user_input_availability_message(ModeKind::Default);
+            request_user_input_availability_message(ModeKind::Default, false);
+        assert!(default_instructions.contains(&expected_availability_message));
+    }
+
+    #[test]
+    fn default_mode_instructions_reflect_request_user_input_default_mode_setting() {
+        let default_instructions = default_preset(true)
+            .developer_instructions
+            .expect("default preset should include instructions")
+            .expect("default instructions should be set");
+
+        let expected_availability_message =
+            request_user_input_availability_message(ModeKind::Default, true);
         assert!(default_instructions.contains(&expected_availability_message));
     }
 }

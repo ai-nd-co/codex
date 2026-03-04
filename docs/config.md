@@ -33,6 +33,15 @@ The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schem
 Some TUI behavior is gated behind feature flags that can be toggled via `/experimental` or in
 `~/.codex/config.toml` under `[features]`.
 
+### Default mode `request_user_input`
+
+Enable `request_user_input` in Default collaboration mode (Plan mode remains enabled regardless):
+
+```toml
+[features]
+request_user_input_in_default_mode = true
+```
+
 ### Disable explored compaction
 
 If you want the transcript to show each individual `Explored`/`Exploring` tool-call line (no

@@ -31,6 +31,7 @@ pub(crate) struct ToolsConfig {
     pub web_search_mode: Option<WebSearchMode>,
     pub collab_tools: bool,
     pub collaboration_modes_tools: bool,
+    pub request_user_input_in_default_mode: bool,
     pub memory_tools: bool,
     pub request_rule_enabled: bool,
     pub experimental_supported_tools: Vec<String>,
@@ -52,6 +53,8 @@ impl ToolsConfig {
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_collaboration_modes_tools = features.enabled(Feature::CollaborationModes);
+        let request_user_input_in_default_mode =
+            features.enabled(Feature::RequestUserInputInDefaultMode);
         let include_memory_tools = features.enabled(Feature::MemoryTool);
         let request_rule_enabled = features.enabled(Feature::RequestRule);
 
@@ -86,6 +89,7 @@ impl ToolsConfig {
             web_search_mode: *web_search_mode,
             collab_tools: include_collab_tools,
             collaboration_modes_tools: include_collaboration_modes_tools,
+            request_user_input_in_default_mode,
             memory_tools: include_memory_tools,
             request_rule_enabled,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
@@ -556,7 +560,7 @@ fn create_wait_tool() -> ToolSpec {
     })
 }
 
-fn create_request_user_input_tool() -> ToolSpec {
+fn create_request_user_input_tool(request_user_input_in_default_mode: bool) -> ToolSpec {
     let mut option_props = BTreeMap::new();
     option_props.insert(
         "label".to_string(),
@@ -627,7 +631,7 @@ fn create_request_user_input_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "request_user_input".to_string(),
-        description: request_user_input_tool_description(),
+        description: request_user_input_tool_description(request_user_input_in_default_mode),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -1331,7 +1335,9 @@ pub(crate) fn build_specs(
     builder.register_handler("update_plan", plan_handler);
 
     if config.collaboration_modes_tools {
-        builder.push_spec(create_request_user_input_tool());
+        builder.push_spec(create_request_user_input_tool(
+            config.request_user_input_in_default_mode,
+        ));
         builder.register_handler("request_user_input", request_user_input_handler);
     }
 
@@ -1630,7 +1636,7 @@ mod tests {
             create_list_mcp_resource_templates_tool(),
             create_read_mcp_resource_tool(),
             PLAN_TOOL.clone(),
-            create_request_user_input_tool(),
+            create_request_user_input_tool(false),
             create_apply_patch_freeform_tool(),
             ToolSpec::WebSearch {
                 external_web_access: Some(true),

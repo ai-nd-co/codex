@@ -569,14 +569,8 @@ impl CodexMessageProcessor {
                     .await;
             }
             ClientRequest::CollaborationModeList { request_id, params } => {
-                let outgoing = self.outgoing.clone();
-                let thread_manager = self.thread_manager.clone();
-                let request_id = to_connection_request_id(request_id);
-
-                tokio::spawn(async move {
-                    Self::list_collaboration_modes(outgoing, thread_manager, request_id, params)
-                        .await;
-                });
+                self.list_collaboration_modes(to_connection_request_id(request_id), params)
+                    .await;
             }
             ClientRequest::MockExperimentalMethod { request_id, params } => {
                 self.mock_experimental_method(to_connection_request_id(request_id), params)
@@ -3235,15 +3229,26 @@ impl CodexMessageProcessor {
     }
 
     async fn list_collaboration_modes(
-        outgoing: Arc<OutgoingMessageSender>,
-        thread_manager: Arc<ThreadManager>,
+        &self,
         request_id: ConnectionRequestId,
         params: CollaborationModeListParams,
     ) {
         let CollaborationModeListParams {} = params;
-        let items = thread_manager.list_collaboration_modes();
+        let config = match self.load_latest_config().await {
+            Ok(config) => config,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+        let request_user_input_in_default_mode = config
+            .features
+            .enabled(Feature::RequestUserInputInDefaultMode);
+        let items = self
+            .thread_manager
+            .list_collaboration_modes(request_user_input_in_default_mode);
         let response = CollaborationModeListResponse { data: items };
-        outgoing.send_response(request_id, response).await;
+        self.outgoing.send_response(request_id, response).await;
     }
 
     async fn experimental_feature_list(

@@ -212,8 +212,13 @@ impl ThreadManager {
             .await
     }
 
-    pub fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
-        self.state.models_manager.list_collaboration_modes()
+    pub fn list_collaboration_modes(
+        &self,
+        request_user_input_in_default_mode: bool,
+    ) -> Vec<CollaborationModeMask> {
+        self.state
+            .models_manager
+            .list_collaboration_modes(request_user_input_in_default_mode)
     }
 
     pub async fn list_thread_ids(&self) -> Vec<ThreadId> {

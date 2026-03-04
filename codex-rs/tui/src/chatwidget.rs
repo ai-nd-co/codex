@@ -1427,7 +1427,10 @@ impl ChatWidget {
     }
 
     fn open_plan_implementation_prompt(&mut self) {
-        let default_mask = collaboration_modes::default_mode_mask(self.models_manager.as_ref());
+        let default_mask = collaboration_modes::default_mode_mask(
+            self.models_manager.as_ref(),
+            self.request_user_input_in_default_mode_enabled(),
+        );
         let (implement_actions, implement_disabled_reason) = match default_mask {
             Some(mask) => {
                 let user_text = PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string();
@@ -3275,6 +3278,9 @@ impl ChatWidget {
             SlashCommand::Resume => {
                 self.app_event_tx.send(AppEvent::OpenResumePicker);
             }
+            SlashCommand::Rerender => {
+                self.app_event_tx.send(AppEvent::RerenderCurrentSession);
+            }
             SlashCommand::Fork => {
                 self.app_event_tx.send(AppEvent::ForkCurrentSession);
             }
@@ -3319,7 +3325,10 @@ impl ChatWidget {
                     );
                     return;
                 }
-                if let Some(mask) = collaboration_modes::plan_mask(self.models_manager.as_ref()) {
+                if let Some(mask) = collaboration_modes::plan_mask(
+                    self.models_manager.as_ref(),
+                    self.request_user_input_in_default_mode_enabled(),
+                ) {
                     self.set_collaboration_mask(mask);
                 } else {
                     self.add_info_message("Plan mode unavailable right now.".to_string(), None);
@@ -5031,7 +5040,10 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_collaboration_modes_popup(&mut self) {
-        let presets = collaboration_modes::presets_for_tui(self.models_manager.as_ref());
+        let presets = collaboration_modes::presets_for_tui(
+            self.models_manager.as_ref(),
+            self.request_user_input_in_default_mode_enabled(),
+        );
         if presets.is_empty() {
             self.add_info_message(
                 "No collaboration modes are available right now.".to_string(),
@@ -5045,8 +5057,11 @@ impl ChatWidget {
             .as_ref()
             .and_then(|mask| mask.mode)
             .or_else(|| {
-                collaboration_modes::default_mask(self.models_manager.as_ref())
-                    .and_then(|mask| mask.mode)
+                collaboration_modes::default_mask(
+                    self.models_manager.as_ref(),
+                    self.request_user_input_in_default_mode_enabled(),
+                )
+                .and_then(|mask| mask.mode)
             });
         let items: Vec<SelectionItem> = presets
             .into_iter()
@@ -6047,7 +6062,10 @@ impl ChatWidget {
                 settings,
             };
             self.active_collaboration_mask = if enabled {
-                collaboration_modes::default_mask(self.models_manager.as_ref())
+                collaboration_modes::default_mask(
+                    self.models_manager.as_ref(),
+                    self.request_user_input_in_default_mode_enabled(),
+                )
             } else {
                 None
             };
@@ -6208,6 +6226,12 @@ impl ChatWidget {
         self.config.features.enabled(Feature::CollaborationModes)
     }
 
+    fn request_user_input_in_default_mode_enabled(&self) -> bool {
+        self.config
+            .features
+            .enabled(Feature::RequestUserInputInDefaultMode)
+    }
+
     fn initial_collaboration_mask(
         config: &Config,
         models_manager: &ModelsManager,
@@ -6216,9 +6240,19 @@ impl ChatWidget {
         if !config.features.enabled(Feature::CollaborationModes) {
             return None;
         }
+        let request_user_input_in_default_mode = config
+            .features
+            .enabled(Feature::RequestUserInputInDefaultMode);
         let mut mask = match config.experimental_mode {
-            Some(kind) => collaboration_modes::mask_for_kind(models_manager, kind)?,
-            None => collaboration_modes::default_mask(models_manager)?,
+            Some(kind) => collaboration_modes::mask_for_kind(
+                models_manager,
+                kind,
+                request_user_input_in_default_mode,
+            )?,
+            None => collaboration_modes::default_mask(
+                models_manager,
+                request_user_input_in_default_mode,
+            )?,
         };
         if let Some(model_override) = model_override {
             mask.model = Some(model_override.to_string());
@@ -6321,6 +6355,7 @@ impl ChatWidget {
         if let Some(next_mask) = collaboration_modes::next_mask(
             self.models_manager.as_ref(),
             self.active_collaboration_mask.as_ref(),
+            self.request_user_input_in_default_mode_enabled(),
         ) {
             self.set_collaboration_mask(next_mask);
         }

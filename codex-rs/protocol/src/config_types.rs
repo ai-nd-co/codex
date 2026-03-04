@@ -212,6 +212,17 @@ impl ModeKind {
     pub const fn allows_request_user_input(self) -> bool {
         matches!(self, Self::Plan)
     }
+
+    pub const fn allows_request_user_input_with_default_mode(
+        self,
+        request_user_input_in_default_mode: bool,
+    ) -> bool {
+        match self {
+            Self::Plan => true,
+            Self::Default => request_user_input_in_default_mode,
+            Self::PairProgramming | Self::Execute => false,
+        }
+    }
 }
 
 /// Collaboration mode for a Codex session.
