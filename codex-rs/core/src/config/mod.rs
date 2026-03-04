@@ -1,6 +1,7 @@
 use crate::auth::AuthCredentialsStoreMode;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
+use crate::config::types::ApprovalsToml;
 use crate::config::types::AppsConfigToml;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config::types::History;
@@ -205,6 +206,10 @@ pub struct Config {
 
     /// Effective permission configuration for shell tool execution.
     pub permissions: Permissions,
+
+    /// Regex patterns that force approval prompts for matching commands,
+    /// even when approvals are otherwise disabled.
+    pub approvals_always_prompt_regex: Vec<String>,
 
     /// enforce_residency means web traffic cannot be routed outside of a
     /// particular geography. HTTP clients should direct their requests
@@ -1019,6 +1024,10 @@ pub struct ConfigToml {
 
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
+
+    /// Approval-related settings.
+    #[serde(default)]
+    pub approvals: Option<ApprovalsToml>,
 
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
@@ -2132,6 +2141,14 @@ impl Config {
                 windows_sandbox_mode,
                 macos_seatbelt_profile_extensions: None,
             },
+            approvals_always_prompt_regex: cfg
+                .approvals
+                .as_ref()
+                .and_then(|a| a.always_prompt_regex.clone())
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|p| !p.trim().is_empty())
+                .collect(),
             enforce_residency: enforce_residency.value,
             did_user_set_custom_approval_policy_or_sandbox_mode,
             shell_path_override,
@@ -4911,6 +4928,7 @@ model_verbosity = "high"
                     windows_sandbox_mode: None,
                     macos_seatbelt_profile_extensions: None,
                 },
+                approvals_always_prompt_regex: Vec::new(),
                 enforce_residency: Constrained::allow_any(None),
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
                 shell_path_override: None,
@@ -5040,6 +5058,7 @@ model_verbosity = "high"
                 windows_sandbox_mode: None,
                 macos_seatbelt_profile_extensions: None,
             },
+            approvals_always_prompt_regex: Vec::new(),
             enforce_residency: Constrained::allow_any(None),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             shell_path_override: None,
@@ -5167,6 +5186,7 @@ model_verbosity = "high"
                 windows_sandbox_mode: None,
                 macos_seatbelt_profile_extensions: None,
             },
+            approvals_always_prompt_regex: Vec::new(),
             enforce_residency: Constrained::allow_any(None),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             shell_path_override: None,
@@ -5280,6 +5300,7 @@ model_verbosity = "high"
                 windows_sandbox_mode: None,
                 macos_seatbelt_profile_extensions: None,
             },
+            approvals_always_prompt_regex: Vec::new(),
             enforce_residency: Constrained::allow_any(None),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             shell_path_override: None,

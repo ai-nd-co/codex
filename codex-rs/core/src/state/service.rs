@@ -43,6 +43,8 @@ pub(crate) struct SessionServices {
     pub(crate) shell_snapshot_tx: watch::Sender<Option<Arc<crate::shell_snapshot::ShellSnapshot>>>,
     pub(crate) show_raw_agent_reasoning: bool,
     pub(crate) exec_policy: ExecPolicyManager,
+    /// Compiled regex patterns that force command approval prompts.
+    pub(crate) approvals_always_prompt_regex: Arc<Vec<regex_lite::Regex>>,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) otel_manager: OtelManager,

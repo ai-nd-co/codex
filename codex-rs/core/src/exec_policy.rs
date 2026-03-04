@@ -175,6 +175,7 @@ pub(crate) struct ExecApprovalRequest<'a> {
     pub(crate) sandbox_policy: &'a SandboxPolicy,
     pub(crate) sandbox_permissions: SandboxPermissions,
     pub(crate) prefix_rule: Option<Vec<String>>,
+    pub(crate) always_prompt_regexes: &'a [regex_lite::Regex],
 }
 
 impl ExecPolicyManager {
@@ -206,7 +207,24 @@ impl ExecPolicyManager {
             sandbox_policy,
             sandbox_permissions,
             prefix_rule,
+            always_prompt_regexes,
         } = req;
+
+        // Config-driven override: always prompt for commands matching user-defined
+        // regexes, even when approvals are otherwise disabled (YOLO / full-auto).
+        if !always_prompt_regexes.is_empty() {
+            let rendered = shlex_try_join(command.iter().map(String::as_str))
+                .unwrap_or_else(|_| command.join(" "));
+            if always_prompt_regexes.iter().any(|re| re.is_match(&rendered)) {
+                return ExecApprovalRequirement::NeedsApproval {
+                    reason: Some(format!(
+                        "`{rendered}` requires approval (matched approvals.always_prompt_regex)"
+                    )),
+                    proposed_execpolicy_amendment: None,
+                };
+            }
+        }
+
         let exec_policy = self.current();
         let (commands, used_complex_parsing) = commands_for_exec_policy(command);
         // Keep heredoc prefix parsing for rule evaluation so existing
@@ -1234,6 +1252,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1284,6 +1303,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1311,6 +1331,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1339,6 +1360,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: Some(requested_prefix.clone()),
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1378,6 +1400,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1407,6 +1430,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1443,6 +1467,7 @@ prefix_rule(pattern=["git"], decision="allow")
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1485,6 +1510,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1513,6 +1539,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1546,6 +1573,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1592,6 +1620,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::RequireEscalated,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1628,6 +1657,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::RequireEscalated,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1662,6 +1692,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::RequireEscalated,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1670,6 +1701,28 @@ prefix_rule(pattern=["git"], decision="prompt")
             ExecApprovalRequirement::Forbidden {
                 reason: REJECT_RULES_APPROVAL_REASON.to_string(),
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn always_prompt_regex_overrides_allow_policy() {
+        let regexes = vec![regex_lite::Regex::new(r"(?i)\brm\b").unwrap()];
+        let command = vec!["rm".to_string(), "-rf".to_string(), "/tmp/foo".to_string()];
+
+        let requirement = ExecPolicyManager::default()
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &command,
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: &SandboxPolicy::DangerFullAccess,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+                always_prompt_regexes: &regexes,
+            })
+            .await;
+
+        assert!(
+            matches!(requirement, ExecApprovalRequirement::NeedsApproval { .. }),
+            "expected NeedsApproval, got {requirement:?}"
         );
     }
 
@@ -1685,6 +1738,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1709,6 +1763,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1737,6 +1792,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1765,6 +1821,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::RequireEscalated,
                 prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1796,6 +1853,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::RequireEscalated,
                 prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1834,6 +1892,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                     sandbox_policy: &SandboxPolicy::DangerFullAccess,
                     sandbox_permissions: SandboxPermissions::UseDefault,
                     prefix_rule: None,
+                    always_prompt_regexes: &[],
                 })
                 .await,
             ExecApprovalRequirement::NeedsApproval {
@@ -1908,6 +1967,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1938,6 +1998,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -1965,6 +2026,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -2003,6 +2065,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                     sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                     sandbox_permissions: SandboxPermissions::UseDefault,
                     prefix_rule: None,
+                    always_prompt_regexes: &[],
                 })
                 .await,
             ExecApprovalRequirement::NeedsApproval {
@@ -2026,6 +2089,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -2056,6 +2120,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -2229,6 +2294,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
+                always_prompt_regexes: &[],
             })
             .await;
 
@@ -2295,6 +2361,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                     sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                     sandbox_permissions: permissions,
                     prefix_rule: None,
+                    always_prompt_regexes: &[],
                 })
                 .await,
             "{pwsh_approval_reason}"
@@ -2318,6 +2385,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                     sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                     sandbox_permissions: permissions,
                     prefix_rule: None,
+                    always_prompt_regexes: &[],
                 })
                 .await,
             r#"On all platforms, a forbidden command should require approval
@@ -2337,6 +2405,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                     sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                     sandbox_permissions: permissions,
                     prefix_rule: None,
+                    always_prompt_regexes: &[],
                 })
                 .await,
             r#"On all platforms, a forbidden command should require approval

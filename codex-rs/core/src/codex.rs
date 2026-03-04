@@ -133,6 +133,26 @@ use tracing::trace_span;
 use tracing::warn;
 use uuid::Uuid;
 
+fn compile_always_prompt_regexes(patterns: &[String]) -> Arc<Vec<regex_lite::Regex>> {
+    if patterns.is_empty() {
+        return Arc::new(Vec::new());
+    }
+    let mut out = Vec::new();
+    for raw in patterns {
+        let pattern = raw.trim();
+        if pattern.is_empty() {
+            continue;
+        }
+        match regex_lite::Regex::new(pattern) {
+            Ok(re) => out.push(re),
+            Err(err) => {
+                warn!(pattern, %err, "invalid approvals.always_prompt_regex pattern; ignoring");
+            }
+        }
+    }
+    Arc::new(out)
+}
+
 use crate::ModelProviderInfo;
 use crate::client::ModelClient;
 use crate::client::ModelClientSession;
@@ -1495,6 +1515,9 @@ impl Session {
             shell_snapshot_tx,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
+            approvals_always_prompt_regex: compile_always_prompt_regexes(
+                &config.approvals_always_prompt_regex,
+            ),
             auth_manager: Arc::clone(&auth_manager),
             otel_manager,
             models_manager: Arc::clone(&models_manager),
@@ -8348,6 +8371,9 @@ mod tests {
             shell_snapshot_tx: watch::channel(None).0,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
+            approvals_always_prompt_regex: compile_always_prompt_regexes(
+                &config.approvals_always_prompt_regex,
+            ),
             auth_manager: auth_manager.clone(),
             otel_manager: otel_manager.clone(),
             models_manager: Arc::clone(&models_manager),
@@ -8516,6 +8542,9 @@ mod tests {
             shell_snapshot_tx: watch::channel(None).0,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
+            approvals_always_prompt_regex: compile_always_prompt_regexes(
+                &config.approvals_always_prompt_regex,
+            ),
             auth_manager: Arc::clone(&auth_manager),
             otel_manager: otel_manager.clone(),
             models_manager: Arc::clone(&models_manager),
