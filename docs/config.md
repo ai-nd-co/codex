@@ -41,6 +41,15 @@ sessions default to a temp directory; other modes default to `CODEX_HOME`.
 Some TUI behavior is gated behind feature flags that can be toggled via `/experimental` or in
 `~/.codex/config.toml` under `[features]`.
 
+### Default mode `request_user_input`
+
+To allow `request_user_input` in Default collaboration mode, enable:
+
+```toml
+[features]
+default_mode_request_user_input = true
+```
+
 ### Disable explored compaction
 
 If you want the transcript to show each individual `Explored`/`Exploring` tool-call line (no

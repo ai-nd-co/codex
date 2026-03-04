@@ -657,7 +657,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::DefaultModeRequestUserInput,
         key: "default_mode_request_user_input",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Default mode request_user_input",
+            menu_description: "Allow the request_user_input tool in Default collaboration mode.",
+            announcement: "NEW! Enable request_user_input in Default mode via /experimental.",
+        },
         default_enabled: false,
     },
     FeatureSpec {
