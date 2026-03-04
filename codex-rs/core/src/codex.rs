@@ -3799,7 +3799,18 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 handlers::undo(&sess, sub.id.clone()).await;
             }
             Op::Compact => {
-                handlers::compact(&sess, sub.id.clone()).await;
+                if config.features.enabled(Feature::DisableCompaction) {
+                    let event = Event {
+                        id: sub.id.clone(),
+                        msg: EventMsg::Warning(WarningEvent {
+                            message: "Compaction is disabled in /experimental settings."
+                                .to_string(),
+                        }),
+                    };
+                    sess.send_event_raw(event).await;
+                } else {
+                    handlers::compact(&sess, sub.id.clone()).await;
+                }
             }
             Op::DropMemories => {
                 handlers::drop_memories(&sess, &config, sub.id.clone()).await;
@@ -5101,8 +5112,10 @@ pub(crate) async fn run_turn(
                     "post sampling token usage"
                 );
 
+                let compaction_disabled =
+                    turn_context.features.enabled(Feature::DisableCompaction);
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
-                if token_limit_reached && needs_follow_up {
+                if token_limit_reached && needs_follow_up && !compaction_disabled {
                     if run_auto_compact(
                         &sess,
                         &turn_context,
@@ -5230,7 +5243,9 @@ async fn run_pre_sampling_compact(
         .auto_compact_token_limit()
         .unwrap_or(i64::MAX);
     // Compact if the total usage tokens are greater than the auto compact limit
-    if total_usage_tokens >= auto_compact_limit {
+    if total_usage_tokens >= auto_compact_limit
+        && !turn_context.features.enabled(Feature::DisableCompaction)
+    {
         run_auto_compact(sess, turn_context, InitialContextInjection::DoNotInject).await?;
     }
     Ok(())
@@ -5268,7 +5283,8 @@ async fn maybe_run_previous_model_inline_compact(
         .unwrap_or(i64::MAX);
     let should_run = total_usage_tokens > new_auto_compact_limit
         && previous_model_turn_context.model_info.slug != turn_context.model_info.slug
-        && old_context_window > new_context_window;
+        && old_context_window > new_context_window
+        && !turn_context.features.enabled(Feature::DisableCompaction);
     if should_run {
         run_auto_compact(
             sess,
