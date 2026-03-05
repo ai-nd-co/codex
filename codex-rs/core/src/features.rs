@@ -138,6 +138,8 @@ pub enum Feature {
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     /// Kept for config backward compatibility; behavior is always steer-enabled.
     Steer,
+    /// Send empty base instructions to the model.
+    DisableSystemPrompt,
     /// Allow request_user_input in Default collaboration mode.
     DefaultModeRequestUserInput,
     /// Disable explored/tool-call collapse compaction in the TUI transcript.
@@ -655,6 +657,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::DisableSystemPrompt,
+        key: "disable_system_prompt",
+        stage: Stage::Experimental {
+            name: "Disable system prompt",
+            menu_description: "Send empty base instructions to the model.",
+            announcement: "NEW! Disable the system prompt (advanced). Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::DefaultModeRequestUserInput,
         key: "default_mode_request_user_input",
         stage: Stage::Experimental {
@@ -896,5 +908,21 @@ mod tests {
     fn collab_is_legacy_alias_for_multi_agent() {
         assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
         assert_eq!(feature_for_key("collab"), Some(Feature::Collab));
+    }
+
+    #[test]
+    fn restored_feature_aliases_map_to_current_feature_keys() {
+        assert_eq!(
+            feature_for_key("enable_markdown_tables"),
+            Some(Feature::MarkdownTables)
+        );
+        assert_eq!(
+            feature_for_key("request_user_input_in_default_mode"),
+            Some(Feature::DefaultModeRequestUserInput)
+        );
+        assert_eq!(
+            feature_for_key("disable_system_prompt"),
+            Some(Feature::DisableSystemPrompt)
+        );
     }
 }

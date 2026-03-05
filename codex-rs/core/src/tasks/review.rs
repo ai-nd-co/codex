@@ -97,8 +97,12 @@ async fn start_review_conversation(
     }
     sub_agent_config.features.disable(Feature::Collab);
 
-    // Set explicit review rubric for the sub-agent
-    sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
+    // Set explicit review rubric for the sub-agent unless system prompts are disabled.
+    if config.features.enabled(Feature::DisableSystemPrompt) {
+        sub_agent_config.base_instructions = Some(String::new());
+    } else {
+        sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
+    }
     sub_agent_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
 
     let model = config

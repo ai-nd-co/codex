@@ -431,11 +431,11 @@ impl Codex {
         // 2. conversation history => session_meta.base_instructions
         // 3. base_instructions for current model
         let model_info = models_manager.get_model_info(model.as_str(), &config).await;
-        let base_instructions = config
-            .base_instructions
-            .clone()
-            .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
+        let base_instructions = resolve_session_base_instructions(
+            &config,
+            conversation_history.get_base_instructions().map(|s| s.text),
+            &model_info,
+        );
 
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db
         // first, then fall back to rollout-file tools.
@@ -839,6 +839,22 @@ fn local_time_context() -> (String, String) {
             "Etc/UTC".to_string(),
         ),
     }
+}
+
+fn resolve_session_base_instructions(
+    config: &Config,
+    conversation_base_instructions: Option<String>,
+    model_info: &ModelInfo,
+) -> String {
+    if config.features.enabled(Feature::DisableSystemPrompt) {
+        return String::new();
+    }
+
+    config
+        .base_instructions
+        .clone()
+        .or(conversation_base_instructions)
+        .unwrap_or_else(|| model_info.get_model_instructions(config.personality))
 }
 
 #[derive(Clone)]
@@ -5112,8 +5128,7 @@ pub(crate) async fn run_turn(
                     "post sampling token usage"
                 );
 
-                let compaction_disabled =
-                    turn_context.features.enabled(Feature::DisableCompaction);
+                let compaction_disabled = turn_context.features.enabled(Feature::DisableCompaction);
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached && needs_follow_up && !compaction_disabled {
                     if run_auto_compact(
@@ -6920,6 +6935,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn resolve_session_base_instructions_returns_empty_when_system_prompt_disabled() {
+        let mut config = test_config();
+        config.features.enable(Feature::DisableSystemPrompt);
+        config.base_instructions = Some("override instructions".to_string());
+        let model_info = model_info::model_info_from_slug("gpt-5");
+
+        let resolved = resolve_session_base_instructions(
+            &config,
+            Some("history instructions".to_string()),
+            &model_info,
+        );
+
+        assert_eq!(resolved, "");
+    }
+
     #[tokio::test]
     async fn reload_user_config_layer_updates_effective_apps_config() {
         let (session, _turn_context) = make_session_and_context().await;
@@ -7769,10 +7800,7 @@ mod tests {
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             personality: config.personality,
-            base_instructions: config
-                .base_instructions
-                .clone()
-                .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            base_instructions: resolve_session_base_instructions(&config, None, &model_info),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
             sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -7863,10 +7891,7 @@ mod tests {
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             personality: config.personality,
-            base_instructions: config
-                .base_instructions
-                .clone()
-                .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            base_instructions: resolve_session_base_instructions(&config, None, &model_info),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
             sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -8176,10 +8201,7 @@ mod tests {
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             personality: config.personality,
-            base_instructions: config
-                .base_instructions
-                .clone()
-                .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            base_instructions: resolve_session_base_instructions(&config, None, &model_info),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
             sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -8231,10 +8253,7 @@ mod tests {
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             personality: config.personality,
-            base_instructions: config
-                .base_instructions
-                .clone()
-                .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            base_instructions: resolve_session_base_instructions(&config, None, &model_info),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
             sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -8322,10 +8341,7 @@ mod tests {
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             personality: config.personality,
-            base_instructions: config
-                .base_instructions
-                .clone()
-                .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            base_instructions: resolve_session_base_instructions(&config, None, &model_info),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
             sandbox_policy: config.permissions.sandbox_policy.clone(),
@@ -8493,10 +8509,7 @@ mod tests {
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             personality: config.personality,
-            base_instructions: config
-                .base_instructions
-                .clone()
-                .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            base_instructions: resolve_session_base_instructions(&config, None, &model_info),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
             sandbox_policy: config.permissions.sandbox_policy.clone(),

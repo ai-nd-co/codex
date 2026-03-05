@@ -1,6 +1,7 @@
 use codex_core::CodexThread;
 use codex_core::REVIEW_PROMPT;
 use codex_core::config::Config;
+use codex_core::features::Feature;
 use codex_core::review_format::render_review_output_text;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -867,6 +868,53 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
         saw_merge_base_sha,
         "expected review prompt to include merge-base sha {head_sha}"
     );
+
+    let _codex_home_guard = codex_home;
+    server.verify().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_uses_empty_instructions_when_system_prompt_disabled() {
+    skip_if_no_network!();
+
+    let sse_raw = r#"[
+        {"type":"response.completed", "response": {"id": "__ID__"}}
+    ]"#;
+    let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, codex_home.clone(), |cfg| {
+        cfg.base_instructions = Some("session instructions".to_string());
+        cfg.features.enable(Feature::DisableSystemPrompt);
+    })
+    .await;
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::Custom {
+                    instructions: "use empty instructions".to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await
+        .unwrap();
+
+    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
+    let _closed = wait_for_event(&codex, |ev| {
+        matches!(
+            ev,
+            EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+                review_output: None
+            })
+        )
+    })
+    .await;
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = request_log.single_request();
+    let body = request.body_json();
+    assert_eq!(body["instructions"].as_str().unwrap(), "");
 
     let _codex_home_guard = codex_home;
     server.verify().await;

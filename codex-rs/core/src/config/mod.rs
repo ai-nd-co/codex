@@ -2000,7 +2000,10 @@ impl Config {
             .or(cfg.model_instructions_file.as_ref());
         let file_base_instructions =
             Self::try_read_non_empty_file(model_instructions_path, "model instructions file")?;
-        let base_instructions = base_instructions.or(file_base_instructions);
+        let mut base_instructions = base_instructions.or(file_base_instructions);
+        if features.enabled(Feature::DisableSystemPrompt) {
+            base_instructions = Some(String::new());
+        }
         let developer_instructions = developer_instructions.or(cfg.developer_instructions);
         let personality = personality
             .or(config_profile.personality)
@@ -3473,6 +3476,58 @@ profile = "project"
         assert!(config.include_apply_patch_tool);
 
         assert!(config.use_experimental_unified_exec_tool);
+
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_feature_aliases_map_to_current_features() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut entries = BTreeMap::new();
+        entries.insert("enable_markdown_tables".to_string(), true);
+        entries.insert("request_user_input_in_default_mode".to_string(), true);
+        let cfg = ConfigToml {
+            features: Some(crate::features::FeaturesToml { entries }),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert!(config.features.enabled(Feature::MarkdownTables));
+        assert!(
+            config
+                .features
+                .enabled(Feature::DefaultModeRequestUserInput)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn disable_system_prompt_overrides_base_instructions() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut entries = BTreeMap::new();
+        entries.insert("disable_system_prompt".to_string(), true);
+        let cfg = ConfigToml {
+            features: Some(crate::features::FeaturesToml { entries }),
+            ..Default::default()
+        };
+        let overrides = ConfigOverrides {
+            base_instructions: Some("test instructions".to_string()),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            overrides,
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(config.base_instructions.as_deref(), Some(""));
 
         Ok(())
     }

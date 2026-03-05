@@ -50,6 +50,46 @@ To allow `request_user_input` in Default collaboration mode, enable:
 default_mode_request_user_input = true
 ```
 
+Older ai-nd-co configs may still use `request_user_input_in_default_mode = true`. Current builds
+accept that older key as a compatibility alias, but `default_mode_request_user_input` is the
+canonical name.
+
+### Disable system prompt
+
+To send empty base instructions to the model, enable:
+
+```toml
+[features]
+disable_system_prompt = true
+```
+
+This is an advanced compatibility feature intended for ai-nd-co-style setups that want Codex to
+run without the normal base instruction bundle.
+
+### Smart compact and compaction disable
+
+On ai-nd-co builds, `smart_compact` changes `/compact` to use model-driven smart compaction.
+
+```toml
+[features]
+smart_compact = true
+```
+
+If `disable_compaction = true`, Codex skips automatic compaction and blocks `/compact`.
+The explicit `/smart-compact` command remains the manual compaction path.
+
+### Markdown table compatibility
+
+Current ai-nd-co builds use:
+
+```toml
+[features]
+markdown_tables = true
+```
+
+Older ai-nd-co configs may still use `enable_markdown_tables = true`. Current builds accept that
+older key as a compatibility alias, but `markdown_tables` is the canonical name.
+
 ### Disable explored compaction
 
 If you want the transcript to show each individual `Explored`/`Exploring` tool-call line (no

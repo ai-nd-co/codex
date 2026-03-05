@@ -38,6 +38,14 @@ const ALIASES: &[Alias] = &[
         feature: Feature::Collab,
     },
     Alias {
+        legacy_key: "enable_markdown_tables",
+        feature: Feature::MarkdownTables,
+    },
+    Alias {
+        legacy_key: "request_user_input_in_default_mode",
+        feature: Feature::DefaultModeRequestUserInput,
+    },
+    Alias {
         legacy_key: "memory_tool",
         feature: Feature::MemoryTool,
     },
