@@ -884,6 +884,9 @@ mod tests {
     use toml::Value as TomlValue;
 
     const REPO_ROOT_CONFIG_DIR_NAME: &str = ".codex";
+    const REPO_ROOT_CONFIG_DIR_NAME_CLOUD: &str = ".claude";
+    const TEST_REPO_SKILL_NAME: &str = "repo-skill";
+    const TEST_REPO_SKILL_DESCRIPTION: &str = "from repo";
 
     async fn make_config(codex_home: &TempDir) -> Config {
         make_config_for_cwd(codex_home, codex_home.path().to_path_buf()).await
@@ -1009,10 +1012,13 @@ mod tests {
 
         let project_root = tmp.path().join("repo");
         let dot_codex = project_root.join(".codex");
+        let dot_claude = project_root.join(".claude");
         fs::create_dir_all(&dot_codex)?;
+        fs::create_dir_all(&dot_claude)?;
 
         let user_file = AbsolutePathBuf::from_absolute_path(user_folder.join("config.toml"))?;
         let project_dot_codex = AbsolutePathBuf::from_absolute_path(&dot_codex)?;
+        let project_dot_claude = AbsolutePathBuf::from_absolute_path(&dot_claude)?;
 
         let layers = vec![
             ConfigLayerEntry::new(
@@ -1022,6 +1028,13 @@ mod tests {
             ConfigLayerEntry::new_disabled(
                 ConfigLayerSource::Project {
                     dot_codex_folder: project_dot_codex,
+                },
+                TomlValue::Table(toml::map::Map::new()),
+                "marked untrusted",
+            ),
+            ConfigLayerEntry::new_disabled(
+                ConfigLayerSource::Project {
+                    dot_codex_folder: project_dot_claude,
                 },
                 TomlValue::Table(toml::map::Map::new()),
                 "marked untrusted",
@@ -1041,6 +1054,7 @@ mod tests {
         assert_eq!(
             got,
             vec![
+                (SkillScope::Repo, dot_claude.join("skills")),
                 (SkillScope::Repo, dot_codex.join("skills")),
                 (SkillScope::User, user_folder.join("skills")),
                 (
@@ -2298,7 +2312,12 @@ permissions:
             .path()
             .join(REPO_ROOT_CONFIG_DIR_NAME)
             .join(SKILLS_DIR_NAME);
-        let skill_path = write_skill_at(&skills_root, "repo", "repo-skill", "from repo");
+        let skill_path = write_skill_at(
+            &skills_root,
+            "repo",
+            TEST_REPO_SKILL_NAME,
+            TEST_REPO_SKILL_DESCRIPTION,
+        );
         let cfg = make_config_for_cwd(&codex_home, repo_dir.path().to_path_buf()).await;
 
         let outcome = load_skills_for_test(&cfg);
@@ -2310,8 +2329,49 @@ permissions:
         assert_eq!(
             outcome.skills,
             vec![SkillMetadata {
-                name: "repo-skill".to_string(),
-                description: "from repo".to_string(),
+                name: TEST_REPO_SKILL_NAME.to_string(),
+                description: TEST_REPO_SKILL_DESCRIPTION.to_string(),
+                short_description: None,
+                interface: None,
+                dependencies: None,
+                policy: None,
+                permission_profile: None,
+                permissions: None,
+                path_to_skills_md: normalized(&skill_path),
+                scope: SkillScope::Repo,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn loads_skills_from_claude_dir() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let repo_dir = tempfile::tempdir().expect("tempdir");
+        mark_as_git_repo(repo_dir.path());
+
+        let skills_root = repo_dir
+            .path()
+            .join(REPO_ROOT_CONFIG_DIR_NAME_CLOUD)
+            .join(SKILLS_DIR_NAME);
+        let skill_path = write_skill_at(
+            &skills_root,
+            "repo",
+            TEST_REPO_SKILL_NAME,
+            TEST_REPO_SKILL_DESCRIPTION,
+        );
+        let cfg = make_config_for_cwd(&codex_home, repo_dir.path().to_path_buf()).await;
+
+        let outcome = load_skills_for_test(&cfg);
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: TEST_REPO_SKILL_NAME.to_string(),
+                description: TEST_REPO_SKILL_DESCRIPTION.to_string(),
                 short_description: None,
                 interface: None,
                 dependencies: None,
