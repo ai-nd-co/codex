@@ -3,6 +3,7 @@ packages:
   - codex-rs/responses-api-proxy/npm
   - sdk/typescript
   - shell-tool-mcp
+  - apps/*
 
 ignoredBuiltDependencies:
   - esbuild
