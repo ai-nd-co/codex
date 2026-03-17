@@ -3764,6 +3764,13 @@ impl ChatWidget {
                 self.otel_manager.counter("codex.thread.rename", 1, &[]);
                 self.show_rename_prompt();
             }
+            SlashCommand::AutoRename => {
+                self.otel_manager
+                    .counter("codex.thread.auto_rename", 1, &[]);
+                self.add_info_message("Generating session name...".to_string(), None);
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(Op::GenerateThreadName));
+            }
             SlashCommand::Model => {
                 self.open_model_popup();
             }

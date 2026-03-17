@@ -23,6 +23,8 @@ pub enum SlashCommand {
     Skills,
     Review,
     Rename,
+    #[strum(serialize = "auto-rename")]
+    AutoRename,
     New,
     Resume,
     Fork,
@@ -74,6 +76,7 @@ impl SlashCommand {
             }
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Rename => "rename the current thread",
+            SlashCommand::AutoRename => "auto-generate a session name from conversation",
             SlashCommand::Resume => "resume a saved chat",
             SlashCommand::Clear => "clear the terminal and start a new chat",
             SlashCommand::Fork => "fork the current chat",
@@ -155,6 +158,7 @@ impl SlashCommand {
             SlashCommand::Diff
             | SlashCommand::Copy
             | SlashCommand::Rename
+            | SlashCommand::AutoRename
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Status

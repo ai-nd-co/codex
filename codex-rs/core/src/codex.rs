@@ -3843,6 +3843,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::SetThreadName { name } => {
                 handlers::set_thread_name(&sess, sub.id.clone(), name).await;
             }
+            Op::GenerateThreadName => {
+                handlers::generate_thread_name(&sess, sub.id.clone()).await;
+            }
             Op::RunUserShellCommand { command } => {
                 handlers::run_user_shell_command(&sess, sub.id.clone(), command).await;
             }
@@ -4589,6 +4592,54 @@ mod handlers {
             }),
         })
         .await;
+    }
+
+    pub async fn generate_thread_name(sess: &Arc<Session>, sub_id: String) {
+        let history = sess.clone_history().await;
+        if history.for_prompt(&[codex_protocol::openai_models::InputModality::Text]).is_empty() {
+            let event = Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "No conversation to generate a name from.".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::BadRequest),
+                }),
+            };
+            sess.send_event_raw(event).await;
+            return;
+        }
+
+        let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
+        let sess = Arc::clone(sess);
+        // Fire-and-forget: does not block the op loop or abort active tasks.
+        tokio::spawn(async move {
+            match crate::auto_rename::generate_name(&sess, &turn_context).await {
+                Ok(name) => {
+                    if let Some(name) = crate::util::normalize_thread_name(&name) {
+                        set_thread_name(&sess, sub_id, name).await;
+                    } else {
+                        sess.send_event_raw(Event {
+                            id: sub_id,
+                            msg: EventMsg::Error(ErrorEvent {
+                                message: "LLM returned an empty name.".to_string(),
+                                codex_error_info: Some(CodexErrorInfo::Other),
+                            }),
+                        })
+                        .await;
+                    }
+                }
+                Err(e) => {
+                    warn!("auto-rename failed: {e}");
+                    sess.send_event_raw(Event {
+                        id: sub_id,
+                        msg: EventMsg::Error(ErrorEvent {
+                            message: format!("Failed to generate thread name: {e}"),
+                            codex_error_info: Some(CodexErrorInfo::Other),
+                        }),
+                    })
+                    .await;
+                }
+            }
+        });
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {

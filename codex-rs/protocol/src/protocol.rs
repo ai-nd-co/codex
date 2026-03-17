@@ -367,6 +367,10 @@ pub enum Op {
     /// involve the model.
     SetThreadName { name: String },
 
+    /// Auto-generate a concise thread name from conversation context via a
+    /// side-channel LLM call and apply it.
+    GenerateThreadName,
+
     /// Request the agent to summarize the first half of the conversation and
     /// retain the most recent half verbatim.
     SmartCompact,

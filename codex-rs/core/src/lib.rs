@@ -163,6 +163,7 @@ pub use file_watcher::FileWatcherEvent;
 pub use safety::get_platform_sandbox;
 pub use tools::spec::parse_tool_input_schema;
 pub use turn_metadata::build_turn_metadata_header;
+pub mod auto_rename;
 pub mod compact;
 pub mod memory_trace;
 pub mod otel_init;
