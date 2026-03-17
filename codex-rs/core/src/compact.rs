@@ -10,6 +10,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::get_last_assistant_message_from_turn;
 use crate::context_manager::ContextManager;
+use crate::context_manager::is_user_turn_boundary;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::protocol::CompactedItem;
@@ -630,68 +631,43 @@ fn split_items_for_smart_compaction(
         return (Vec::new(), Vec::new());
     }
 
+    let turn_starts: Vec<usize> = items
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, item)| is_user_turn_boundary(item).then_some(idx))
+        .collect();
+    if turn_starts.is_empty() {
+        return (Vec::new(), items.to_vec());
+    }
+
     let total_tokens: usize = items.iter().map(estimate_item_tokens).sum();
     if total_tokens == 0 {
         return (Vec::new(), items.to_vec());
     }
 
     let cutoff_tokens = ((total_tokens as f64) * SMART_COMPACT_RATIO) as usize;
-    let mut cumulative = 0usize;
-    let mut cut_index = items.len();
+    let mut preserved_tokens = 0usize;
+    let mut cut_index = turn_starts[0];
 
-    for (idx, item) in items.iter().enumerate() {
-        cumulative = cumulative.saturating_add(estimate_item_tokens(item));
-        if cumulative >= cutoff_tokens {
-            cut_index = idx + 1;
+    for (turn_idx, start_idx) in turn_starts.iter().enumerate().rev() {
+        let end_idx = turn_starts
+            .get(turn_idx + 1)
+            .copied()
+            .unwrap_or(items.len());
+        preserved_tokens = preserved_tokens.saturating_add(
+            items[*start_idx..end_idx]
+                .iter()
+                .map(estimate_item_tokens)
+                .sum(),
+        );
+        cut_index = *start_idx;
+        if preserved_tokens >= cutoff_tokens {
             break;
         }
     }
 
-    let cut_index = adjust_split_index_for_call_pairs(items, cut_index);
     let (first, second) = items.split_at(cut_index);
     (first.to_vec(), second.to_vec())
-}
-
-fn adjust_split_index_for_call_pairs(items: &[ResponseItem], cut_index: usize) -> usize {
-    if cut_index == 0 || cut_index >= items.len() {
-        return cut_index;
-    }
-
-    let current = &items[cut_index];
-    let Some(call_id) = output_call_id(current) else {
-        return cut_index;
-    };
-
-    let previous = &items[cut_index - 1];
-    if is_matching_call(previous, call_id) {
-        return cut_index - 1;
-    }
-
-    cut_index
-}
-
-fn output_call_id(item: &ResponseItem) -> Option<&str> {
-    match item {
-        ResponseItem::FunctionCallOutput { call_id, .. } => Some(call_id),
-        ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id),
-        _ => None,
-    }
-}
-
-fn is_matching_call(item: &ResponseItem, call_id: &str) -> bool {
-    match item {
-        ResponseItem::FunctionCall {
-            call_id: existing, ..
-        } => existing == call_id,
-        ResponseItem::CustomToolCall {
-            call_id: existing, ..
-        } => existing == call_id,
-        ResponseItem::LocalShellCall {
-            call_id: Some(existing),
-            ..
-        } => existing == call_id,
-        _ => false,
-    }
 }
 
 fn estimate_item_tokens(item: &ResponseItem) -> usize {
@@ -1313,5 +1289,91 @@ keep me updated
             },
         ];
         assert_eq!(refreshed, expected);
+    }
+
+    #[test]
+    fn smart_split_preserves_boundary_crossing_recent_turn() {
+        let huge_recent_reply = "RECENT_ASSISTANT_MARKER ".repeat(1_500);
+        let items = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "older user".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "older reply".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "recent user".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: huge_recent_reply,
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+
+        let (first_half, second_half) = split_items_for_smart_compaction(&items);
+
+        assert_eq!(first_half.len(), 2, "older turn should be summarized");
+        assert_eq!(
+            second_half.len(),
+            2,
+            "recent turn should be preserved whole"
+        );
+        let preserved_text = match &second_half[1] {
+            ResponseItem::Message { role, content, .. } if role == "assistant" => {
+                content_items_to_text(content).unwrap_or_default()
+            }
+            other => panic!("expected preserved recent assistant message, got {other:?}"),
+        };
+        assert!(
+            preserved_text.contains("RECENT_ASSISTANT_MARKER"),
+            "boundary-crossing assistant reply should remain in the preserved tail"
+        );
+    }
+
+    #[test]
+    fn smart_split_preserves_all_items_without_user_turn_boundaries() {
+        let items = vec![ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "assistant only".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }];
+
+        let (first_half, second_half) = split_items_for_smart_compaction(&items);
+
+        assert!(
+            first_half.is_empty(),
+            "no user turns means no summarized prefix"
+        );
+        assert_eq!(
+            second_half, items,
+            "assistant-only history should be preserved"
+        );
     }
 }

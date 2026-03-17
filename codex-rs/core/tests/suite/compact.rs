@@ -776,15 +776,16 @@ async fn manual_compact_runs_when_disable_compaction_feature_enabled() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn smart_compact_preserves_recent_turns_when_disable_compaction_enabled() {
+async fn smart_compact_preserves_boundary_crossing_recent_turn() {
     skip_if_no_network!();
 
     const OLDER_USER: &str = "OLDER_USER_MESSAGE";
     const OLDER_REPLY: &str = "OLDER_REPLY";
     const RECENT_USER: &str = "RECENT_USER_MESSAGE";
-    const RECENT_REPLY: &str = "RECENT_ASSISTANT_MARKER";
+    const RECENT_REPLY_MARKER: &str = "RECENT_ASSISTANT_MARKER";
     const FOLLOW_UP_USER: &str = "AFTER_SMART_COMPACT";
     const SMART_SUMMARY: &str = "SMART_SUMMARY_ONLY";
+    let recent_reply = format!("{RECENT_REPLY_MARKER} {}", "filler ".repeat(4_000));
 
     let server = start_mock_server().await;
     let request_log = mount_sse_sequence(
@@ -795,7 +796,7 @@ async fn smart_compact_preserves_recent_turns_when_disable_compaction_enabled() 
                 ev_completed("r1"),
             ]),
             sse(vec![
-                ev_assistant_message("m2", RECENT_REPLY),
+                ev_assistant_message("m2", &recent_reply),
                 ev_completed("r2"),
             ]),
             sse(vec![
@@ -814,9 +815,6 @@ async fn smart_compact_preserves_recent_turns_when_disable_compaction_enabled() 
     let mut builder = test_codex().with_config(move |config| {
         config.model_provider = model_provider;
         set_test_compact_prompt(config);
-        config
-            .features
-            .enable(codex_core::features::Feature::DisableCompaction);
     });
     let codex = builder.build(&server).await.unwrap().codex;
 
@@ -866,7 +864,7 @@ async fn smart_compact_preserves_recent_turns_when_disable_compaction_enabled() 
         .unwrap_or(SMART_COMPACT_PROMPT);
     assert!(
         body_contains_text(&compact_body, smart_prompt_marker),
-        "manual /smart-compact should still run when auto-compaction is disabled"
+        "manual /smart-compact should issue the smart compact prompt"
     );
 
     let follow_up_body = requests[3].body_json().to_string();
@@ -879,8 +877,8 @@ async fn smart_compact_preserves_recent_turns_when_disable_compaction_enabled() 
         "follow-up request should include the smart compact summary"
     );
     assert!(
-        body_contains_text(&follow_up_body, RECENT_REPLY),
-        "follow-up request should preserve the recent assistant turn verbatim after smart compact"
+        body_contains_text(&follow_up_body, RECENT_REPLY_MARKER),
+        "follow-up request should preserve the boundary-crossing recent assistant turn"
     );
 }
 
