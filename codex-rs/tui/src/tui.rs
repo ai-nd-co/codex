@@ -45,6 +45,8 @@ use crate::tui::event_stream::EventBroker;
 use crate::tui::event_stream::TuiEventStream;
 #[cfg(unix)]
 use crate::tui::job_control::SuspendContext;
+use crate::window_attention::WindowAttentionController;
+use crate::window_attention::WindowAttentionPolicy;
 use codex_core::config::types::NotificationMethod;
 
 mod event_stream;
@@ -253,6 +255,8 @@ pub struct Tui {
     terminal_focused: Arc<AtomicBool>,
     enhanced_keys_supported: bool,
     notification_backend: Option<DesktopNotificationBackend>,
+    window_attention_policy: WindowAttentionPolicy,
+    window_attention_controller: WindowAttentionController,
     // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
     alt_screen_enabled: bool,
 }
@@ -282,6 +286,8 @@ impl Tui {
             terminal_focused: Arc::new(AtomicBool::new(true)),
             enhanced_keys_supported,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
+            window_attention_policy: WindowAttentionPolicy::default(),
+            window_attention_controller: WindowAttentionController,
             alt_screen_enabled: true,
         }
     }
@@ -293,6 +299,10 @@ impl Tui {
 
     pub fn set_notification_method(&mut self, method: NotificationMethod) {
         self.notification_backend = Some(detect_backend(method));
+    }
+
+    pub fn set_window_attention_policy(&mut self, policy: WindowAttentionPolicy) {
+        self.window_attention_policy = policy;
     }
 
     pub fn frame_requester(&self) -> FrameRequester {
@@ -364,24 +374,30 @@ impl Tui {
             return false;
         }
 
-        let Some(backend) = self.notification_backend.as_mut() else {
-            return false;
+        let message = message.as_ref().to_string();
+        let posted = if let Some(backend) = self.notification_backend.as_mut() {
+            match backend.notify(&message) {
+                Ok(()) => true,
+                Err(err) => {
+                    let method = backend.method();
+                    tracing::warn!(
+                        error = %err,
+                        method = %method,
+                        "Failed to emit terminal notification; disabling future notifications"
+                    );
+                    self.notification_backend = None;
+                    false
+                }
+            }
+        } else {
+            false
         };
 
-        let message = message.as_ref().to_string();
-        match backend.notify(&message) {
-            Ok(()) => true,
-            Err(err) => {
-                let method = backend.method();
-                tracing::warn!(
-                    error = %err,
-                    method = %method,
-                    "Failed to emit terminal notification; disabling future notifications"
-                );
-                self.notification_backend = None;
-                false
-            }
-        }
+        let attention_outcome = self
+            .window_attention_controller
+            .apply(self.window_attention_policy);
+
+        posted || attention_outcome.changed()
     }
 
     pub fn event_stream(&self) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {

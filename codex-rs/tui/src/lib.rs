@@ -121,6 +121,7 @@ mod updates;
 mod version;
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 mod voice;
+mod window_attention;
 #[cfg(all(not(target_os = "linux"), not(feature = "voice-input")))]
 mod voice {
     use crate::app_event::AppEvent;

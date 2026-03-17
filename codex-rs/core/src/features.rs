@@ -157,6 +157,10 @@ pub enum Feature {
     RealtimeConversation,
     /// Prevent idle system sleep while a turn is actively running.
     PreventIdleSleep,
+    /// Bring the Windows terminal window to the front when notifications fire.
+    FocusTerminalWindow,
+    /// Move the Windows terminal window to the primary monitor when notifications fire.
+    MoveTerminalWindowToPrimaryMonitor,
     /// Use the Responses API WebSocket transport for OpenAI by default.
     ResponsesWebsockets,
     /// Enable Responses API websocket v2 mode.
@@ -719,6 +723,38 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::FocusTerminalWindow,
+        key: "focus_terminal_window",
+        #[cfg(target_os = "windows")]
+        stage: Stage::Experimental {
+            name: "Focus terminal on notification",
+            menu_description: "On Windows, bring the Codex terminal window to the front when an unfocused approval or turn-complete notification is emitted.",
+            announcement: "NEW! Bring the Codex terminal window to front on notification.",
+        },
+        #[cfg(target_os = "windows")]
+        default_enabled: false,
+        #[cfg(not(target_os = "windows"))]
+        stage: Stage::UnderDevelopment,
+        #[cfg(not(target_os = "windows"))]
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::MoveTerminalWindowToPrimaryMonitor,
+        key: "move_terminal_window_to_primary_monitor",
+        #[cfg(target_os = "windows")]
+        stage: Stage::Experimental {
+            name: "Move terminal to primary monitor",
+            menu_description: "On Windows, move the Codex terminal window to the primary monitor when an unfocused approval or turn-complete notification is emitted.",
+            announcement: "NEW! Move the Codex terminal window to the primary monitor on notification.",
+        },
+        #[cfg(target_os = "windows")]
+        default_enabled: false,
+        #[cfg(not(target_os = "windows"))]
+        stage: Stage::UnderDevelopment,
+        #[cfg(not(target_os = "windows"))]
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::ResponsesWebsockets,
         key: "responses_websockets",
         stage: Stage::UnderDevelopment,
@@ -902,6 +938,42 @@ mod tests {
             ))
         );
         assert_eq!(Feature::JsRepl.default_enabled(), false);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn terminal_attention_features_are_experimental_on_windows() {
+        assert!(matches!(
+            Feature::FocusTerminalWindow.stage(),
+            Stage::Experimental { .. }
+        ));
+        assert!(matches!(
+            Feature::MoveTerminalWindowToPrimaryMonitor.stage(),
+            Stage::Experimental { .. }
+        ));
+        assert_eq!(Feature::FocusTerminalWindow.default_enabled(), false);
+        assert_eq!(
+            Feature::MoveTerminalWindowToPrimaryMonitor.default_enabled(),
+            false
+        );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn terminal_attention_features_are_under_development_off_windows() {
+        assert_eq!(
+            Feature::FocusTerminalWindow.stage(),
+            Stage::UnderDevelopment
+        );
+        assert_eq!(
+            Feature::MoveTerminalWindowToPrimaryMonitor.stage(),
+            Stage::UnderDevelopment
+        );
+        assert_eq!(Feature::FocusTerminalWindow.default_enabled(), false);
+        assert_eq!(
+            Feature::MoveTerminalWindowToPrimaryMonitor.default_enabled(),
+            false
+        );
     }
 
     #[test]

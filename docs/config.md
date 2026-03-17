@@ -41,6 +41,21 @@ sessions default to a temp directory; other modes default to `CODEX_HOME`.
 Some TUI behavior is gated behind feature flags that can be toggled via `/experimental` or in
 `~/.codex/config.toml` under `[features]`.
 
+### Windows terminal attention
+
+On Windows, you can extend the existing unfocused TUI notification behavior with:
+
+```toml
+[features]
+focus_terminal_window = true
+move_terminal_window_to_primary_monitor = true
+```
+
+These flags apply to the same approval-request and turn-complete notifications the TUI already
+emits. `focus_terminal_window` is best-effort because Windows may deny foreground activation.
+`move_terminal_window_to_primary_monitor` keeps the current window size and centers it on the
+primary monitor.
+
 ### Default mode `request_user_input`
 
 To allow `request_user_input` in Default collaboration mode, enable:

@@ -36,6 +36,7 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
+use crate::window_attention::WindowAttentionPolicy;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::AuthManager;
@@ -361,6 +362,11 @@ impl ThreadEventStore {
         self.pending_interactive_replay
             .has_pending_thread_approvals()
     }
+}
+
+fn sync_tui_notification_settings(tui: &mut tui::Tui, config: &Config) {
+    tui.set_notification_method(config.tui_notification_method);
+    tui.set_window_attention_policy(WindowAttentionPolicy::from_features(&config.features));
 }
 
 #[derive(Debug)]
@@ -1509,7 +1515,7 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
         emit_project_config_warnings(&app_event_tx, &config);
-        tui.set_notification_method(config.tui_notification_method);
+        sync_tui_notification_settings(tui, &config);
 
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
@@ -1978,7 +1984,7 @@ impl App {
                                 self.shutdown_current_thread().await;
                                 self.reset_for_thread_switch(tui)?;
                                 self.config = resume_config;
-                                tui.set_notification_method(self.config.tui_notification_method);
+                                sync_tui_notification_settings(tui, &self.config);
                                 self.file_search.update_search_dir(self.config.cwd.clone());
                                 let init = self.chatwidget_init_for_forked_or_resumed_thread(
                                     tui,
@@ -2809,6 +2815,9 @@ impl App {
                         }
                     }
                 }
+                tui.set_window_attention_policy(WindowAttentionPolicy::from_features(
+                    &self.config.features,
+                ));
                 if windows_sandbox_changed {
                     #[cfg(target_os = "windows")]
                     {

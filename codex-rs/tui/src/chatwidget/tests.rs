@@ -35,6 +35,7 @@ use codex_otel::OtelManager;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
+use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
@@ -43,6 +44,7 @@ use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
+use codex_protocol::mcp::RequestId;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
@@ -6462,6 +6464,145 @@ async fn experimental_popup_shows_js_repl_node_requirement() {
         popup.contains(node_requirement),
         "expected js_repl feature description to mention the required Node version, got:\n{popup}"
     );
+}
+
+#[tokio::test]
+async fn turn_complete_queues_pending_notification() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: Some("Done and verified.".to_string()),
+        }),
+    });
+
+    assert!(matches!(
+        chat.pending_notification,
+        Some(Notification::AgentTurnComplete { .. })
+    ));
+}
+
+#[tokio::test]
+async fn exec_approval_queues_pending_notification() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "approval-1".into(),
+        msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+            call_id: "call-1".into(),
+            approval_id: Some("approval-1".into()),
+            turn_id: "turn-1".into(),
+            command: vec!["bash".into(), "-lc".into(), "echo hello".into()],
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            reason: Some("Need approval".into()),
+            network_approval_context: None,
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            additional_permissions: None,
+            available_decisions: None,
+            parsed_cmd: vec![],
+        }),
+    });
+
+    assert!(matches!(
+        chat.pending_notification,
+        Some(Notification::ExecApprovalRequested { .. })
+    ));
+}
+
+#[tokio::test]
+async fn patch_approval_queues_pending_notification() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let mut changes = std::collections::HashMap::new();
+    changes.insert(
+        PathBuf::from("README.md"),
+        FileChange::Add {
+            content: "hello\n".to_string(),
+        },
+    );
+
+    chat.handle_codex_event(Event {
+        id: "approval-2".into(),
+        msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+            call_id: "call-2".into(),
+            turn_id: "turn-2".into(),
+            changes,
+            reason: Some("Need patch approval".into()),
+            grant_root: None,
+        }),
+    });
+
+    assert!(matches!(
+        chat.pending_notification,
+        Some(Notification::EditApprovalRequested { .. })
+    ));
+}
+
+#[tokio::test]
+async fn elicitation_approval_queues_pending_notification() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "approval-3".into(),
+        msg: EventMsg::ElicitationRequest(ElicitationRequestEvent {
+            server_name: "weather".into(),
+            id: RequestId::Integer(7),
+            message: "Need confirmation".into(),
+        }),
+    });
+
+    assert!(matches!(
+        chat.pending_notification,
+        Some(Notification::ElicitationRequested { .. })
+    ));
+}
+
+#[tokio::test]
+async fn error_does_not_queue_pending_notification() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "err-1".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "oops".into(),
+            codex_error_info: None,
+        }),
+    });
+
+    assert!(chat.pending_notification.is_none());
+}
+
+#[tokio::test]
+async fn stream_error_does_not_queue_pending_notification() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "stream-1".into(),
+        msg: EventMsg::StreamError(StreamErrorEvent {
+            message: "Reconnecting".into(),
+            codex_error_info: Some(CodexErrorInfo::Other),
+            additional_details: None,
+        }),
+    });
+
+    assert!(chat.pending_notification.is_none());
+}
+
+#[tokio::test]
+async fn interrupted_turn_does_not_queue_pending_notification() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "abort-1".into(),
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    assert!(chat.pending_notification.is_none());
 }
 
 #[tokio::test]

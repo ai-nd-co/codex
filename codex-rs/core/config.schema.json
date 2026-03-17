@@ -376,6 +376,9 @@
             "experimental_windows_sandbox": {
               "type": "boolean"
             },
+            "focus_terminal_window": {
+              "type": "boolean"
+            },
             "include_apply_patch_tool": {
               "type": "boolean"
             },
@@ -392,6 +395,9 @@
               "type": "boolean"
             },
             "memory_tool": {
+              "type": "boolean"
+            },
+            "move_terminal_window_to_primary_monitor": {
               "type": "boolean"
             },
             "multi_agent": {
@@ -1780,6 +1786,9 @@
         "experimental_windows_sandbox": {
           "type": "boolean"
         },
+        "focus_terminal_window": {
+          "type": "boolean"
+        },
         "include_apply_patch_tool": {
           "type": "boolean"
         },
@@ -1796,6 +1805,9 @@
           "type": "boolean"
         },
         "memory_tool": {
+          "type": "boolean"
+        },
+        "move_terminal_window_to_primary_monitor": {
           "type": "boolean"
         },
         "multi_agent": {
