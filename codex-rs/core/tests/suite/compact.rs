@@ -180,6 +180,25 @@ async fn assert_compaction_uses_turn_lifecycle_id(codex: &std::sync::Arc<codex_c
         "compaction item completion should use the turn event id"
     );
 }
+
+async fn wait_for_turn_complete_without_disabled_compaction_warning(
+    codex: &std::sync::Arc<codex_core::CodexThread>,
+) {
+    loop {
+        let event = codex.next_event().await.expect("next event");
+        match event.msg {
+            EventMsg::Warning(WarningEvent { message }) => {
+                assert!(
+                    !message.contains("Compaction is disabled in /experimental settings."),
+                    "manual compaction should not emit the disabled warning"
+                );
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+}
+
 fn context_snapshot_options() -> ContextSnapshotOptions {
     ContextSnapshotOptions::default()
         .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 64 })
@@ -720,6 +739,148 @@ async fn compact_uses_regular_prompt_when_smart_compact_feature_disabled() {
     assert!(
         !body_contains_text(&body, smart_prompt_marker),
         "regular compact request should not include smart compact prompt"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manual_compact_runs_when_disable_compaction_feature_enabled() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let compact_turn = sse(vec![
+        ev_assistant_message("m1", SUMMARY_TEXT),
+        ev_completed("r1"),
+    ]);
+    let request_log = mount_sse_sequence(&server, vec![compact_turn]).await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config
+            .features
+            .enable(codex_core::features::Feature::DisableCompaction);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
+
+    codex.submit(Op::Compact).await.expect("run /compact");
+    wait_for_turn_complete_without_disabled_compaction_warning(&codex).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 1, "expected one regular compact request");
+    let body = requests[0].body_json().to_string();
+    assert!(
+        body_contains_text(&body, SUMMARIZATION_PROMPT),
+        "manual /compact should still issue the regular compact prompt when auto-compaction is disabled"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn smart_compact_preserves_recent_turns_when_disable_compaction_enabled() {
+    skip_if_no_network!();
+
+    const OLDER_USER: &str = "OLDER_USER_MESSAGE";
+    const OLDER_REPLY: &str = "OLDER_REPLY";
+    const RECENT_USER: &str = "RECENT_USER_MESSAGE";
+    const RECENT_REPLY: &str = "RECENT_ASSISTANT_MARKER";
+    const FOLLOW_UP_USER: &str = "AFTER_SMART_COMPACT";
+    const SMART_SUMMARY: &str = "SMART_SUMMARY_ONLY";
+
+    let server = start_mock_server().await;
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", OLDER_REPLY),
+                ev_completed("r1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", RECENT_REPLY),
+                ev_completed("r2"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", SMART_SUMMARY),
+                ev_completed("r3"),
+            ]),
+            sse(vec![
+                ev_assistant_message("m4", FINAL_REPLY),
+                ev_completed("r4"),
+            ]),
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config
+            .features
+            .enable(codex_core::features::Feature::DisableCompaction);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
+
+    for message in [OLDER_USER, RECENT_USER] {
+        codex
+            .submit(Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: message.into(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+            })
+            .await
+            .unwrap();
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    }
+
+    codex
+        .submit(Op::SmartCompact)
+        .await
+        .expect("run /smart-compact");
+    wait_for_turn_complete_without_disabled_compaction_warning(&codex).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: FOLLOW_UP_USER.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        4,
+        "expected two user turns, smart compact, and a follow-up turn"
+    );
+
+    let compact_body = requests[2].body_json().to_string();
+    let smart_prompt_marker = SMART_COMPACT_PROMPT
+        .lines()
+        .next()
+        .unwrap_or(SMART_COMPACT_PROMPT);
+    assert!(
+        body_contains_text(&compact_body, smart_prompt_marker),
+        "manual /smart-compact should still run when auto-compaction is disabled"
+    );
+
+    let follow_up_body = requests[3].body_json().to_string();
+    assert!(
+        body_contains_text(&follow_up_body, FOLLOW_UP_USER),
+        "follow-up request should include the new user message"
+    );
+    assert!(
+        body_contains_text(&follow_up_body, summary_with_prefix(SMART_SUMMARY).as_str()),
+        "follow-up request should include the smart compact summary"
+    );
+    assert!(
+        body_contains_text(&follow_up_body, RECENT_REPLY),
+        "follow-up request should preserve the recent assistant turn verbatim after smart compact"
     );
 }
 
@@ -1488,6 +1649,83 @@ async fn auto_compact_runs_after_token_limit_hit() {
     );
 }
 
+#[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
+#[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
+async fn auto_smart_compact_does_not_run_when_disable_compaction_feature_enabled() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", FIRST_REPLY),
+                ev_completed_with_tokens("r1", 70_000),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", "SECOND_REPLY"),
+                ev_completed_with_tokens("r2", 330_000),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", FINAL_REPLY),
+                ev_completed_with_tokens("r3", 120),
+            ]),
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config.model_auto_compact_token_limit = Some(200_000);
+        config
+            .features
+            .enable(codex_core::features::Feature::SmartCompact)
+            .enable(codex_core::features::Feature::DisableCompaction);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
+
+    for message in [FIRST_AUTO_MSG, SECOND_AUTO_MSG, POST_AUTO_USER_MSG] {
+        codex
+            .submit(Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: message.into(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+            })
+            .await
+            .unwrap();
+
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    }
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected only the three user turns; auto smart compact should be disabled"
+    );
+
+    let smart_prompt_marker = SMART_COMPACT_PROMPT
+        .lines()
+        .next()
+        .unwrap_or(SMART_COMPACT_PROMPT);
+    for request in requests {
+        let body = request.body_json().to_string();
+        assert!(
+            !body_contains_text(&body, smart_prompt_marker),
+            "auto smart compact prompt should not appear when auto-compaction is disabled"
+        );
+        assert!(
+            !body_contains_text(&body, SUMMARIZATION_PROMPT),
+            "regular auto compact prompt should not appear when auto-compaction is disabled"
+        );
+    }
+}
+
 // Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
 #[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
 #[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
@@ -1903,6 +2141,126 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
                 ),
             ]
         )
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_sampling_compact_does_not_run_on_switch_when_disable_compaction_enabled() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let previous_model = "gpt-5.2-codex";
+    let next_model = "gpt-5.1-codex-max";
+
+    mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![
+                model_info_with_context_window(previous_model, 273_000),
+                model_info_with_context_window(next_model, 125_000),
+            ],
+        },
+    )
+    .await;
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", "before switch"),
+                ev_completed_with_tokens("r1", 120_000),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", "after switch"),
+                ev_completed_with_tokens("r2", 100),
+            ]),
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(previous_model)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config
+                .features
+                .enable(codex_core::features::Feature::DisableCompaction);
+        });
+    let test = builder.build(&server).await.expect("build test codex");
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "before switch".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: previous_model.to_string(),
+            effort: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await
+        .expect("submit first user turn");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "after switch".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: next_model.to_string(),
+            effort: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await
+        .expect("submit second user turn");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "expected direct previous-model and switched-model requests with no pre-sampling compaction"
+    );
+
+    let first = requests[0].body_json();
+    let second = requests[1].body_json();
+    assert_eq!(first["model"].as_str(), Some(previous_model));
+    assert_eq!(second["model"].as_str(), Some(next_model));
+
+    let second_body = second.to_string();
+    let smart_prompt_marker = SMART_COMPACT_PROMPT
+        .lines()
+        .next()
+        .unwrap_or(SMART_COMPACT_PROMPT);
+    assert!(
+        !body_contains_text(&second_body, SUMMARIZATION_PROMPT),
+        "pre-sampling compact prompt should not appear when auto-compaction is disabled"
+    );
+    assert!(
+        !body_contains_text(&second_body, smart_prompt_marker),
+        "smart compact prompt should not appear on model switch when auto-compaction is disabled"
     );
 }
 

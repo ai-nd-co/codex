@@ -811,9 +811,9 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::DisableCompaction,
         key: "disable_compaction",
         stage: Stage::Experimental {
-            name: "Disable compaction",
-            menu_description: "Skip automatic and manual context compaction.",
-            announcement: "NEW! Disable compaction (advanced). Enable in /experimental!",
+            name: "Disable auto-compaction",
+            menu_description: "Skip automatic context compaction while still allowing manual /compact and /smart-compact.",
+            announcement: "NEW! Disable auto-compaction (advanced). Manual compaction commands still work.",
         },
         default_enabled: false,
     },
