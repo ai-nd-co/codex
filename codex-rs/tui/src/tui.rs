@@ -238,6 +238,7 @@ pub enum TuiEvent {
     Key(KeyEvent),
     Paste(String),
     Draw,
+    Resize,
 }
 
 pub struct Tui {
@@ -468,6 +469,7 @@ impl Tui {
     pub fn draw(
         &mut self,
         height: u16,
+        should_realign_viewport: bool,
         draw_fn: impl FnOnce(&mut custom_terminal::Frame),
     ) -> Result<()> {
         // If we are resuming from ^Z, we need to prepare the resume action now so we can apply it
@@ -479,7 +481,11 @@ impl Tui {
 
         // Precompute any viewport updates that need a cursor-position query before entering
         // the synchronized update, to avoid racing with the event reader.
-        let mut pending_viewport_area = self.pending_viewport_area()?;
+        let mut pending_viewport_area = if should_realign_viewport {
+            self.pending_viewport_area()?
+        } else {
+            None
+        };
 
         stdout().sync_update(|_| {
             #[cfg(unix)]

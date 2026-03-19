@@ -141,7 +141,7 @@ pub(crate) async fn run_model_migration_prompt(
     let alt = AltScreenGuard::enter(tui);
     let mut screen = ModelMigrationScreen::new(alt.tui.frame_requester(), copy);
 
-    let _ = alt.tui.draw(u16::MAX, |frame| {
+    let _ = alt.tui.draw(u16::MAX, false, |frame| {
         frame.render_widget_ref(&screen, frame.area());
     });
 
@@ -154,7 +154,12 @@ pub(crate) async fn run_model_migration_prompt(
                 TuiEvent::Key(key_event) => screen.handle_key(key_event),
                 TuiEvent::Paste(_) => {}
                 TuiEvent::Draw => {
-                    let _ = alt.tui.draw(u16::MAX, |frame| {
+                    let _ = alt.tui.draw(u16::MAX, false, |frame| {
+                        frame.render_widget_ref(&screen, frame.area());
+                    });
+                }
+                TuiEvent::Resize => {
+                    let _ = alt.tui.draw(u16::MAX, true, |frame| {
                         frame.render_widget_ref(&screen, frame.area());
                     });
                 }

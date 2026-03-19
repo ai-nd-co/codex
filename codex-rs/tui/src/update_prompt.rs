@@ -45,7 +45,7 @@ pub(crate) async fn run_update_prompt_if_needed(
 
     let mut screen =
         UpdatePromptScreen::new(tui.frame_requester(), latest_version.clone(), update_action);
-    tui.draw(u16::MAX, |frame| {
+    tui.draw(u16::MAX, false, |frame| {
         frame.render_widget_ref(&screen, frame.area());
     })?;
 
@@ -58,7 +58,12 @@ pub(crate) async fn run_update_prompt_if_needed(
                 TuiEvent::Key(key_event) => screen.handle_key(key_event),
                 TuiEvent::Paste(_) => {}
                 TuiEvent::Draw => {
-                    tui.draw(u16::MAX, |frame| {
+                    tui.draw(u16::MAX, false, |frame| {
+                        frame.render_widget_ref(&screen, frame.area());
+                    })?;
+                }
+                TuiEvent::Resize => {
+                    tui.draw(u16::MAX, true, |frame| {
                         frame.render_widget_ref(&screen, frame.area());
                     })?;
                 }

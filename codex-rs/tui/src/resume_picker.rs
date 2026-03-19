@@ -226,7 +226,15 @@ async fn run_session_picker(
                             state.update_view_rows(list_height);
                             state.ensure_minimum_rows_for_view(list_height);
                         }
-                        draw_picker(alt.tui, &state)?;
+                        draw_picker(alt.tui, &state, false)?;
+                    }
+                    TuiEvent::Resize => {
+                        if let Ok(size) = alt.tui.terminal.size() {
+                            let list_height = size.height.saturating_sub(4) as usize;
+                            state.update_view_rows(list_height);
+                            state.ensure_minimum_rows_for_view(list_height);
+                        }
+                        draw_picker(alt.tui, &state, true)?;
                     }
                     _ => {}
                 }
@@ -1416,10 +1424,14 @@ fn parse_timestamp_str(ts: &str) -> Option<DateTime<Utc>> {
         .ok()
 }
 
-fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
+fn draw_picker(
+    tui: &mut Tui,
+    state: &PickerState,
+    should_realign_viewport: bool,
+) -> std::io::Result<()> {
     // Render full-screen overlay
     let height = tui.terminal.size()?.height;
-    tui.draw(height, |frame| {
+    tui.draw(height, should_realign_viewport, |frame| {
         let area = frame.area();
         let [header, search, columns, list, hint] = Layout::vertical([
             Constraint::Length(1),

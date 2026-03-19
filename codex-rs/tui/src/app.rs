@@ -1863,7 +1863,7 @@ impl App {
         tui: &mut tui::Tui,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
-        if matches!(event, TuiEvent::Draw) {
+        if matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
             let size = tui.terminal.size()?;
             if size != tui.terminal.last_known_screen_size {
                 self.refresh_status_line();
@@ -1901,6 +1901,37 @@ impl App {
                     self.chat_widget.pre_draw_tick();
                     tui.draw(
                         self.chat_widget.desired_height(tui.terminal.size()?.width),
+                        false,
+                        |frame| {
+                            self.chat_widget.render(frame.area(), frame.buffer);
+                            if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
+                                frame.set_cursor_position((x, y));
+                            }
+                        },
+                    )?;
+                    if self.chat_widget.external_editor_state() == ExternalEditorState::Requested {
+                        self.chat_widget
+                            .set_external_editor_state(ExternalEditorState::Active);
+                        self.app_event_tx.send(AppEvent::LaunchExternalEditor);
+                    }
+                }
+                TuiEvent::Resize => {
+                    if self.backtrack_render_pending {
+                        self.backtrack_render_pending = false;
+                        self.render_transcript_once(tui);
+                    }
+                    self.chat_widget.maybe_post_pending_notification(tui);
+                    if self
+                        .chat_widget
+                        .handle_paste_burst_tick(tui.frame_requester())
+                    {
+                        return Ok(AppRunControl::Continue);
+                    }
+                    // Allow widgets to process any pending timers before rendering.
+                    self.chat_widget.pre_draw_tick();
+                    tui.draw(
+                        self.chat_widget.desired_height(tui.terminal.size()?.width),
+                        true,
                         |frame| {
                             self.chat_widget.render(frame.area(), frame.buffer);
                             if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {

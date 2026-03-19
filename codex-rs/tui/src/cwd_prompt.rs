@@ -85,7 +85,7 @@ pub(crate) async fn run_cwd_selection_prompt(
         current_cwd.display().to_string(),
         session_cwd.display().to_string(),
     );
-    tui.draw(u16::MAX, |frame| {
+    tui.draw(u16::MAX, false, |frame| {
         frame.render_widget_ref(&screen, frame.area());
     })?;
 
@@ -98,7 +98,12 @@ pub(crate) async fn run_cwd_selection_prompt(
                 TuiEvent::Key(key_event) => screen.handle_key(key_event),
                 TuiEvent::Paste(_) => {}
                 TuiEvent::Draw => {
-                    tui.draw(u16::MAX, |frame| {
+                    tui.draw(u16::MAX, false, |frame| {
+                        frame.render_widget_ref(&screen, frame.area());
+                    })?;
+                }
+                TuiEvent::Resize => {
+                    tui.draw(u16::MAX, true, |frame| {
                         frame.render_widget_ref(&screen, frame.area());
                     })?;
                 }

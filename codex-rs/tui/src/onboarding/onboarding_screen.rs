@@ -402,7 +402,7 @@ pub(crate) async fn run_onboarding_app(
     // One-time guard to fully clear the screen after ChatGPT login success message is shown
     let mut did_full_clear_after_success = false;
 
-    tui.draw(u16::MAX, |frame| {
+    tui.draw(u16::MAX, false, |frame| {
         frame.render_widget_ref(&onboarding_screen, frame.area());
     })?;
 
@@ -449,7 +449,41 @@ pub(crate) async fn run_onboarding_app(
                         let _ = tui.terminal.clear();
                         did_full_clear_after_success = true;
                     }
-                    let _ = tui.draw(u16::MAX, |frame| {
+                    let _ = tui.draw(u16::MAX, false, |frame| {
+                        frame.render_widget_ref(&onboarding_screen, frame.area());
+                    });
+                }
+                TuiEvent::Resize => {
+                    if !did_full_clear_after_success
+                        && onboarding_screen.steps.iter().any(|step| {
+                            if let Step::Auth(w) = step {
+                                w.sign_in_state.read().is_ok_and(|g| {
+                                    matches!(&*g, super::auth::SignInState::ChatGptSuccessMessage)
+                                })
+                            } else {
+                                false
+                            }
+                        })
+                    {
+                        let _ = ratatui::crossterm::execute!(
+                            std::io::stdout(),
+                            ratatui::crossterm::style::SetAttribute(
+                                ratatui::crossterm::style::Attribute::Reset
+                            ),
+                            ratatui::crossterm::style::SetAttribute(
+                                ratatui::crossterm::style::Attribute::NoUnderline
+                            ),
+                            ratatui::crossterm::style::SetForegroundColor(
+                                ratatui::crossterm::style::Color::Reset
+                            ),
+                            ratatui::crossterm::style::SetBackgroundColor(
+                                ratatui::crossterm::style::Color::Reset
+                            )
+                        );
+                        let _ = tui.terminal.clear();
+                        did_full_clear_after_success = true;
+                    }
+                    let _ = tui.draw(u16::MAX, true, |frame| {
                         frame.render_widget_ref(&onboarding_screen, frame.area());
                     });
                 }

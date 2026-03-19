@@ -690,7 +690,13 @@ impl TranscriptOverlay {
                 other => self.view.handle_key_event(tui, other),
             },
             TuiEvent::Draw => {
-                tui.draw(u16::MAX, |frame| {
+                tui.draw(u16::MAX, false, |frame| {
+                    self.render(frame.area(), frame.buffer);
+                })?;
+                Ok(())
+            }
+            TuiEvent::Resize => {
+                tui.draw(u16::MAX, true, |frame| {
                     self.render(frame.area(), frame.buffer);
                 })?;
                 Ok(())
@@ -754,7 +760,13 @@ impl StaticOverlay {
                 other => self.view.handle_key_event(tui, other),
             },
             TuiEvent::Draw => {
-                tui.draw(u16::MAX, |frame| {
+                tui.draw(u16::MAX, false, |frame| {
+                    self.render(frame.area(), frame.buffer);
+                })?;
+                Ok(())
+            }
+            TuiEvent::Resize => {
+                tui.draw(u16::MAX, true, |frame| {
                     self.render(frame.area(), frame.buffer);
                 })?;
                 Ok(())

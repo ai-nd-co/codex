@@ -363,12 +363,12 @@ impl App {
     /// source of truth for the active cell and its cache invalidation key, and because `App` owns
     /// overlay lifecycle and frame scheduling for animations.
     fn overlay_forward_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
-        if let TuiEvent::Draw = &event
+        if matches!(event, TuiEvent::Draw | TuiEvent::Resize)
             && let Some(Overlay::Transcript(t)) = &mut self.overlay
         {
             let active_key = self.chat_widget.active_cell_transcript_key();
             let chat_widget = &self.chat_widget;
-            tui.draw(u16::MAX, |frame| {
+            tui.draw(u16::MAX, matches!(event, TuiEvent::Resize), |frame| {
                 let width = frame.area().width.max(1);
                 t.sync_live_tail(width, active_key, |w| {
                     chat_widget.active_cell_transcript_lines(w)
