@@ -45,6 +45,10 @@ impl AppEventSender {
         self.send(AppEvent::CodexOp(AppCommand::compact().into_core()));
     }
 
+    pub(crate) fn smart_compact(&self) {
+        self.send(AppEvent::CodexOp(AppCommand::smart_compact().into_core()));
+    }
+
     pub(crate) fn set_thread_name(&self, name: String) {
         self.send(AppEvent::CodexOp(
             AppCommand::set_thread_name(name).into_core(),

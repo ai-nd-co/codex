@@ -166,6 +166,69 @@ fn image_detail_original_feature_is_under_development() {
 }
 
 #[test]
+fn disable_system_prompt_is_experimental_and_disabled_by_default() {
+    let spec = Feature::DisableSystemPrompt.info();
+    let stage = spec.stage;
+
+    assert!(matches!(stage, Stage::Experimental { .. }));
+    assert_eq!(
+        stage.experimental_menu_name(),
+        Some("Disable system prompt")
+    );
+    assert_eq!(
+        stage.experimental_menu_description(),
+        Some("Send empty base instructions to the model.")
+    );
+    assert_eq!(Feature::DisableSystemPrompt.default_enabled(), false);
+}
+
+#[test]
+fn smart_compact_is_experimental_and_disabled_by_default() {
+    let spec = Feature::SmartCompact.info();
+    let stage = spec.stage;
+
+    assert!(matches!(stage, Stage::Experimental { .. }));
+    assert_eq!(stage.experimental_menu_name(), Some("Smart compact"));
+    assert_eq!(Feature::SmartCompact.default_enabled(), false);
+}
+
+#[test]
+fn disable_compaction_is_experimental_and_disabled_by_default() {
+    let spec = Feature::DisableCompaction.info();
+    let stage = spec.stage;
+
+    assert!(matches!(stage, Stage::Experimental { .. }));
+    assert_eq!(
+        stage.experimental_menu_name(),
+        Some("Disable auto-compaction")
+    );
+    assert_eq!(Feature::DisableCompaction.default_enabled(), false);
+}
+
+#[test]
+fn verbose_tool_calls_is_experimental_and_disabled_by_default() {
+    let spec = Feature::VerboseToolCalls.info();
+    let stage = spec.stage;
+
+    assert!(matches!(stage, Stage::Experimental { .. }));
+    assert_eq!(stage.experimental_menu_name(), Some("Verbose tool calls"));
+    assert_eq!(Feature::VerboseToolCalls.default_enabled(), false);
+}
+
+#[test]
+fn disable_explored_compaction_is_experimental_and_disabled_by_default() {
+    let spec = Feature::DisableExploredCompaction.info();
+    let stage = spec.stage;
+
+    assert!(matches!(stage, Stage::Experimental { .. }));
+    assert_eq!(
+        stage.experimental_menu_name(),
+        Some("Disable explored compaction")
+    );
+    assert_eq!(Feature::DisableExploredCompaction.default_enabled(), false);
+}
+
+#[test]
 fn collab_is_legacy_alias_for_multi_agent() {
     assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
     assert_eq!(feature_for_key("collab"), Some(Feature::Collab));

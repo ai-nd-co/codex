@@ -6654,6 +6654,9 @@ impl CodexMessageProcessor {
                             codex_protocol::protocol::NonSteerableTurnKind::Compact => {
                                 "cannot steer a compact turn".to_string()
                             }
+                            codex_protocol::protocol::NonSteerableTurnKind::SmartCompact => {
+                                "cannot steer a smart compact turn".to_string()
+                            }
                         };
                         let error = TurnError {
                             message: message.clone(),

@@ -2801,6 +2801,28 @@ async fn notify_request_permissions_response_ignores_unmatched_call_id() {
     assert_eq!(session.granted_turn_permissions().await, None);
 }
 
+#[test]
+fn resolve_session_base_instructions_respects_disable_system_prompt() {
+    let mut config = test_config();
+    let mut features = config.features.get().clone();
+    features.enable(Feature::DisableSystemPrompt);
+    config
+        .features
+        .set(features)
+        .expect("test config should allow disable_system_prompt");
+
+    let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
+    let model_info = ModelsManager::construct_model_info_offline_for_tests(
+        model.as_str(),
+        &config.to_models_manager_config(),
+    );
+
+    assert_eq!(
+        resolve_session_base_instructions(&config, Some("persisted".to_string()), &model_info),
+        ""
+    );
+}
+
 #[tokio::test]
 async fn request_permissions_emits_event_when_granular_policy_allows_requests() {
     let (session, mut turn_context, rx) = make_session_and_context_with_rx().await;

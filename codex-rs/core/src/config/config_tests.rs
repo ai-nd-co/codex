@@ -7,6 +7,7 @@ use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
+use codex_config::types::ApprovalsToml;
 use codex_config::types::BundledSkillsConfig;
 use codex_config::types::FeedbackConfigToml;
 use codex_config::types::HistoryPersistence;
@@ -186,6 +187,24 @@ consolidation_model = "gpt-5"
             extract_model: Some("gpt-5-mini".to_string()),
             consolidation_model: Some("gpt-5".to_string()),
         }
+    );
+}
+
+#[test]
+fn approvals_always_prompt_regex_toml_parses() {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+[approvals]
+always_prompt_regex = ["^git push", "rm -rf"]
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.approvals,
+        Some(ApprovalsToml {
+            always_prompt_regex: Some(vec!["^git push".to_string(), "rm -rf".to_string()]),
+        })
     );
 }
 

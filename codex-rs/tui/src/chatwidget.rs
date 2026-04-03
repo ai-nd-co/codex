@@ -321,6 +321,7 @@ use crate::collaboration_modes;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
+use crate::exec_cell::ExecCellRenderOptions;
 use crate::exec_cell::new_active_exec_command;
 use crate::exec_command::split_command_string;
 use crate::exec_command::strip_bash_lc_and_escape;
@@ -4259,13 +4260,22 @@ impl ChatWidget {
                 }
             }
             ExecEndTarget::OrphanHistoryWhileActiveExec => {
+                let verbose_tool_calls = self.config.features.enabled(Feature::VerboseToolCalls);
+                let disable_explored_compaction = self
+                    .config
+                    .features
+                    .enabled(Feature::DisableExploredCompaction);
                 let mut orphan = new_active_exec_command(
                     ev.call_id.clone(),
                     command,
                     parsed,
                     source,
                     ev.interaction_input.clone(),
-                    self.config.animations,
+                    ExecCellRenderOptions {
+                        animations_enabled: self.config.animations,
+                        verbose_tool_calls,
+                        disable_explored_compaction,
+                    },
                 );
                 let completed = orphan.complete_call(&ev.call_id, output, ev.duration);
                 debug_assert!(
@@ -4280,13 +4290,22 @@ impl ChatWidget {
             }
             ExecEndTarget::NewCell => {
                 self.flush_active_cell();
+                let verbose_tool_calls = self.config.features.enabled(Feature::VerboseToolCalls);
+                let disable_explored_compaction = self
+                    .config
+                    .features
+                    .enabled(Feature::DisableExploredCompaction);
                 let mut cell = new_active_exec_command(
                     ev.call_id.clone(),
                     command,
                     parsed,
                     source,
                     ev.interaction_input.clone(),
-                    self.config.animations,
+                    ExecCellRenderOptions {
+                        animations_enabled: self.config.animations,
+                        verbose_tool_calls,
+                        disable_explored_compaction,
+                    },
                 );
                 let completed = cell.complete_call(&ev.call_id, output, ev.duration);
                 debug_assert!(completed, "new exec cell should contain {}", ev.call_id);
@@ -4470,6 +4489,11 @@ impl ChatWidget {
             *cell = new_exec;
             self.bump_active_cell_revision();
         } else {
+            let verbose_tool_calls = self.config.features.enabled(Feature::VerboseToolCalls);
+            let disable_explored_compaction = self
+                .config
+                .features
+                .enabled(Feature::DisableExploredCompaction);
             self.flush_active_cell();
 
             self.active_cell = Some(Box::new(new_active_exec_command(
@@ -4478,7 +4502,11 @@ impl ChatWidget {
                 ev.parsed_cmd,
                 ev.source,
                 interaction_input,
-                self.config.animations,
+                ExecCellRenderOptions {
+                    animations_enabled: self.config.animations,
+                    verbose_tool_calls,
+                    disable_explored_compaction,
+                },
             )));
             self.bump_active_cell_revision();
         }
@@ -5052,6 +5080,13 @@ impl ChatWidget {
                 }
                 self.app_event_tx.compact();
             }
+            SlashCommand::SmartCompact => {
+                self.clear_token_usage();
+                if !self.bottom_pane.is_task_running() {
+                    self.bottom_pane.set_task_running(/*running*/ true);
+                }
+                self.app_event_tx.smart_compact();
+            }
             SlashCommand::Review => {
                 self.open_review_popup();
             }
@@ -5059,6 +5094,12 @@ impl ChatWidget {
                 self.session_telemetry
                     .counter("codex.thread.rename", /*inc*/ 1, &[]);
                 self.show_rename_prompt();
+            }
+            SlashCommand::AutoRename => {
+                self.session_telemetry
+                    .counter("codex.thread.auto_rename", /*inc*/ 1, &[]);
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(Op::GenerateThreadName));
             }
             SlashCommand::Model => {
                 self.open_model_popup();

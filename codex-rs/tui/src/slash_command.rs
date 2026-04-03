@@ -24,11 +24,14 @@ pub enum SlashCommand {
     Skills,
     Review,
     Rename,
+    #[strum(serialize = "auto-rename")]
+    AutoRename,
     New,
     Resume,
     Fork,
     Init,
     Compact,
+    SmartCompact,
     Plan,
     Collab,
     Agent,
@@ -74,8 +77,12 @@ impl SlashCommand {
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
+            SlashCommand::SmartCompact => {
+                "summarize the first half of the conversation and keep the recent half"
+            }
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Rename => "rename the current thread",
+            SlashCommand::AutoRename => "auto-generate a thread name from the conversation",
             SlashCommand::Resume => "resume a saved chat",
             SlashCommand::Clear => "clear the terminal and start a new chat",
             SlashCommand::Fork => "fork the current chat",
@@ -144,6 +151,7 @@ impl SlashCommand {
             | SlashCommand::Fork
             | SlashCommand::Init
             | SlashCommand::Compact
+            | SlashCommand::SmartCompact
             // | SlashCommand::Undo
             | SlashCommand::Model
             | SlashCommand::Fast
@@ -162,6 +170,7 @@ impl SlashCommand {
             SlashCommand::Diff
             | SlashCommand::Copy
             | SlashCommand::Rename
+            | SlashCommand::AutoRename
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Status

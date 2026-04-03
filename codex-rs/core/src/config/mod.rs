@@ -25,6 +25,7 @@ use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_config::types::ApprovalsReviewer;
+use codex_config::types::ApprovalsToml;
 use codex_config::types::AppsConfigToml;
 use codex_config::types::DEFAULT_OTEL_ENVIRONMENT;
 use codex_config::types::History;
@@ -1144,6 +1145,10 @@ pub struct ConfigToml {
     /// been escalated. This does not disable separate safety checks such as
     /// ARC.
     pub approvals_reviewer: Option<ApprovalsReviewer>,
+
+    /// Approval-related settings loaded from `[approvals]`.
+    #[serde(default)]
+    pub approvals: Option<ApprovalsToml>,
 
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,

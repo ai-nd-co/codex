@@ -168,15 +168,33 @@ async fn test_current_shell_detects_zsh() {
 }
 
 #[tokio::test]
-async fn detects_powershell_as_default() {
+async fn detects_windows_default_shell() {
     if !cfg!(windows) {
         return;
     }
 
-    let powershell_shell = default_user_shell();
-    let shell_path = powershell_shell.shell_path;
+    let shell = default_user_shell();
+    let shell_path = shell.shell_path;
 
-    assert!(shell_path.ends_with("pwsh.exe") || shell_path.ends_with("powershell.exe"));
+    match shell.shell_type {
+        ShellType::Bash => {
+            assert!(
+                shell_path.ends_with("bash.exe"),
+                "shell path: {shell_path:?}"
+            );
+            assert!(
+                !is_wsl_bash_path(&shell_path),
+                "default bash shell should not be the WSL shim: {shell_path:?}"
+            );
+        }
+        ShellType::PowerShell => {
+            assert!(
+                shell_path.ends_with("pwsh.exe") || shell_path.ends_with("powershell.exe"),
+                "shell path: {shell_path:?}"
+            );
+        }
+        other => panic!("unexpected windows default shell: {other:?}"),
+    }
 }
 
 #[test]
@@ -189,4 +207,30 @@ fn finds_powershell() {
     let shell_path = powershell_shell.shell_path;
 
     assert!(shell_path.ends_with("pwsh.exe") || shell_path.ends_with("powershell.exe"));
+}
+
+#[test]
+fn honors_shell_override_path_for_bash() {
+    let tmp = tempfile::tempdir().unwrap();
+    let shell_path = tmp.path().join("bash.exe");
+    std::fs::write(&shell_path, "").unwrap();
+
+    let shell = default_user_shell_with_override(Some(&shell_path));
+
+    assert_eq!(shell.shell_type, ShellType::Bash);
+    assert_eq!(shell.shell_path, shell_path);
+}
+
+#[cfg(windows)]
+#[test]
+fn detects_wsl_bash_paths() {
+    assert!(is_wsl_bash_path(&PathBuf::from(
+        r"C:\Windows\System32\bash.exe"
+    )));
+    assert!(is_wsl_bash_path(&PathBuf::from(
+        r"C:\Windows\Sysnative\bash.exe"
+    )));
+    assert!(!is_wsl_bash_path(&PathBuf::from(
+        r"C:\Program Files\Git\bin\bash.exe"
+    )));
 }

@@ -185,6 +185,104 @@ fn build_token_limited_compacted_history_appends_summary_message() {
     assert_eq!(summary, summary_text);
 }
 
+#[test]
+fn split_items_for_smart_compaction_keeps_recent_turns() {
+    fn user(text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: text.to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }
+    }
+
+    fn assistant(text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: text.to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }
+    }
+
+    let items = vec![
+        user("turn 1"),
+        assistant("assistant 1"),
+        user("turn 2"),
+        assistant("assistant 2"),
+        user("turn 3"),
+        assistant("assistant 3"),
+        user("turn 4"),
+        assistant("assistant 4"),
+    ];
+
+    let (first_half, second_half) = split_items_for_smart_compaction(&items);
+
+    assert_eq!(first_half.len(), 4);
+    assert_eq!(second_half.len(), 4);
+    assert_eq!(
+        content_items_to_text(message_content(&second_half[0])),
+        Some("turn 3".to_string())
+    );
+    assert_eq!(
+        content_items_to_text(message_content(&second_half[2])),
+        Some("turn 4".to_string())
+    );
+}
+
+#[test]
+fn build_smart_compacted_history_puts_summary_before_tail_items() {
+    let tail_items = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "recent user".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "recent assistant".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+    ];
+
+    let compacted = build_smart_compacted_history(Vec::new(), "summary text", &tail_items);
+
+    assert_eq!(compacted.len(), 3);
+    assert_eq!(
+        content_items_to_text(message_content(&compacted[0])),
+        Some("summary text".to_string())
+    );
+    assert_eq!(
+        content_items_to_text(message_content(&compacted[1])),
+        Some("recent user".to_string())
+    );
+    assert_eq!(
+        content_items_to_text(message_content(&compacted[2])),
+        Some("recent assistant".to_string())
+    );
+}
+
+fn message_content(item: &ResponseItem) -> &[ContentItem] {
+    match item {
+        ResponseItem::Message { content, .. } => content,
+        other => panic!("expected message, got {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn process_compacted_history_replaces_developer_messages() {
     let compacted_history = vec![

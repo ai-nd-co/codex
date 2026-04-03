@@ -36,13 +36,32 @@ pub(crate) struct ExecCall {
 pub(crate) struct ExecCell {
     pub(crate) calls: Vec<ExecCall>,
     animations_enabled: bool,
+    verbose_tool_calls: bool,
+    disable_explored_compaction: bool,
 }
 
 impl ExecCell {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn new(call: ExecCall, animations_enabled: bool) -> Self {
+        Self::new_with_options(
+            call,
+            animations_enabled,
+            /*verbose_tool_calls*/ false,
+            /*disable_explored_compaction*/ false,
+        )
+    }
+
+    pub(crate) fn new_with_options(
+        call: ExecCall,
+        animations_enabled: bool,
+        verbose_tool_calls: bool,
+        disable_explored_compaction: bool,
+    ) -> Self {
         Self {
             calls: vec![call],
             animations_enabled,
+            verbose_tool_calls,
+            disable_explored_compaction,
         }
     }
 
@@ -64,10 +83,15 @@ impl ExecCell {
             duration: None,
             interaction_input,
         };
-        if self.is_exploring_cell() && Self::is_exploring_call(&call) {
+        if !self.disable_explored_compaction
+            && self.is_exploring_cell()
+            && Self::is_exploring_call(&call)
+        {
             Some(Self {
                 calls: [self.calls.clone(), vec![call]].concat(),
                 animations_enabled: self.animations_enabled,
+                verbose_tool_calls: self.verbose_tool_calls,
+                disable_explored_compaction: self.disable_explored_compaction,
             })
         } else {
             None
@@ -135,6 +159,10 @@ impl ExecCell {
         self.animations_enabled
     }
 
+    pub(crate) fn verbose_tool_calls(&self) -> bool {
+        self.verbose_tool_calls
+    }
+
     pub(crate) fn iter_calls(&self) -> impl Iterator<Item = &ExecCall> {
         self.calls.iter()
     }
@@ -172,5 +200,47 @@ impl ExecCall {
 
     pub(crate) fn is_unified_exec_interaction(&self) -> bool {
         matches!(self.source, ExecCommandSource::UnifiedExecInteraction)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disable_explored_compaction_prevents_grouping() {
+        let call = ExecCall {
+            call_id: "call-1".to_string(),
+            command: vec!["cat".to_string(), "file.txt".to_string()],
+            parsed: vec![ParsedCommand::Read {
+                cmd: "cat file.txt".to_string(),
+                name: "file.txt".to_string(),
+                path: std::path::PathBuf::from("file.txt"),
+            }],
+            output: None,
+            source: ExecCommandSource::Agent,
+            start_time: None,
+            duration: None,
+            interaction_input: None,
+        };
+
+        let cell = ExecCell::new_with_options(
+            call, /*animations_enabled*/ false, /*verbose_tool_calls*/ false,
+            /*disable_explored_compaction*/ true,
+        );
+
+        let grouped = cell.with_added_call(
+            "call-2".to_string(),
+            vec!["cat".to_string(), "other.txt".to_string()],
+            vec![ParsedCommand::Read {
+                cmd: "cat other.txt".to_string(),
+                name: "other.txt".to_string(),
+                path: std::path::PathBuf::from("other.txt"),
+            }],
+            ExecCommandSource::Agent,
+            None,
+        );
+
+        assert!(grouped.is_none());
     }
 }

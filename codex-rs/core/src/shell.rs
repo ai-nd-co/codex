@@ -2,6 +2,7 @@ use crate::shell_detect::detect_shell_type;
 use crate::shell_snapshot::ShellSnapshot;
 use serde::Deserialize;
 use serde::Serialize;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -162,6 +163,14 @@ fn file_exists(path: &PathBuf) -> Option<PathBuf> {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn is_wsl_bash_path(path: &Path) -> bool {
+    let normalized = path.to_string_lossy().to_lowercase().replace('/', "\\");
+    normalized.ends_with("\\windows\\system32\\bash.exe")
+        || normalized.ends_with("\\windows\\sysnative\\bash.exe")
+        || normalized.ends_with("\\windows\\syswow64\\bash.exe")
+}
+
 fn get_shell_path(
     shell_type: ShellType,
     provided_path: Option<&PathBuf>,
@@ -209,8 +218,44 @@ fn get_zsh_shell(path: Option<&PathBuf>) -> Option<Shell> {
     })
 }
 
+#[cfg(not(target_os = "windows"))]
 const BASH_FALLBACK_PATHS: &[&str] = &["/bin/bash"];
 
+#[cfg(target_os = "windows")]
+fn get_bash_shell(path: Option<&PathBuf>) -> Option<Shell> {
+    fn make_shell(shell_path: PathBuf) -> Shell {
+        Shell {
+            shell_type: ShellType::Bash,
+            shell_path,
+            shell_snapshot: empty_shell_snapshot_receiver(),
+        }
+    }
+
+    if let Some(path) = path.and_then(file_exists) {
+        return Some(make_shell(path));
+    }
+
+    for candidate in [
+        r#"C:\Program Files\Git\bin\bash.exe"#,
+        r#"C:\Program Files\Git\usr\bin\bash.exe"#,
+        r#"C:\Program Files (x86)\Git\bin\bash.exe"#,
+        r#"C:\Program Files (x86)\Git\usr\bin\bash.exe"#,
+    ] {
+        if let Some(path) = file_exists(&PathBuf::from(candidate)) {
+            return Some(make_shell(path));
+        }
+    }
+
+    if let Ok(path) = which::which("bash")
+        && !is_wsl_bash_path(&path)
+    {
+        return Some(make_shell(path));
+    }
+
+    None
+}
+
+#[cfg(not(target_os = "windows"))]
 fn get_bash_shell(path: Option<&PathBuf>) -> Option<Shell> {
     let shell_path = get_shell_path(ShellType::Bash, path, "bash", BASH_FALLBACK_PATHS);
 
@@ -310,12 +355,15 @@ pub fn get_shell(shell_type: ShellType, path: Option<&PathBuf>) -> Option<Shell>
 }
 
 pub fn default_user_shell() -> Shell {
-    default_user_shell_from_path(get_user_shell_path())
+    let shell_path_override = shell_path_override_from_env();
+    default_user_shell_with_override(shell_path_override.as_ref())
 }
 
 fn default_user_shell_from_path(user_shell_path: Option<PathBuf>) -> Shell {
     if cfg!(windows) {
-        get_shell(ShellType::PowerShell, /*path*/ None).unwrap_or(ultimate_fallback_shell())
+        get_shell(ShellType::Bash, /*path*/ None)
+            .or_else(|| get_shell(ShellType::PowerShell, /*path*/ None))
+            .unwrap_or(ultimate_fallback_shell())
     } else {
         let user_default_shell = user_shell_path
             .and_then(|shell| detect_shell_type(&shell))
@@ -335,9 +383,31 @@ fn default_user_shell_from_path(user_shell_path: Option<PathBuf>) -> Shell {
     }
 }
 
+pub fn default_user_shell_with_override(shell_path_override: Option<&PathBuf>) -> Shell {
+    shell_path_override
+        .map(get_shell_by_model_provided_path)
+        .unwrap_or_else(default_user_shell_from_env)
+}
+
+fn default_user_shell_from_env() -> Shell {
+    default_user_shell_from_path(get_user_shell_path())
+}
+
+fn shell_path_override_from_env() -> Option<PathBuf> {
+    std::env::var_os("CODEX_SHELL_PATH")
+        .map(PathBuf::from)
+        .and_then(|path| file_exists(&path))
+        .or_else(|| {
+            std::env::var_os("CODEX_GIT_BASH_PATH")
+                .map(PathBuf::from)
+                .and_then(|path| file_exists(&path))
+        })
+}
+
 #[cfg(test)]
 mod detect_shell_type_tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn test_detect_shell_type() {
@@ -400,6 +470,59 @@ mod detect_shell_type_tests {
             detect_shell_type(&PathBuf::from("cmd.exe")),
             Some(ShellType::Cmd)
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn detects_wsl_bash_paths() {
+        assert!(is_wsl_bash_path(&PathBuf::from(
+            r"C:\Windows\System32\bash.exe"
+        )));
+        assert!(is_wsl_bash_path(&PathBuf::from(
+            r"C:\Windows\Sysnative\bash.exe"
+        )));
+        assert!(!is_wsl_bash_path(&PathBuf::from(
+            r"C:\Program Files\Git\bin\bash.exe"
+        )));
+    }
+
+    #[test]
+    fn honors_shell_override_path_for_bash() {
+        let tmp = tempdir().unwrap();
+        let shell_path = tmp.path().join("bash.exe");
+        std::fs::write(&shell_path, "").unwrap();
+
+        let shell = default_user_shell_with_override(Some(&shell_path));
+
+        assert_eq!(shell.shell_type, ShellType::Bash);
+        assert_eq!(shell.shell_path, shell_path);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn detects_windows_default_shell() {
+        let shell = default_user_shell();
+        let shell_path = shell.shell_path;
+
+        match shell.shell_type {
+            ShellType::Bash => {
+                assert!(
+                    shell_path.ends_with("bash.exe"),
+                    "shell path: {shell_path:?}"
+                );
+                assert!(
+                    !is_wsl_bash_path(&shell_path),
+                    "default bash shell should not be the WSL shim: {shell_path:?}"
+                );
+            }
+            ShellType::PowerShell => {
+                assert!(
+                    shell_path.ends_with("pwsh.exe") || shell_path.ends_with("powershell.exe"),
+                    "shell path: {shell_path:?}"
+                );
+            }
+            other => panic!("unexpected windows default shell: {other:?}"),
+        }
     }
 }
 

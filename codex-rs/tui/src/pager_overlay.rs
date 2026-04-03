@@ -1013,7 +1013,11 @@ mod tests {
             vec![ParsedCommand::Unknown { cmd: "ls".into() }],
             ExecCommandSource::Agent,
             /*interaction_input*/ None,
-            /*animations_enabled*/ true,
+            crate::exec_cell::ExecCellRenderOptions {
+                animations_enabled: true,
+                verbose_tool_calls: false,
+                disable_explored_compaction: false,
+            },
         );
         exec_cell.complete_call(
             "exec-1",
