@@ -9,12 +9,15 @@ import {
   rm,
   stat,
   symlink,
+  writeFile,
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 export const DEFAULT_STALE_RUNTIME_AGE_MS = 24 * 60 * 60 * 1000;
 const RUN_DIR_PREFIX = "run-";
+const HEARTBEAT_FILENAME = ".codex-runtime-heartbeat";
+const HEARTBEAT_INTERVAL_MS = 60 * 1000;
 
 export function determineTargetTriple(platform, arch) {
   switch (platform) {
@@ -99,9 +102,10 @@ export async function pruneStaleRuntimeDirs(tempRoot, options = {}) {
     }
 
     const candidatePath = path.join(tempRoot, entry.name);
-    let candidateStat;
+    const heartbeatPath = path.join(candidatePath, HEARTBEAT_FILENAME);
+    let heartbeatStat;
     try {
-      candidateStat = await statImpl(candidatePath);
+      heartbeatStat = await statImpl(heartbeatPath);
     } catch (error) {
       if (error?.code === "ENOENT") {
         continue;
@@ -109,7 +113,7 @@ export async function pruneStaleRuntimeDirs(tempRoot, options = {}) {
       throw error;
     }
 
-    if (nowMs - candidateStat.mtimeMs < staleAgeMs) {
+    if (nowMs - heartbeatStat.mtimeMs < staleAgeMs) {
       continue;
     }
 
@@ -169,6 +173,7 @@ export async function prepareCodexRuntime(options) {
   const runtimeContainer = await mkdtempImpl(path.join(targetTempRoot, RUN_DIR_PREFIX));
   const runtimeRoot = path.join(runtimeContainer, targetTriple);
   await copyDirectoryRecursive(archRoot, runtimeRoot);
+  const heartbeat = startRuntimeHeartbeat(runtimeContainer);
 
   const runtimePathDir = path.join(runtimeRoot, "path");
   return {
@@ -176,7 +181,10 @@ export async function prepareCodexRuntime(options) {
     runtimeRoot,
     binaryPath: path.join(runtimeRoot, "codex", binaryName),
     additionalPathDirs: existsSync(runtimePathDir) ? [runtimePathDir] : [],
-    cleanup: async () => cleanupRuntimeDir(runtimeContainer, { rmImpl: options.rmImpl }),
+    cleanup: async () => {
+      await heartbeat.stop();
+      await cleanupRuntimeDir(runtimeContainer, { rmImpl: options.rmImpl });
+    },
   };
 }
 
@@ -224,4 +232,35 @@ function isIgnorableCleanupError(error) {
     "ENOTEMPTY",
     "EACCES",
   ].includes(error?.code);
+}
+
+function startRuntimeHeartbeat(runtimeContainer) {
+  const heartbeatPath = path.join(runtimeContainer, HEARTBEAT_FILENAME);
+  let stopped = false;
+
+  const pulse = async () => {
+    try {
+      await writeFile(heartbeatPath, `${Date.now()}\n`);
+    } catch {
+      // Best effort only; a failed heartbeat should not crash the launcher.
+    }
+  };
+
+  void pulse();
+  const timer = setInterval(() => {
+    void pulse();
+  }, HEARTBEAT_INTERVAL_MS);
+  timer.unref?.();
+
+  return {
+    heartbeatPath,
+    async stop() {
+      if (stopped) {
+        return;
+      }
+      stopped = true;
+      clearInterval(timer);
+      await pulse();
+    },
+  };
 }

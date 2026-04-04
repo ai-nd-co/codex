@@ -87,6 +87,9 @@ test("prepareCodexRuntime stages a temp runtime copy on windows", async (t) => {
   assert.ok(
     (await stat(path.join(runtime.runtimeRoot, "codex", "codex-command-runner.exe"))).isFile(),
   );
+  assert.ok(
+    (await stat(path.join(path.dirname(runtime.runtimeRoot), ".codex-runtime-heartbeat"))).isFile(),
+  );
 
   const stagedContainer = path.dirname(runtime.runtimeRoot);
   await runtime.cleanup();
@@ -105,9 +108,11 @@ test("pruneStaleRuntimeDirs removes only stale run directories", async (t) => {
   await mkdir(staleDir, { recursive: true });
   await mkdir(freshDir, { recursive: true });
   await mkdir(unrelatedDir, { recursive: true });
+  await writeFile(path.join(staleDir, ".codex-runtime-heartbeat"), "stale");
+  await writeFile(path.join(freshDir, ".codex-runtime-heartbeat"), "fresh");
 
   const staleDate = new Date(Date.now() - DEFAULT_STALE_RUNTIME_AGE_MS - 60_000);
-  await utimes(staleDir, staleDate, staleDate);
+  await utimes(path.join(staleDir, ".codex-runtime-heartbeat"), staleDate, staleDate);
 
   await pruneStaleRuntimeDirs(tempRoot, { staleAgeMs: DEFAULT_STALE_RUNTIME_AGE_MS });
 
