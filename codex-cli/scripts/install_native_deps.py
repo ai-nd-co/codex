@@ -25,8 +25,8 @@ DEFAULT_GITHUB_REPO = "openai/codex"
 VENDOR_DIR_NAME = "vendor"
 RG_MANIFEST = CODEX_CLI_ROOT / "bin" / "rg"
 BINARY_TARGETS = (
-    "x86_64-unknown-linux-musl",
-    "aarch64-unknown-linux-musl",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
     "x86_64-apple-darwin",
     "aarch64-apple-darwin",
     "x86_64-pc-windows-msvc",
@@ -70,8 +70,8 @@ BINARY_COMPONENTS = {
 }
 
 RG_TARGET_PLATFORM_PAIRS: list[tuple[str, str]] = [
-    ("x86_64-unknown-linux-musl", "linux-x86_64"),
-    ("aarch64-unknown-linux-musl", "linux-aarch64"),
+    ("x86_64-unknown-linux-gnu", "linux-x86_64"),
+    ("aarch64-unknown-linux-gnu", "linux-aarch64"),
     ("x86_64-apple-darwin", "macos-x86_64"),
     ("aarch64-apple-darwin", "macos-aarch64"),
     ("x86_64-pc-windows-msvc", "windows-x86_64"),
