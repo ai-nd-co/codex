@@ -2,67 +2,20 @@
 // Unified entry point for the Codex CLI.
 
 import { spawn } from "node:child_process";
-import { existsSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { determineTargetTriple, prepareCodexRuntime } from "./runtime.js";
 
 // __dirname equivalent in ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const { platform, arch } = process;
-
-let targetTriple = null;
-switch (platform) {
-  case "linux":
-  case "android":
-    switch (arch) {
-      case "x64":
-        targetTriple = "x86_64-unknown-linux-gnu";
-        break;
-      case "arm64":
-        targetTriple = "aarch64-unknown-linux-gnu";
-        break;
-      default:
-        break;
-    }
-    break;
-  case "darwin":
-    switch (arch) {
-      case "x64":
-        targetTriple = "x86_64-apple-darwin";
-        break;
-      case "arm64":
-        targetTriple = "aarch64-apple-darwin";
-        break;
-      default:
-        break;
-    }
-    break;
-  case "win32":
-    switch (arch) {
-      case "x64":
-        targetTriple = "x86_64-pc-windows-msvc";
-        break;
-      case "arm64":
-        targetTriple = "aarch64-pc-windows-msvc";
-        break;
-      default:
-        break;
-    }
-    break;
-  default:
-    break;
-}
+const targetTriple = determineTargetTriple(platform, arch);
 
 if (!targetTriple) {
   throw new Error(`Unsupported platform: ${platform} (${arch})`);
 }
-
-const vendorRoot = path.join(__dirname, "..", "vendor");
-const archRoot = path.join(vendorRoot, targetTriple);
-const codexBinaryName = process.platform === "win32" ? "codex.exe" : "codex";
-const binaryPath = path.join(archRoot, "codex", codexBinaryName);
 
 // Use an asynchronous spawn instead of spawnSync so that Node is able to
 // respond to signals (e.g. Ctrl-C / SIGINT) while the native binary is
@@ -105,12 +58,9 @@ function detectPackageManager() {
   return userAgent ? "npm" : null;
 }
 
-const additionalDirs = [];
-const pathDir = path.join(archRoot, "path");
-if (existsSync(pathDir)) {
-  additionalDirs.push(pathDir);
-}
-const updatedPath = getUpdatedPath(additionalDirs);
+const packageRoot = path.join(__dirname, "..");
+const runtime = await prepareCodexRuntime({ packageRoot, platform, arch });
+const updatedPath = getUpdatedPath(runtime.additionalPathDirs);
 
 const env = { ...process.env, PATH: updatedPath };
 const packageManagerEnvVar =
@@ -119,7 +69,7 @@ const packageManagerEnvVar =
     : "CODEX_MANAGED_BY_NPM";
 env[packageManagerEnvVar] = "1";
 
-const child = spawn(binaryPath, process.argv.slice(2), {
+const child = spawn(runtime.binaryPath, process.argv.slice(2), {
   stdio: "inherit",
   env,
 });
@@ -129,8 +79,15 @@ child.on("error", (err) => {
   // Re-throwing here will terminate the parent with a non-zero exit code
   // while still printing a helpful stack trace.
   // eslint-disable-next-line no-console
-  console.error(err);
-  process.exit(1);
+  void runtime
+    .cleanup()
+    .catch((cleanupErr) => {
+      console.error(cleanupErr);
+    })
+    .finally(() => {
+      console.error(err);
+      process.exit(1);
+    });
 });
 
 // Forward common termination signals to the child so that it shuts down
@@ -166,6 +123,8 @@ const childResult = await new Promise((resolve) => {
     }
   });
 });
+
+await runtime.cleanup();
 
 if (childResult.type === "signal") {
   // Re-emit the same signal so that the parent terminates with the expected
