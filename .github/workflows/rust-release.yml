@@ -297,7 +297,6 @@ jobs:
           path: |
             codex-rs/dist/${{ matrix.target }}/*
 
-
   release:
     needs:
       - build
