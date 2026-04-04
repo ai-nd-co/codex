@@ -428,7 +428,7 @@ jobs:
           scope: "@ai-nd-co"
 
       - name: Show npm version
-        run: npm --version
+        run: npx -y npm@11.6.2 --version
 
       - name: Download npm tarballs from release
         env:
@@ -470,7 +470,7 @@ jobs:
           )
 
           for tarball in "${tarballs[@]}"; do
-            npm publish "${GITHUB_WORKSPACE}/dist/npm/${tarball}" "${tag_args[@]}"
+            npx -y npm@11.6.2 publish "${GITHUB_WORKSPACE}/dist/npm/${tarball}" "${tag_args[@]}"
           done
 
   update-branch:
