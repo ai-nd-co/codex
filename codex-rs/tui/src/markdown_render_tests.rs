@@ -128,6 +128,33 @@ fn pipe_prose_does_not_render_as_table() {
 }
 
 #[test]
+fn unicode_tables_synthesize_separator_with_empty_header_cell() {
+    let prev_tables_enabled = crate::markdown_render::tables_enabled();
+    crate::markdown_render::set_tables_enabled(true);
+
+    let md = "|  | Col |\n| 1 | a |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.clone())
+                .collect::<String>()
+        })
+        .collect();
+
+    assert!(
+        lines.iter().any(|line| line.starts_with('┌'))
+            && lines.iter().any(|line| line.starts_with('└')),
+        "expected box table rendered from markdown; got: {lines:?}"
+    );
+
+    crate::markdown_render::set_tables_enabled(prev_tables_enabled);
+}
+
+#[test]
 fn headings() {
     let md = "# Heading 1\n## Heading 2\n### Heading 3\n#### Heading 4\n##### Heading 5\n###### Heading 6\n";
     let text = render_markdown_text(md);

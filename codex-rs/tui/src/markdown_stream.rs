@@ -141,12 +141,6 @@ fn truncate_incomplete_table_source(source: &str) -> Option<String> {
     if !is_table_block_start(first_tail, next_tail) {
         return None;
     }
-    if table_tail
-        .iter()
-        .any(|line| is_table_separator(strip_table_prefix(line)))
-    {
-        return None;
-    }
 
     let prefix = &lines[..idx];
     if prefix.is_empty() {
@@ -355,33 +349,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn commit_complete_lines_holds_incomplete_table_until_finished() {
+    async fn commit_complete_lines_holds_trailing_table_until_terminated() {
         let prev_tables_enabled = crate::markdown_render::tables_enabled();
         crate::markdown_render::set_tables_enabled(true);
 
         let mut c = super::MarkdownStreamCollector::new(/*width*/ None, &super::test_cwd());
-        c.push_delta("| A | B |\n");
-        assert!(
-            c.commit_complete_lines().is_empty(),
-            "header row alone should not emit a half-rendered table"
-        );
+        c.push_delta("| x | 1 | 2 | 3 | 4 | 5 |\n");
+        assert!(c.commit_complete_lines().is_empty());
+        c.push_delta("| --- | --- | --- | --- | --- | --- |\n");
+        assert!(c.commit_complete_lines().is_empty());
+        c.push_delta("| 1 | 1 | 2 | 3 | 4 | 5 |\n");
+        assert!(c.commit_complete_lines().is_empty());
+        c.push_delta("| 2 | 2 | 4 | 6 | 8 | 10 |\n");
+        assert!(c.commit_complete_lines().is_empty());
+        c.push_delta("| 3 | 3 | 6 | 9 | 12 | 15 |\n");
+        assert!(c.commit_complete_lines().is_empty());
+        c.push_delta("| 4 | 4 | 8 | 12 | 16 | 20 |\n");
+        assert!(c.commit_complete_lines().is_empty());
+        c.push_delta("| 5 | 5 | 10 | 15 | 20 | 25 |\n");
+        assert!(c.commit_complete_lines().is_empty());
 
-        c.push_delta("| --- | --- |\n| 1 | 2 |\n");
+        c.push_delta("\nDone\n");
         let out = c.commit_complete_lines();
-        let lines: Vec<String> = out
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.clone())
-                    .collect::<String>()
-            })
-            .collect();
-        assert!(
-            lines.iter().any(|line| line.starts_with('┌'))
-                && lines.iter().any(|line| line.starts_with('└')),
-            "expected a rendered box table once the separator and row arrive, got: {lines:?}"
+        let rendered = lines_to_plain_strings(&out);
+
+        let mut full_rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
+        crate::markdown::append_markdown(
+            "| x | 1 | 2 | 3 | 4 | 5 |\n| --- | --- | --- | --- | --- | --- |\n| 1 | 1 | 2 | 3 | 4 | 5 |\n| 2 | 2 | 4 | 6 | 8 | 10 |\n| 3 | 3 | 6 | 9 | 12 | 15 |\n| 4 | 4 | 8 | 12 | 16 | 20 |\n| 5 | 5 | 10 | 15 | 20 | 25 |\n\nDone\n",
+            /*width*/ None,
+            Some(super::test_cwd().as_path()),
+            &mut full_rendered,
         );
+        let expected = lines_to_plain_strings(&full_rendered);
+
+        assert_eq!(rendered, expected);
 
         crate::markdown_render::set_tables_enabled(prev_tables_enabled);
     }

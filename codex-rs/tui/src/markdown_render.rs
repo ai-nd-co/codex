@@ -388,10 +388,13 @@ fn build_pipe_table_separator(rows: &[String]) -> Option<String> {
     let header = rows.iter().find(|row| is_pipe_table_line(row))?;
     let trimmed = header.trim();
     let mut parts: Vec<&str> = trimmed.split('|').collect();
-    if trimmed.starts_with('|') && trimmed.ends_with('|') && parts.len() >= 2 {
-        parts = parts[1..parts.len() - 1].to_vec();
+    if trimmed.starts_with('|') && !parts.is_empty() {
+        parts.remove(0);
     }
-    let col_count = parts.iter().filter(|cell| !cell.trim().is_empty()).count();
+    if trimmed.ends_with('|') && !parts.is_empty() {
+        parts.pop();
+    }
+    let col_count = parts.len();
     if col_count == 0 {
         return None;
     }
