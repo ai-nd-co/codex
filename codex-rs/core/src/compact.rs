@@ -8,6 +8,8 @@ use crate::codex::PreviousTurnSettings;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::get_last_assistant_message_from_turn;
+use crate::context_manager::ContextManager;
+use crate::context_manager::is_user_turn_boundary;
 use crate::util::backoff;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::error::CodexErr;
@@ -19,6 +21,7 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
@@ -30,7 +33,9 @@ use tracing::error;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
+pub const SMART_COMPACT_PROMPT: &str = include_str!("../templates/smart_compact/prompt.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
+const SMART_COMPACT_TAIL_TOKEN_BUDGET: usize = 150_000;
 
 /// Controls whether compaction replacement history must include initial context.
 ///
@@ -79,6 +84,26 @@ pub(crate) async fn run_compact_task(
     });
     sess.send_event(&turn_context, start_event).await;
     run_compact_task_inner(
+        sess.clone(),
+        turn_context,
+        input,
+        InitialContextInjection::DoNotInject,
+    )
+    .await
+}
+
+pub(crate) async fn run_smart_compact_task(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    input: Vec<UserInput>,
+) -> CodexResult<()> {
+    let start_event = EventMsg::TurnStarted(TurnStartedEvent {
+        turn_id: turn_context.sub_id.clone(),
+        model_context_window: turn_context.model_context_window(),
+        collaboration_mode_kind: turn_context.collaboration_mode.mode,
+    });
+    sess.send_event(&turn_context, start_event).await;
+    run_smart_compact_task_inner(
         sess.clone(),
         turn_context,
         input,
@@ -210,6 +235,159 @@ async fn run_compact_task_inner(
         .cloned()
         .collect();
     new_history.extend(ghost_snapshots);
+    let reference_context_item = match initial_context_injection {
+        InitialContextInjection::DoNotInject => None,
+        InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
+    };
+    let compacted_item = CompactedItem {
+        message: summary_text.clone(),
+        replacement_history: Some(new_history.clone()),
+    };
+    sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
+        .await;
+    sess.recompute_token_usage(&turn_context).await;
+
+    sess.emit_turn_item_completed(&turn_context, compaction_item)
+        .await;
+    let warning = EventMsg::Warning(WarningEvent {
+        message: "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.".to_string(),
+    });
+    sess.send_event(&turn_context, warning).await;
+    Ok(())
+}
+
+async fn run_smart_compact_task_inner(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    input: Vec<UserInput>,
+    initial_context_injection: InitialContextInjection,
+) -> CodexResult<()> {
+    let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
+    sess.emit_turn_item_started(&turn_context, &compaction_item)
+        .await;
+    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
+
+    let history_snapshot = sess.clone_history().await;
+    let history_items = history_snapshot.raw_items();
+    let ghost_snapshots: Vec<ResponseItem> = history_items
+        .iter()
+        .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
+        .cloned()
+        .collect();
+
+    let conversation_items: Vec<ResponseItem> = history_items
+        .iter()
+        .filter(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }))
+        .cloned()
+        .collect();
+    let (first_half, second_half) = split_items_for_smart_compaction(&conversation_items);
+
+    let prompt_item: ResponseItem = initial_input_for_turn.clone().into();
+    let mut summary_history = ContextManager::new();
+    summary_history.replace(first_half);
+    summary_history.record_items(
+        std::iter::once(&prompt_item),
+        turn_context.truncation_policy,
+    );
+
+    let mut truncated_count = 0usize;
+    let max_retries = turn_context.provider.stream_max_retries();
+    let mut retries = 0;
+    let mut client_session = sess.services.model_client.new_session();
+
+    let rollout_item = RolloutItem::TurnContext(turn_context.to_turn_context_item());
+    sess.persist_rollout_items(&[rollout_item]).await;
+
+    loop {
+        let turn_input = summary_history
+            .clone()
+            .for_prompt(&turn_context.model_info.input_modalities);
+        let turn_input_len = turn_input.len();
+        let prompt = Prompt {
+            input: turn_input,
+            base_instructions: sess.get_base_instructions().await,
+            personality: turn_context.personality,
+            ..Default::default()
+        };
+        let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
+        let attempt_result = drain_to_completed(
+            &sess,
+            turn_context.as_ref(),
+            &mut client_session,
+            turn_metadata_header.as_deref(),
+            &prompt,
+        )
+        .await;
+
+        match attempt_result {
+            Ok(()) => {
+                if truncated_count > 0 {
+                    sess.notify_background_event(
+                        turn_context.as_ref(),
+                        format!(
+                            "Trimmed {truncated_count} older thread item(s) before smart compacting so the prompt fits the model context window."
+                        ),
+                    )
+                    .await;
+                }
+                break;
+            }
+            Err(CodexErr::Interrupted) => {
+                return Err(CodexErr::Interrupted);
+            }
+            Err(e @ CodexErr::ContextWindowExceeded) => {
+                if turn_input_len > 1 {
+                    error!(
+                        "Context window exceeded while smart compacting; removing oldest history item. Error: {e}"
+                    );
+                    summary_history.remove_first_item();
+                    truncated_count += 1;
+                    retries = 0;
+                    continue;
+                }
+                sess.set_total_tokens_full(turn_context.as_ref()).await;
+                let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
+                sess.send_event(&turn_context, event).await;
+                return Err(e);
+            }
+            Err(e) => {
+                if retries < max_retries {
+                    retries += 1;
+                    let delay = backoff(retries);
+                    sess.notify_stream_error(
+                        turn_context.as_ref(),
+                        format!("Reconnecting... {retries}/{max_retries}"),
+                        e,
+                    )
+                    .await;
+                    tokio::time::sleep(delay).await;
+                    continue;
+                } else {
+                    let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
+                    sess.send_event(&turn_context, event).await;
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    let history_snapshot = sess.clone_history().await;
+    let history_items = history_snapshot.raw_items();
+    let summary_suffix = get_last_assistant_message_from_turn(history_items).unwrap_or_default();
+    let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
+
+    let initial_context = if matches!(
+        initial_context_injection,
+        InitialContextInjection::BeforeLastUserMessage
+    ) {
+        sess.build_initial_context(turn_context.as_ref()).await
+    } else {
+        Vec::new()
+    };
+    let mut new_history =
+        build_smart_compacted_history(initial_context, &summary_text, &second_half);
+    new_history.extend(ghost_snapshots);
+
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
@@ -387,6 +565,83 @@ fn build_compacted_history_with_limit(
     });
 
     history
+}
+
+fn build_smart_compacted_history(
+    mut history: Vec<ResponseItem>,
+    summary_text: &str,
+    tail_items: &[ResponseItem],
+) -> Vec<ResponseItem> {
+    let summary_text = if summary_text.is_empty() {
+        "(no summary available)".to_string()
+    } else {
+        summary_text.to_string()
+    };
+
+    history.push(ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText { text: summary_text }],
+        end_turn: None,
+        phase: None,
+    });
+
+    history.extend(tail_items.iter().cloned());
+
+    history
+}
+
+fn split_items_for_smart_compaction(
+    items: &[ResponseItem],
+) -> (Vec<ResponseItem>, Vec<ResponseItem>) {
+    if items.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+
+    let turn_starts: Vec<usize> = items
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, item)| is_user_turn_boundary(item).then_some(idx))
+        .collect();
+    if turn_starts.is_empty() {
+        return (Vec::new(), items.to_vec());
+    }
+
+    let total_tokens: usize = items.iter().map(estimate_item_tokens).sum();
+    if total_tokens == 0 {
+        return (Vec::new(), items.to_vec());
+    }
+    if total_tokens <= SMART_COMPACT_TAIL_TOKEN_BUDGET {
+        return (Vec::new(), items.to_vec());
+    }
+
+    let mut preserved_tokens = 0usize;
+    let mut cut_index = turn_starts[0];
+
+    for (turn_idx, start_idx) in turn_starts.iter().enumerate().rev() {
+        let end_idx = turn_starts
+            .get(turn_idx + 1)
+            .copied()
+            .unwrap_or(items.len());
+        preserved_tokens = preserved_tokens.saturating_add(
+            items[*start_idx..end_idx]
+                .iter()
+                .map(estimate_item_tokens)
+                .sum(),
+        );
+        cut_index = *start_idx;
+        if preserved_tokens >= SMART_COMPACT_TAIL_TOKEN_BUDGET {
+            break;
+        }
+    }
+
+    let (first, second) = items.split_at(cut_index);
+    (first.to_vec(), second.to_vec())
+}
+
+fn estimate_item_tokens(item: &ResponseItem) -> usize {
+    let serialized = serde_json::to_string(item).unwrap_or_default();
+    approx_token_count(&serialized)
 }
 
 async fn drain_to_completed(

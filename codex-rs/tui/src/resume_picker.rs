@@ -600,7 +600,7 @@ impl PickerState {
             show_all,
             filter_cwd,
             action,
-            sort_key: ThreadSortKey::UpdatedAt,
+            sort_key: ThreadSortKey::CreatedAt,
             thread_name_cache: HashMap::new(),
             inline_error: None,
         }
@@ -2513,7 +2513,7 @@ mod tests {
         {
             let guard = recorded_requests.lock().unwrap();
             assert_eq!(guard.len(), 1);
-            assert_eq!(guard[0].sort_key, ThreadSortKey::UpdatedAt);
+            assert_eq!(guard[0].sort_key, ThreadSortKey::CreatedAt);
         }
 
         state
@@ -2523,7 +2523,7 @@ mod tests {
 
         let guard = recorded_requests.lock().unwrap();
         assert_eq!(guard.len(), 2);
-        assert_eq!(guard[1].sort_key, ThreadSortKey::CreatedAt);
+        assert_eq!(guard[1].sort_key, ThreadSortKey::UpdatedAt);
     }
 
     #[tokio::test]

@@ -10,7 +10,11 @@ use crate::render::line_utils::line_to_static;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
 use codex_utils_string::normalize_markdown_hash_location_suffix;
+use comfy_table::CellAlignment;
+use comfy_table::ContentArrangement;
+use comfy_table::Table;
 use dirs::home_dir;
+use pulldown_cmark::Alignment as CmarkAlignment;
 use pulldown_cmark::CodeBlockKind;
 use pulldown_cmark::CowStr;
 use pulldown_cmark::Event;
@@ -24,9 +28,13 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
 use regex_lite::Regex;
+use std::borrow::Cow;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::LazyLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use unicode_width::UnicodeWidthStr;
 use url::Url;
 
 struct MarkdownStyles {
@@ -69,6 +77,20 @@ impl Default for MarkdownStyles {
     }
 }
 
+static TABLES_ENABLED: AtomicBool = AtomicBool::new(true);
+const UTF8_TABLE_PRESET: &str = "││──├─┼┤│─┼├┤┬┴┌┐└┘";
+const TABLE_MAX_WIDTH_FALLBACK: usize = 160;
+const TABLE_MIN_WIDTH: usize = 10;
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn set_tables_enabled(enabled: bool) {
+    TABLES_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+pub(crate) fn tables_enabled() -> bool {
+    TABLES_ENABLED.load(Ordering::Relaxed)
+}
+
 #[derive(Clone, Debug)]
 struct IndentContext {
     prefix: Vec<Span<'static>>,
@@ -82,6 +104,74 @@ impl IndentContext {
             prefix,
             marker,
             is_list,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct TableState {
+    alignments: Vec<CmarkAlignment>,
+    rows: Vec<Vec<String>>,
+    current_row: Vec<String>,
+    current_cell: String,
+    header_rows: usize,
+    in_head: bool,
+    row_open: bool,
+}
+
+impl TableState {
+    fn new(alignments: Vec<CmarkAlignment>) -> Self {
+        Self {
+            alignments,
+            rows: Vec::new(),
+            current_row: Vec::new(),
+            current_cell: String::new(),
+            header_rows: 0,
+            in_head: false,
+            row_open: false,
+        }
+    }
+
+    fn start_row(&mut self) {
+        self.current_row = Vec::new();
+        self.current_cell.clear();
+        self.row_open = true;
+    }
+
+    fn end_row(&mut self) {
+        if !self.current_cell.is_empty() {
+            self.current_row.push(self.current_cell.trim().to_string());
+            self.current_cell.clear();
+        }
+        if !self.current_row.is_empty() {
+            self.rows.push(std::mem::take(&mut self.current_row));
+            if self.in_head {
+                self.header_rows = self.header_rows.saturating_add(1);
+            }
+        }
+        self.row_open = false;
+    }
+
+    fn start_cell(&mut self) {
+        self.current_cell.clear();
+    }
+
+    fn end_cell(&mut self) {
+        self.current_row.push(self.current_cell.trim().to_string());
+        self.current_cell.clear();
+    }
+
+    fn push_text(&mut self, text: &str) {
+        if !self.current_cell.is_empty() {
+            self.current_cell.push_str(text);
+        } else {
+            self.current_cell = text.to_string();
+        }
+    }
+
+    fn push_space(&mut self) {
+        if !self.current_cell.ends_with(' ') {
+            self.current_cell.push(' ');
         }
     }
 }
@@ -108,10 +198,208 @@ pub(crate) fn render_markdown_text_with_width_and_cwd(
 ) -> Text<'static> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
-    let parser = Parser::new_ext(input, options);
+    let tables_on = tables_enabled();
+    if tables_on {
+        options.insert(Options::ENABLE_TABLES);
+    }
+    let normalized = if tables_on {
+        Cow::Owned(normalize_table_blocks(input))
+    } else {
+        Cow::Borrowed(input)
+    };
+    let parser = Parser::new_ext(normalized.as_ref(), options);
     let mut w = Writer::new(parser, width, cwd);
     w.run();
     w.text
+}
+
+fn normalize_table_blocks(input: &str) -> String {
+    let ends_with_newline = input.ends_with('\n');
+    let lines: Vec<&str> = input.split('\n').collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut idx = 0usize;
+
+    while idx < lines.len() {
+        let line = lines[idx];
+        if is_box_table_line(line) {
+            idx += 1;
+            continue;
+        }
+
+        let Some((strip_len, content)) = split_table_prefix(line) else {
+            out.push(line.to_string());
+            idx += 1;
+            continue;
+        };
+
+        let next_content = lines
+            .get(idx + 1)
+            .map(|next| strip_prefix(next, strip_len))
+            .unwrap_or_default();
+        if !is_pipe_table_block_start(content, next_content.as_str()) {
+            out.push(line.to_string());
+            idx += 1;
+            continue;
+        }
+
+        let mut rows: Vec<String> = Vec::new();
+        rows.push(strip_prefix(line, strip_len));
+        idx += 1;
+
+        while idx < lines.len() {
+            let line = lines[idx];
+            if line.trim().is_empty() {
+                idx += 1;
+                break;
+            }
+            if is_box_table_line(line) {
+                idx += 1;
+                continue;
+            }
+            let stripped = strip_prefix(line, strip_len);
+            if is_pipe_table_row_candidate(&stripped) || is_pipe_table_separator(&stripped) {
+                rows.push(stripped);
+                idx += 1;
+                continue;
+            }
+            break;
+        }
+
+        if !rows.iter().any(|row| is_pipe_table_separator(row))
+            && let Some(separator) = build_pipe_table_separator(&rows)
+        {
+            rows.insert(1, separator);
+        }
+
+        out.extend(rows);
+        out.push(String::new());
+    }
+
+    let mut normalized = out.join("\n");
+    if ends_with_newline {
+        normalized.push('\n');
+    }
+    normalized
+}
+
+fn split_table_prefix(line: &str) -> Option<(usize, &str)> {
+    if line.is_empty() {
+        return None;
+    }
+    let bytes = line.as_bytes();
+    let len = bytes.len();
+    let mut idx = 0usize;
+    while idx < len && matches!(bytes[idx], b' ' | b'\t') {
+        idx += 1;
+    }
+    while idx < len && bytes[idx] == b'>' {
+        idx += 1;
+        if idx < len && bytes[idx] == b' ' {
+            idx += 1;
+        }
+        while idx < len && matches!(bytes[idx], b' ' | b'\t') {
+            idx += 1;
+        }
+    }
+    let marker_start = idx;
+    if idx < len {
+        let rest = &line[idx..];
+        if rest.starts_with('\u{2022}') {
+            idx += '\u{2022}'.len_utf8();
+        } else {
+            match bytes[idx] {
+                b'-' | b'+' | b'*' => idx += 1,
+                _ if bytes[idx].is_ascii_digit() => {
+                    while idx < len && bytes[idx].is_ascii_digit() {
+                        idx += 1;
+                    }
+                    if idx < len && matches!(bytes[idx], b'.' | b')') {
+                        idx += 1;
+                    } else {
+                        idx = marker_start;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if idx != marker_start {
+        if idx < len && bytes[idx] == b' ' {
+            idx += 1;
+        }
+        while idx < len && matches!(bytes[idx], b' ' | b'\t') {
+            idx += 1;
+        }
+    }
+
+    Some((idx, &line[idx..]))
+}
+
+fn strip_prefix(line: &str, strip_len: usize) -> String {
+    if line.len() <= strip_len {
+        String::new()
+    } else {
+        line[strip_len..].to_string()
+    }
+}
+
+fn is_pipe_table_line(line: &str) -> bool {
+    is_pipe_table_row_candidate(line)
+}
+
+fn is_pipe_table_row_candidate(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.contains('|') && !trimmed.is_empty() && !is_pipe_table_separator(trimmed)
+}
+
+fn is_pipe_table_block_start(line: &str, next_line: &str) -> bool {
+    let trimmed = line.trim();
+    if !is_pipe_table_row_candidate(trimmed) {
+        return false;
+    }
+
+    trimmed.starts_with('|')
+        || trimmed.ends_with('|')
+        || pipe_count(trimmed) >= 2
+        || is_pipe_table_separator(next_line.trim())
+}
+
+fn pipe_count(line: &str) -> usize {
+    line.chars().filter(|ch| *ch == '|').count()
+}
+
+fn is_pipe_table_separator(line: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || !trimmed.contains('|') {
+        return false;
+    }
+    let mut has_dash = false;
+    for ch in trimmed.chars() {
+        match ch {
+            '-' => has_dash = true,
+            '|' | ':' | ' ' | '\t' => {}
+            _ => return false,
+        }
+    }
+    has_dash
+}
+
+fn build_pipe_table_separator(rows: &[String]) -> Option<String> {
+    let header = rows.iter().find(|row| is_pipe_table_line(row))?;
+    let trimmed = header.trim();
+    let mut parts: Vec<&str> = trimmed.split('|').collect();
+    if trimmed.starts_with('|') && trimmed.ends_with('|') && parts.len() >= 2 {
+        parts = parts[1..parts.len() - 1].to_vec();
+    }
+    let col_count = parts.iter().filter(|cell| !cell.trim().is_empty()).count();
+    if col_count == 0 {
+        return None;
+    }
+    let mut separator = String::from("|");
+    for _ in 0..col_count {
+        separator.push_str(" --- |");
+    }
+    Some(separator)
 }
 
 #[derive(Clone, Debug)]
@@ -165,6 +453,7 @@ where
     cwd: Option<PathBuf>,
     line_ends_with_local_link_target: bool,
     pending_local_link_soft_break: bool,
+    table_state: Option<TableState>,
     current_line_content: Option<Line<'static>>,
     current_initial_indent: Vec<Span<'static>>,
     current_subsequent_indent: Vec<Span<'static>>,
@@ -195,6 +484,7 @@ where
             cwd: cwd.map(Path::to_path_buf),
             line_ends_with_local_link_target: false,
             pending_local_link_soft_break: false,
+            table_state: None,
             current_line_content: None,
             current_initial_indent: Vec::new(),
             current_subsequent_indent: Vec::new(),
@@ -211,6 +501,9 @@ where
     }
 
     fn handle_event(&mut self, event: Event<'a>) {
+        if self.table_state.is_some() && self.handle_table_event(&event) {
+            return;
+        }
         self.prepare_for_event(&event);
         match event {
             Event::Start(tag) => self.start_tag(tag),
@@ -273,9 +566,9 @@ where
             Tag::Strong => self.push_inline_style(self.styles.strong),
             Tag::Strikethrough => self.push_inline_style(self.styles.strikethrough),
             Tag::Link { dest_url, .. } => self.push_link(dest_url.to_string()),
+            Tag::Table(alignments) => self.start_table(alignments),
             Tag::HtmlBlock
             | Tag::FootnoteDefinition(_)
-            | Tag::Table(_)
             | Tag::TableHead
             | Tag::TableRow
             | Tag::TableCell
@@ -297,15 +590,133 @@ where
             }
             TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => self.pop_inline_style(),
             TagEnd::Link => self.pop_link(),
+            TagEnd::Table => self.finish_table(),
             TagEnd::HtmlBlock
             | TagEnd::FootnoteDefinition
-            | TagEnd::Table
             | TagEnd::TableHead
             | TagEnd::TableRow
             | TagEnd::TableCell
             | TagEnd::Image
             | TagEnd::MetadataBlock(_) => {}
         }
+    }
+
+    fn start_table(&mut self, alignments: Vec<CmarkAlignment>) {
+        if self.needs_newline {
+            self.push_blank_line();
+        }
+        self.flush_current_line();
+        self.in_paragraph = false;
+        self.table_state = Some(TableState::new(alignments));
+        self.needs_newline = false;
+    }
+
+    fn handle_table_event(&mut self, event: &Event<'a>) -> bool {
+        let Some(table) = self.table_state.as_mut() else {
+            return false;
+        };
+        match event {
+            Event::Start(Tag::TableHead) => {
+                table.in_head = true;
+            }
+            Event::End(TagEnd::TableHead) => {
+                if table.row_open {
+                    table.end_row();
+                }
+                table.in_head = false;
+            }
+            Event::Start(Tag::TableRow) => table.start_row(),
+            Event::End(TagEnd::TableRow) => table.end_row(),
+            Event::Start(Tag::TableCell) => {
+                if !table.row_open {
+                    table.start_row();
+                }
+                table.start_cell();
+            }
+            Event::End(TagEnd::TableCell) => table.end_cell(),
+            Event::End(TagEnd::Table) => {
+                if table.row_open {
+                    table.end_row();
+                }
+                self.finish_table();
+            }
+            Event::Text(text) => table.push_text(text.as_ref()),
+            Event::Code(code) => table.push_text(code.as_ref()),
+            Event::SoftBreak | Event::HardBreak => table.push_space(),
+            _ => {}
+        }
+        true
+    }
+
+    fn finish_table(&mut self) {
+        let Some(table) = self.table_state.take() else {
+            return;
+        };
+        self.render_table(table);
+        self.needs_newline = true;
+    }
+
+    fn render_table(&mut self, table: TableState) {
+        if table.rows.is_empty() {
+            return;
+        }
+
+        let mut column_count = table.alignments.len();
+        for row in &table.rows {
+            column_count = column_count.max(row.len());
+        }
+        if column_count == 0 {
+            return;
+        }
+
+        let mut rows = table.rows;
+        for row in &mut rows {
+            if row.len() < column_count {
+                row.resize_with(column_count, String::new);
+            }
+        }
+
+        let header = if table.header_rows > 0 && !rows.is_empty() {
+            Some(rows.remove(0))
+        } else {
+            None
+        };
+
+        let mut table_output = Table::new();
+        table_output.load_preset(UTF8_TABLE_PRESET);
+        table_output.set_content_arrangement(ContentArrangement::Dynamic);
+
+        let max_width = self.wrap_width.unwrap_or(TABLE_MAX_WIDTH_FALLBACK);
+        let prefix_width: usize = self
+            .prefix_spans(self.pending_marker_line)
+            .iter()
+            .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+            .sum();
+        let available_width = max_width.saturating_sub(prefix_width).max(TABLE_MIN_WIDTH);
+        table_output.set_width(available_width.min(u16::MAX as usize) as u16);
+
+        if let Some(header) = header {
+            table_output.set_header(header);
+        }
+        for row in rows {
+            table_output.add_row(row);
+        }
+
+        for (idx, alignment) in table.alignments.iter().enumerate() {
+            if let Some(column) = table_output.column_mut(idx) {
+                let cell_alignment = match alignment {
+                    CmarkAlignment::Right => CellAlignment::Right,
+                    CmarkAlignment::Center => CellAlignment::Center,
+                    CmarkAlignment::None | CmarkAlignment::Left => CellAlignment::Left,
+                };
+                column.set_cell_alignment(cell_alignment);
+            }
+        }
+
+        for line in table_output.to_string().lines() {
+            self.push_line(Line::from(line.to_string()));
+        }
+        self.flush_current_line();
     }
 
     fn start_paragraph(&mut self) {
@@ -724,6 +1135,11 @@ where
 
         prefix
     }
+}
+
+fn is_box_table_line(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    matches!(trimmed.chars().next(), Some('┌' | '├' | '└' | '│'))
 }
 
 fn is_local_path_like_link(dest_url: &str) -> bool {

@@ -7,6 +7,7 @@ use arc_swap::ArcSwap;
 
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
+use codex_config::types::ApprovalsToml;
 use codex_execpolicy::AmendError;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Error as ExecPolicyRuleError;
@@ -36,6 +37,8 @@ use crate::tools::sandboxing::ExecApprovalRequirement;
 use codex_shell_command::bash::parse_shell_lc_plain_commands;
 use codex_shell_command::bash::parse_shell_lc_single_command_prefix;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use regex_lite::Regex;
+use serde::Deserialize;
 use shlex::try_join as shlex_try_join;
 
 const PROMPT_CONFLICT_REASON: &str =
@@ -191,6 +194,7 @@ pub enum ExecPolicyUpdateError {
 pub(crate) struct ExecPolicyManager {
     policy: ArcSwap<Policy>,
     update_lock: tokio::sync::Mutex<()>,
+    always_prompt_regexes: Arc<Vec<Regex>>,
 }
 
 pub(crate) struct ExecApprovalRequest<'a> {
@@ -204,9 +208,17 @@ pub(crate) struct ExecApprovalRequest<'a> {
 
 impl ExecPolicyManager {
     pub(crate) fn new(policy: Arc<Policy>) -> Self {
+        Self::new_with_always_prompt_regexes(policy, Arc::new(Vec::new()))
+    }
+
+    pub(crate) fn new_with_always_prompt_regexes(
+        policy: Arc<Policy>,
+        always_prompt_regexes: Arc<Vec<Regex>>,
+    ) -> Self {
         Self {
             policy: ArcSwap::from(policy),
             update_lock: tokio::sync::Mutex::new(()),
+            always_prompt_regexes,
         }
     }
 
@@ -216,7 +228,10 @@ impl ExecPolicyManager {
         if let Some(err) = warning.as_ref() {
             tracing::warn!("failed to parse rules: {err}");
         }
-        Ok(Self::new(Arc::new(policy)))
+        Ok(Self::new_with_always_prompt_regexes(
+            Arc::new(policy),
+            load_always_prompt_regexes(config_stack),
+        ))
     }
 
     pub(crate) fn current(&self) -> Arc<Policy> {
@@ -235,6 +250,22 @@ impl ExecPolicyManager {
             sandbox_permissions,
             prefix_rule,
         } = req;
+        if !self.always_prompt_regexes.is_empty() {
+            let rendered = shlex_try_join(command.iter().map(String::as_str))
+                .unwrap_or_else(|_| command.join(" "));
+            if self
+                .always_prompt_regexes
+                .iter()
+                .any(|regex| regex.is_match(&rendered))
+            {
+                return ExecApprovalRequirement::NeedsApproval {
+                    reason: Some(format!(
+                        "`{rendered}` requires approval (matched approvals.always_prompt_regex)"
+                    )),
+                    proposed_execpolicy_amendment: None,
+                };
+            }
+        }
         let exec_policy = self.current();
         let (commands, used_complex_parsing) = commands_for_exec_policy(command);
         // Keep heredoc prefix parsing for rule evaluation so existing
@@ -394,6 +425,44 @@ impl Default for ExecPolicyManager {
     fn default() -> Self {
         Self::new(Arc::new(Policy::empty()))
     }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ExecPolicyConfigToml {
+    #[serde(default)]
+    approvals: Option<ApprovalsToml>,
+}
+
+fn load_always_prompt_regexes(config_stack: &ConfigLayerStack) -> Arc<Vec<Regex>> {
+    let patterns = config_stack
+        .effective_config()
+        .try_into::<ExecPolicyConfigToml>()
+        .ok()
+        .and_then(|config| {
+            config
+                .approvals
+                .and_then(|approvals| approvals.always_prompt_regex)
+        })
+        .unwrap_or_default();
+    compile_always_prompt_regexes(&patterns)
+}
+
+fn compile_always_prompt_regexes(patterns: &[String]) -> Arc<Vec<Regex>> {
+    let compiled = patterns
+        .iter()
+        .filter_map(|pattern| match Regex::new(pattern) {
+            Ok(regex) => Some(regex),
+            Err(err) => {
+                tracing::warn!(
+                    pattern,
+                    %err,
+                    "invalid approvals.always_prompt_regex pattern; ignoring"
+                );
+                None
+            }
+        })
+        .collect();
+    Arc::new(compiled)
 }
 
 pub async fn check_execpolicy_for_warnings(

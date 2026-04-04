@@ -219,6 +219,7 @@ impl SteerInputError {
                 let turn_kind_label = match turn_kind {
                     NonSteerableTurnKind::Review => "review",
                     NonSteerableTurnKind::Compact => "compact",
+                    NonSteerableTurnKind::SmartCompact => "smart compact",
                 };
                 ErrorEvent {
                     message: format!("cannot steer a {turn_kind_label} turn"),
@@ -573,11 +574,11 @@ impl Codex {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
-        let base_instructions = config
-            .base_instructions
-            .clone()
-            .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
+        let base_instructions = resolve_session_base_instructions(
+            &config,
+            conversation_history.get_base_instructions().map(|s| s.text),
+            &model_info,
+        );
 
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db
         // first, then fall back to rollout-file tools.
@@ -1015,6 +1016,10 @@ impl TurnContext {
             .unwrap_or(compact::SUMMARIZATION_PROMPT)
     }
 
+    pub(crate) fn smart_compact_prompt(&self) -> &str {
+        compact::SMART_COMPACT_PROMPT
+    }
+
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
@@ -1068,6 +1073,22 @@ fn local_time_context() -> (String, String) {
             "Etc/UTC".to_string(),
         ),
     }
+}
+
+fn resolve_session_base_instructions(
+    config: &Config,
+    conversation_base_instructions: Option<String>,
+    model_info: &ModelInfo,
+) -> String {
+    if config.features.enabled(Feature::DisableSystemPrompt) {
+        return String::new();
+    }
+
+    config
+        .base_instructions
+        .clone()
+        .or(conversation_base_instructions)
+        .unwrap_or_else(|| model_info.get_model_instructions(config.personality))
 }
 
 #[derive(Clone)]
@@ -4023,6 +4044,11 @@ impl Session {
                     turn_kind: NonSteerableTurnKind::Compact,
                 });
             }
+            Some(crate::state::TaskKind::SmartCompact) => {
+                return Err(SteerInputError::ActiveTurnNotSteerable {
+                    turn_kind: NonSteerableTurnKind::SmartCompact,
+                });
+            }
             None => return Err(SteerInputError::NoActiveTurn(input)),
         }
 
@@ -4573,6 +4599,10 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::compact(&sess, sub.id.clone()).await;
                     false
                 }
+                Op::SmartCompact => {
+                    handlers::smart_compact(&sess, sub.id.clone()).await;
+                    false
+                }
                 Op::DropMemories => {
                     handlers::drop_memories(&sess, &config, sub.id.clone()).await;
                     false
@@ -4587,6 +4617,10 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 }
                 Op::SetThreadName { name } => {
                     handlers::set_thread_name(&sess, sub.id.clone(), name).await;
+                    false
+                }
+                Op::GenerateThreadName => {
+                    handlers::generate_thread_name(&sess, sub.id.clone()).await;
                     false
                 }
                 Op::RunUserShellCommand { command } => {
@@ -4680,6 +4714,7 @@ mod handlers {
     use crate::rollout::RolloutRecorder;
     use crate::rollout::session_index;
     use crate::tasks::CompactTask;
+    use crate::tasks::SmartCompactTask;
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandMode;
     use crate::tasks::UserShellCommandTask;
@@ -5179,6 +5214,20 @@ mod handlers {
         .await;
     }
 
+    pub async fn smart_compact(sess: &Arc<Session>, sub_id: String) {
+        let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+
+        sess.spawn_task(
+            Arc::clone(&turn_context),
+            vec![UserInput::Text {
+                text: turn_context.smart_compact_prompt().to_string(),
+                text_elements: Vec::new(),
+            }],
+            SmartCompactTask,
+        )
+        .await;
+    }
+
     pub async fn drop_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
         let mut errors = Vec::new();
 
@@ -5407,6 +5456,57 @@ mod handlers {
             }),
         })
         .await;
+    }
+
+    pub async fn generate_thread_name(sess: &Arc<Session>, sub_id: String) {
+        let persistence_enabled = {
+            let rollout = sess.services.rollout.lock().await;
+            rollout.is_some()
+        };
+        if !persistence_enabled {
+            let event = Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "Session persistence is disabled; cannot auto-rename thread."
+                        .to_string(),
+                    codex_error_info: Some(CodexErrorInfo::Other),
+                }),
+            };
+            sess.send_event_raw(event).await;
+            return;
+        }
+
+        let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
+        let sess = Arc::clone(sess);
+        tokio::spawn(async move {
+            match crate::auto_rename::generate_name(&sess, &turn_context).await {
+                Ok(name) => {
+                    if let Some(name) = crate::util::normalize_thread_name(&name) {
+                        set_thread_name(&sess, sub_id, name).await;
+                    } else {
+                        sess.send_event_raw(Event {
+                            id: sub_id,
+                            msg: EventMsg::Error(ErrorEvent {
+                                message: "LLM returned an empty name.".to_string(),
+                                codex_error_info: Some(CodexErrorInfo::Other),
+                            }),
+                        })
+                        .await;
+                    }
+                }
+                Err(error) => {
+                    warn!("auto-rename failed: {error}");
+                    sess.send_event_raw(Event {
+                        id: sub_id,
+                        msg: EventMsg::Error(ErrorEvent {
+                            message: format!("Failed to generate thread name: {error}"),
+                            codex_error_info: Some(CodexErrorInfo::Other),
+                        }),
+                    })
+                    .await;
+                }
+            }
+        });
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
@@ -6280,6 +6380,10 @@ async fn run_auto_compact(
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
+    if turn_context.features.enabled(Feature::DisableCompaction) {
+        return Ok(());
+    }
+
     if should_use_remote_compact_task(&turn_context.provider) {
         run_inline_remote_auto_compact_task(
             Arc::clone(sess),

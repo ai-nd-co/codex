@@ -1651,6 +1651,35 @@ async fn dangerous_command_forbidden_in_external_sandbox_when_policy_matches() {
     .await;
 }
 
+#[tokio::test]
+async fn always_prompt_regex_overrides_allow_policy() {
+    let command = vec_str(&["git", "push", "origin", "main"]);
+    let requirement = ExecPolicyManager::new_with_always_prompt_regexes(
+        Arc::new(Policy::empty()),
+        compile_always_prompt_regexes(&["^git push".to_string()]),
+    )
+    .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+        command: &command,
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        file_system_sandbox_policy: &unrestricted_file_system_sandbox_policy(),
+        sandbox_permissions: SandboxPermissions::UseDefault,
+        prefix_rule: None,
+    })
+    .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: Some(
+                "`git push origin main` requires approval (matched approvals.always_prompt_regex)"
+                    .to_string()
+            ),
+            proposed_execpolicy_amendment: None,
+        }
+    );
+}
+
 struct ExecApprovalRequirementScenario {
     /// Source for the Starlark `.rules` file.
     policy_src: Option<String>,

@@ -875,6 +875,62 @@ async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
 }
 
 #[tokio::test]
+async fn project_layers_include_dot_claude_config() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(nested.join(".claude")).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    tokio::fs::write(
+        nested.join(".claude").join(CONFIG_TOML_FILE),
+        "foo = \"claude\"\n",
+    )
+    .await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(
+        &codex_home,
+        &project_root,
+        TrustLevel::Trusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+    let layers = load_config_layers_state(
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+
+    let project_layers: Vec<_> = layers
+        .layers_high_to_low()
+        .into_iter()
+        .filter_map(|layer| match &layer.name {
+            super::ConfigLayerSource::Project { dot_codex_folder } => Some(dot_codex_folder),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(project_layers.len(), 1);
+    assert_eq!(
+        project_layers[0].as_path(),
+        nested.join(".claude").as_path()
+    );
+
+    let effective_config = layers.effective_config();
+    let foo = effective_config
+        .get("foo")
+        .and_then(TomlValue::as_str)
+        .expect("foo entry");
+    assert_eq!(foo, "claude");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn project_paths_resolve_relative_to_dot_codex_and_override_in_order() -> std::io::Result<()>
 {
     let tmp = tempdir()?;

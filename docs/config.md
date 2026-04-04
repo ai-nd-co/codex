@@ -22,6 +22,72 @@ Codex stores per-tool approval overrides for custom MCP servers under
 approval_mode = "approve"
 ```
 
+## Forced command approvals
+
+Use `[approvals].always_prompt_regex` to force an approval prompt for matching
+shell commands even when the current approval mode would otherwise allow them:
+
+```toml
+[approvals]
+always_prompt_regex = ["^git push", "rm -rf"]
+```
+
+## Default mode `request_user_input`
+
+To allow `request_user_input` in Default collaboration mode, enable:
+
+```toml
+[features]
+default_mode_request_user_input = true
+```
+
+## Disable system prompt
+
+To send empty base instructions to the model, enable:
+
+```toml
+[features]
+disable_system_prompt = true
+```
+
+## Smart compact
+
+Use `/smart-compact` to preserve the newest ~150,000 tokens of the conversation
+and compact everything older into a single summary message.
+
+The legacy `smart_compact` feature key is retained only for backward
+compatibility; `/compact` and automatic compaction remain on the standard
+compaction path.
+
+## Disable auto-compaction
+
+To skip automatic compaction while keeping manual `/compact` and
+`/smart-compact` available, enable:
+
+```toml
+[features]
+disable_compaction = true
+```
+
+## Verbose tool calls
+
+To show output for read/search/list tool calls in the transcript, enable:
+
+```toml
+[features]
+verbose_tool_calls = true
+```
+
+## Disable explored compaction
+
+To show individual explored/read/search/list entries instead of collapsing
+them into grouped transcript cells, enable:
+
+```toml
+[features]
+disable_explored_compaction = true
+```
+
 ## Apps (Connectors)
 
 Use `$` in the composer to insert a ChatGPT connector; the popover lists accessible

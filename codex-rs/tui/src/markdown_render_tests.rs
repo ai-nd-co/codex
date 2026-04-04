@@ -45,6 +45,89 @@ fn paragraph_multiple() {
 }
 
 #[test]
+fn unicode_tables_render_box_drawing() {
+    let prev_tables_enabled = crate::markdown_render::tables_enabled();
+    crate::markdown_render::set_tables_enabled(true);
+
+    let md = "| A | B |\n| --- | --- |\n| 1 | 2 |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.clone())
+                .collect::<String>()
+        })
+        .collect();
+
+    assert_eq!(
+        lines,
+        vec![
+            "┌───┬───┐".to_string(),
+            "│ A │ B │".to_string(),
+            "├───┼───┤".to_string(),
+            "│ 1 │ 2 │".to_string(),
+            "└───┴───┘".to_string(),
+        ]
+    );
+
+    crate::markdown_render::set_tables_enabled(prev_tables_enabled);
+}
+
+#[test]
+fn unicode_tables_respect_render_width_cap() {
+    let prev_tables_enabled = crate::markdown_render::tables_enabled();
+    crate::markdown_render::set_tables_enabled(true);
+
+    let md = "| Col1 | Col2 |\n| --- | --- |\n| This is a very long cell | Another very long cell |\n";
+    let text = crate::markdown_render::render_markdown_text_with_width(md, Some(24));
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.clone())
+                .collect::<String>()
+        })
+        .collect();
+
+    for line in &lines {
+        let width = unicode_width::UnicodeWidthStr::width(line.as_str());
+        assert!(
+            width <= 24,
+            "expected table line width <= 24, got {width}: {line:?}"
+        );
+    }
+
+    crate::markdown_render::set_tables_enabled(prev_tables_enabled);
+}
+
+#[test]
+fn pipe_prose_does_not_render_as_table() {
+    let prev_tables_enabled = crate::markdown_render::tables_enabled();
+    crate::markdown_render::set_tables_enabled(true);
+
+    let text = render_markdown_text("a | b");
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.clone())
+                .collect::<String>()
+        })
+        .collect();
+
+    assert_eq!(lines, vec!["a | b".to_string()]);
+
+    crate::markdown_render::set_tables_enabled(prev_tables_enabled);
+}
+
+#[test]
 fn headings() {
     let md = "# Heading 1\n## Heading 2\n### Heading 3\n#### Heading 4\n##### Heading 5\n###### Heading 6\n";
     let text = render_markdown_text(md);

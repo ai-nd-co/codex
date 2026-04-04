@@ -37,15 +37,22 @@ pub(crate) struct OutputLinesParams {
     pub(crate) include_prefix: bool,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct ExecCellRenderOptions {
+    pub(crate) animations_enabled: bool,
+    pub(crate) verbose_tool_calls: bool,
+    pub(crate) disable_explored_compaction: bool,
+}
+
 pub(crate) fn new_active_exec_command(
     call_id: String,
     command: Vec<String>,
     parsed: Vec<ParsedCommand>,
     source: ExecCommandSource,
     interaction_input: Option<String>,
-    animations_enabled: bool,
+    options: ExecCellRenderOptions,
 ) -> ExecCell {
-    ExecCell::new(
+    ExecCell::new_with_options(
         ExecCall {
             call_id,
             command,
@@ -56,7 +63,9 @@ pub(crate) fn new_active_exec_command(
             duration: None,
             interaction_input,
         },
-        animations_enabled,
+        options.animations_enabled,
+        options.verbose_tool_calls,
+        options.disable_explored_compaction,
     )
 }
 
@@ -252,6 +261,7 @@ impl HistoryCell for ExecCell {
 impl ExecCell {
     fn exploring_display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut out: Vec<Line<'static>> = Vec::new();
+        let verbose_tool_calls = self.verbose_tool_calls();
         out.push(Line::from(vec![
             if self.is_active() {
                 spinner(self.active_start_time(), self.animations_enabled())
@@ -346,6 +356,44 @@ impl ExecCell {
                         .subsequent_indent(subsequent_indent),
                 );
                 push_owned_lines(&wrapped, &mut out_indented);
+            }
+
+            if verbose_tool_calls && let Some(output) = call.output.as_ref() {
+                let raw_output = output_lines(
+                    Some(output),
+                    OutputLinesParams {
+                        line_limit: TOOL_CALL_MAX_LINES,
+                        only_err: false,
+                        include_angle_pipe: false,
+                        include_prefix: false,
+                    },
+                );
+                let output_preview: Vec<Line<'static>> = if raw_output.lines.is_empty() {
+                    vec![Line::from("(no output)".dim())]
+                } else {
+                    let output_wrap_width = width.max(1) as usize;
+                    let output_opts = RtOptions::new(output_wrap_width)
+                        .word_splitter(WordSplitter::NoHyphenation);
+                    let mut wrapped_output: Vec<Line<'static>> = Vec::new();
+                    for line in &raw_output.lines {
+                        push_owned_lines(
+                            &adaptive_wrap_line(line, output_opts.clone()),
+                            &mut wrapped_output,
+                        );
+                    }
+                    Self::truncate_lines_middle(
+                        &wrapped_output,
+                        TOOL_CALL_MAX_LINES,
+                        width,
+                        raw_output.omitted,
+                        Some(Line::from("    ".dim())),
+                    )
+                };
+
+                if !output_preview.is_empty() {
+                    let prefixed = prefix_lines(output_preview, "    ".dim(), "    ".into());
+                    out_indented.extend(prefixed);
+                }
             }
         }
 
@@ -971,6 +1019,48 @@ mod tests {
         assert!(
             wrapped_height > logical_height,
             "expected transcript height to account for wrapped URL-like rows, logical_height={logical_height}, wrapped_height={wrapped_height}"
+        );
+    }
+
+    #[test]
+    fn verbose_tool_calls_show_output() {
+        let call = ExecCall {
+            call_id: "call-id".to_string(),
+            command: vec!["rg".into(), "needle".into()],
+            parsed: vec![ParsedCommand::Search {
+                cmd: "rg needle".to_string(),
+                query: Some("needle".to_string()),
+                path: Some("src".to_string()),
+            }],
+            output: Some(CommandOutput {
+                exit_code: 0,
+                formatted_output: String::new(),
+                aggregated_output: "match-1\nmatch-2".to_string(),
+            }),
+            source: ExecCommandSource::Agent,
+            start_time: None,
+            duration: Some(std::time::Duration::from_millis(10)),
+            interaction_input: None,
+        };
+
+        let cell = ExecCell::new_with_options(
+            call, /*animations_enabled*/ false, /*verbose_tool_calls*/ true,
+            /*disable_explored_compaction*/ false,
+        );
+        let rendered: Vec<String> = cell
+            .display_lines(/*width*/ 80)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+
+        assert!(
+            rendered.iter().any(|line| line.contains("match-1")),
+            "expected verbose tool output to be rendered, got: {rendered:?}"
         );
     }
 }

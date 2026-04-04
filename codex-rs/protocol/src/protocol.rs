@@ -470,6 +470,10 @@ pub enum Op {
     /// to generate a summary which will be returned as an AgentMessage event.
     Compact,
 
+    /// Request the agent to summarize the first half of the current conversation context
+    /// while preserving the most recent half verbatim.
+    SmartCompact,
+
     /// Drop all persisted memory artifacts and memory-tracking DB rows.
     DropMemories,
 
@@ -480,6 +484,9 @@ pub enum Op {
     /// This is a local-only operation handled by codex-core; it does not
     /// involve the model.
     SetThreadName { name: String },
+
+    /// Ask Codex to generate a concise thread name from recent conversation context.
+    GenerateThreadName,
 
     /// Request Codex to undo a turn (turn are stacked so it is the same effect as CMD + Z).
     Undo,
@@ -595,9 +602,11 @@ impl Op {
             Self::ReloadUserConfig => "reload_user_config",
             Self::ListSkills { .. } => "list_skills",
             Self::Compact => "compact",
+            Self::SmartCompact => "smart_compact",
             Self::DropMemories => "drop_memories",
             Self::UpdateMemories => "update_memories",
             Self::SetThreadName { .. } => "set_thread_name",
+            Self::GenerateThreadName => "generate_thread_name",
             Self::Undo => "undo",
             Self::ThreadRollback { .. } => "thread_rollback",
             Self::Review { .. } => "review",
@@ -1628,6 +1637,7 @@ pub enum AgentStatus {
 pub enum NonSteerableTurnKind {
     Review,
     Compact,
+    SmartCompact,
 }
 
 /// Codex errors that we expose to clients.

@@ -3645,7 +3645,12 @@ impl ChatComposer {
                         SummaryLeft::Custom(line) => {
                             render_footer_line(hint_rect, buf, line);
                         }
-                        SummaryLeft::None => {}
+                        SummaryLeft::None => {
+                            if status_line_active && let Some(line) = truncated_status_line.clone()
+                            {
+                                render_footer_line(hint_rect, buf, line);
+                            }
+                        }
                     }
                 } else if self.footer_flash_visible() {
                     if let Some(flash) = self.footer_flash.as_ref() {
@@ -4106,6 +4111,8 @@ mod tests {
             "footer_mode_hidden_while_typing",
             /*enhanced_keys_supported*/ true,
             |composer| {
+                composer.set_status_line_enabled(true);
+                composer.set_status_line(Some(Line::from("Status line content".to_string())));
                 type_chars_humanlike(composer, &['h']);
             },
         );

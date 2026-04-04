@@ -38,6 +38,7 @@ jobs:
 
       - name: Stage npm package
         id: stage_npm_package
+        if: ${{ vars.RUN_NPM_STAGE == 'true' && github.event_name == 'push' && github.ref_name == 'main' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -54,6 +55,7 @@ jobs:
 
       - name: Upload staged npm package artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        if: ${{ vars.RUN_NPM_STAGE == 'true' && github.event_name == 'push' && github.ref_name == 'main' }}
         with:
           name: codex-npm-staging
           path: ${{ steps.stage_npm_package.outputs.pack_output }}

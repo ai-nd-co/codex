@@ -159,8 +159,18 @@ pub enum Feature {
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     /// Kept for config backward compatibility; behavior is always steer-enabled.
     Steer,
+    /// Send empty base instructions to the model.
+    DisableSystemPrompt,
     /// Allow request_user_input in Default collaboration mode.
     DefaultModeRequestUserInput,
+    /// Legacy compatibility flag for smart compaction.
+    SmartCompact,
+    /// Skip automatic compaction while still allowing explicit manual compaction.
+    DisableCompaction,
+    /// Show output for read/search/list tool calls in the transcript.
+    VerboseToolCalls,
+    /// Disable collapsing grouped explored/read/search/list tool calls.
+    DisableExploredCompaction,
     /// Enable automatic review for approval prompts.
     GuardianApproval,
     /// Enable collaboration modes (Plan, Default).
@@ -774,9 +784,55 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::DisableSystemPrompt,
+        key: "disable_system_prompt",
+        stage: Stage::Experimental {
+            name: "Disable system prompt",
+            menu_description: "Send empty base instructions to the model.",
+            announcement: "NEW! Disable the system prompt (advanced). Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::DefaultModeRequestUserInput,
         key: "default_mode_request_user_input",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SmartCompact,
+        key: "smart_compact",
+        stage: Stage::Removed,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::DisableCompaction,
+        key: "disable_compaction",
+        stage: Stage::Experimental {
+            name: "Disable auto-compaction",
+            menu_description: "Skip automatic compaction while keeping manual compaction available.",
+            announcement: "NEW! Disable auto-compaction (advanced). Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::VerboseToolCalls,
+        key: "verbose_tool_calls",
+        stage: Stage::Experimental {
+            name: "Verbose tool calls",
+            menu_description: "Show output for read/search/list tool calls in the transcript.",
+            announcement: "NEW! Show verbose tool call output. Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::DisableExploredCompaction,
+        key: "disable_explored_compaction",
+        stage: Stage::Experimental {
+            name: "Disable explored compaction",
+            menu_description: "Show individual explored/read/search/list entries instead of collapsing them.",
+            announcement: "NEW! Disable explored compaction. Enable in /experimental!",
+        },
         default_enabled: false,
     },
     FeatureSpec {

@@ -1,4 +1,4 @@
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install --cask codex</code></p>
+<p align="center"><code>npm i -g @ai-nd-co/codex</code><br />or <code>brew install --cask codex</code></p>
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 <p align="center">
   <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
@@ -14,11 +14,24 @@ If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="http
 
 ### Installing and running Codex CLI
 
+#### ai-nd-co fork notes (this repo)
+
+- Windows prefers **Git Bash** and skips the WSL `bash.exe` shim by default.
+- Packages from this fork are published under the **@ai-nd-co** scope.
+
+Install from this fork with:
+
+```shell
+npm install -g @ai-nd-co/codex
+```
+
+See [Git Bash on Windows](./docs/windows-git-bash-shell.md) for details.
+
 Install globally with your preferred package manager:
 
 ```shell
 # Install using npm
-npm install -g @openai/codex
+npm install -g @ai-nd-co/codex
 ```
 
 ```shell
@@ -29,7 +42,7 @@ brew install --cask codex
 Then simply run `codex` to get started.
 
 <details>
-<summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
+<summary>You can also go to the <a href="https://github.com/ai-nd-co/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
 
 Each GitHub Release contains many executables, but in practice, you likely want one of these:
 

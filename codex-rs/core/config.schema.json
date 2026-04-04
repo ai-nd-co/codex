@@ -176,6 +176,21 @@
       ],
       "type": "string"
     },
+    "ApprovalsToml": {
+      "additionalProperties": false,
+      "description": "Approval-related settings deserialized from config.toml.",
+      "properties": {
+        "always_prompt_regex": {
+          "default": null,
+          "description": "Regex patterns. If any matches the rendered command string, Codex will always prompt for approval, even when approvals are otherwise disabled.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "AppsConfigToml": {
       "additionalProperties": {
         "$ref": "#/definitions/AppConfig"
@@ -363,6 +378,9 @@
               "type": "boolean"
             },
             "default_mode_request_user_input": {
+              "type": "boolean"
+            },
+            "disable_system_prompt": {
               "type": "boolean"
             },
             "elevated_windows_sandbox": {
@@ -1926,6 +1944,15 @@
       ],
       "description": "Default approval policy for executing commands."
     },
+    "approvals": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ApprovalsToml"
+        }
+      ],
+      "default": null,
+      "description": "Approval-related settings loaded from `[approvals]`."
+    },
     "approvals_reviewer": {
       "allOf": [
         {
@@ -2061,6 +2088,9 @@
           "type": "boolean"
         },
         "default_mode_request_user_input": {
+          "type": "boolean"
+        },
+        "disable_system_prompt": {
           "type": "boolean"
         },
         "elevated_windows_sandbox": {

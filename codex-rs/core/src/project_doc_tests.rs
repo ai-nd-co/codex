@@ -350,6 +350,29 @@ async fn uses_configured_fallback_when_agents_missing() {
     assert_eq!(res, "example instructions");
 }
 
+/// Built-in cloud-style fallbacks are used when AGENTS.md is missing.
+#[tokio::test]
+async fn uses_default_claude_fallback_when_agents_missing() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join("CLAUDE.md"), "claude instructions").unwrap();
+
+    let res =
+        get_user_instructions(&make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await)
+            .await
+            .expect("fallback doc expected");
+
+    assert_eq!(res, "claude instructions");
+
+    let discovery =
+        discover_project_doc_paths(&make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await)
+            .expect("discover paths");
+    assert_eq!(discovery.len(), 1);
+    assert_eq!(
+        discovery[0].file_name().unwrap().to_string_lossy(),
+        "CLAUDE.md"
+    );
+}
+
 /// AGENTS.md remains preferred when both AGENTS.md and fallbacks are present.
 #[tokio::test]
 async fn agents_md_preferred_over_fallbacks() {
