@@ -456,11 +456,21 @@ jobs:
         env:
           VERSION: ${{ needs.release.outputs.version }}
           NPM_TAG: ${{ needs.release.outputs.npm_tag }}
+          FALLBACK_NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           tag_args=()
           if [[ -n "${NPM_TAG}" ]]; then
             tag_args+=(--tag "${NPM_TAG}")
+          fi
+
+          if [[ -n "${FALLBACK_NPM_TOKEN:-}" ]]; then
+            auth_file="${RUNNER_TEMP}/npm-publishrc"
+            printf '//registry.npmjs.org/:_authToken=%s\n' "${FALLBACK_NPM_TOKEN}" > "${auth_file}"
+            export NPM_CONFIG_USERCONFIG="${auth_file}"
+            echo "Using NPM_TOKEN fallback for npm publish."
+          else
+            echo "Using OIDC trusted publishing for npm publish."
           fi
 
           tarballs=(
@@ -470,7 +480,7 @@ jobs:
           )
 
           for tarball in "${tarballs[@]}"; do
-            npx -y npm@11.6.2 publish "${GITHUB_WORKSPACE}/dist/npm/${tarball}" "${tag_args[@]}"
+            npx -y npm@11.6.2 publish --provenance "${GITHUB_WORKSPACE}/dist/npm/${tarball}" "${tag_args[@]}"
           done
 
   update-branch:
