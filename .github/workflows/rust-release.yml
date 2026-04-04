@@ -427,9 +427,8 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           scope: "@ai-nd-co"
 
-      # Trusted publishing requires npm CLI version 11.5.1 or later.
-      - name: Update npm
-        run: npm install -g npm@latest
+      - name: Show npm version
+        run: npm --version
 
       - name: Download npm tarballs from release
         env:
