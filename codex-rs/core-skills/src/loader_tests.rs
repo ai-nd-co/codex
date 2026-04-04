@@ -1820,6 +1820,7 @@ async fn skill_roots_include_admin_with_lowest_priority() {
     let mut expected = vec![SkillScope::User, SkillScope::System];
     if home_dir().is_some() {
         expected.insert(1, SkillScope::User);
+        expected.insert(1, SkillScope::User);
     }
     expected.push(SkillScope::Admin);
     assert_eq!(scopes, expected);
