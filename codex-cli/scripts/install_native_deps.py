@@ -21,6 +21,7 @@ from urllib.request import urlopen
 SCRIPT_DIR = Path(__file__).resolve().parent
 CODEX_CLI_ROOT = SCRIPT_DIR.parent
 DEFAULT_WORKFLOW_URL = "https://github.com/openai/codex/actions/runs/17952349351"  # rust-v0.40.0
+DEFAULT_GITHUB_REPO = "openai/codex"
 VENDOR_DIR_NAME = "vendor"
 RG_MANIFEST = CODEX_CLI_ROOT / "bin" / "rg"
 BINARY_TARGETS = (
@@ -129,6 +130,20 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--repo",
+        default=DEFAULT_GITHUB_REPO,
+        help="GitHub repo slug that owns the workflow run (default: openai/codex).",
+    )
+    parser.add_argument(
+        "--target",
+        dest="targets",
+        action="append",
+        help=(
+            "Limit installation to specific target triples. May be repeated. "
+            "Defaults to all supported targets for the selected components."
+        ),
+    )
+    parser.add_argument(
         "--component",
         dest="components",
         action="append",
@@ -164,6 +179,7 @@ def main() -> int:
         "codex-command-runner",
         "rg",
     ]
+    selected_targets = list(args.targets or [])
 
     workflow_url = (args.workflow_url or DEFAULT_WORKFLOW_URL).strip()
     if not workflow_url:
@@ -175,17 +191,22 @@ def main() -> int:
     with _gha_group(f"Download native artifacts from workflow {workflow_id}"):
         with tempfile.TemporaryDirectory(prefix="codex-native-artifacts-") as artifacts_dir_str:
             artifacts_dir = Path(artifacts_dir_str)
-            _download_artifacts(workflow_id, artifacts_dir)
+            _download_artifacts(workflow_id, artifacts_dir, args.repo)
             install_binary_components(
                 artifacts_dir,
                 vendor_dir,
                 [BINARY_COMPONENTS[name] for name in components if name in BINARY_COMPONENTS],
+                selected_targets=selected_targets or None,
             )
 
     if "rg" in components:
         with _gha_group("Fetch ripgrep binaries"):
             print("Fetching ripgrep binaries...")
-            fetch_rg(vendor_dir, DEFAULT_RG_TARGETS, manifest_path=RG_MANIFEST)
+            fetch_rg(
+                vendor_dir,
+                selected_targets or DEFAULT_RG_TARGETS,
+                manifest_path=RG_MANIFEST,
+            )
 
     print(f"Installed native dependencies into {vendor_dir}")
     return 0
@@ -259,7 +280,7 @@ def fetch_rg(
     return [results[target] for target in targets]
 
 
-def _download_artifacts(workflow_id: str, dest_dir: Path) -> None:
+def _download_artifacts(workflow_id: str, dest_dir: Path, github_repo: str) -> None:
     cmd = [
         "gh",
         "run",
@@ -267,7 +288,7 @@ def _download_artifacts(workflow_id: str, dest_dir: Path) -> None:
         "--dir",
         str(dest_dir),
         "--repo",
-        "openai/codex",
+        github_repo,
         workflow_id,
     ]
     subprocess.check_call(cmd)
@@ -277,12 +298,21 @@ def install_binary_components(
     artifacts_dir: Path,
     vendor_dir: Path,
     selected_components: Sequence[BinaryComponent],
+    selected_targets: Sequence[str] | None = None,
 ) -> None:
     if not selected_components:
         return
 
+    selected_targets_set = set(selected_targets) if selected_targets is not None else None
+
     for component in selected_components:
         component_targets = list(component.targets or BINARY_TARGETS)
+        if selected_targets_set is not None:
+            component_targets = [
+                target for target in component_targets if target in selected_targets_set
+            ]
+        if not component_targets:
+            continue
 
         print(
             f"Installing {component.binary_basename} binaries for targets: "
