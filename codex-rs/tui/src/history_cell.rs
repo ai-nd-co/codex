@@ -21,6 +21,8 @@ use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
+use crate::render::line_utils::is_box_table_line;
+use crate::render::line_utils::line_to_plain_string;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
@@ -379,7 +381,7 @@ impl HistoryCell for AgentMessageCell {
 
         for line in &self.lines {
             let text = line_to_plain_string(line);
-            let is_table_line = is_box_table_line(&text);
+            let is_table_line = is_box_table_line(line);
             if is_table_line {
                 in_table_block = true;
                 out.push(line_to_static(line));
@@ -414,19 +416,20 @@ impl HistoryCell for AgentMessageCell {
     fn is_stream_continuation(&self) -> bool {
         !self.is_first_line
     }
-}
 
-fn line_to_plain_string(line: &Line<'_>) -> String {
-    line.spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect::<Vec<_>>()
-        .join("")
-}
+    fn desired_height(&self, width: u16) -> u16 {
+        self.display_lines(width)
+            .len()
+            .try_into()
+            .unwrap_or(u16::MAX)
+    }
 
-fn is_box_table_line(text: &str) -> bool {
-    let trimmed = text.trim_start();
-    matches!(trimmed.chars().next(), Some('┌' | '├' | '└' | '│'))
+    fn desired_transcript_height(&self, width: u16) -> u16 {
+        self.transcript_lines(width)
+            .len()
+            .try_into()
+            .unwrap_or(u16::MAX)
+    }
 }
 
 #[derive(Debug)]
@@ -2619,6 +2622,29 @@ mod tests {
         let cell = AgentMessageCell::new(vec![Line::default()], false);
         assert_eq!(cell.transcript_lines(80), vec![Line::from("  ")]);
         assert_eq!(cell.desired_transcript_height(80), 1);
+    }
+
+    #[test]
+    fn agent_message_cell_table_height_matches_display_lines() {
+        let cell = AgentMessageCell::new(
+            vec![
+                Line::from("┌───┬───┬────┐"),
+                Line::from("│ x │ 1 │ 2  │"),
+                Line::from("├───┼───┼────┤"),
+                Line::from("│ 1 │ 1 │ 2  │"),
+                Line::from("└───┴───┴────┘"),
+            ],
+            false,
+        );
+
+        let width: u16 = 16;
+        let rendered_len: u16 = cell
+            .display_lines(width)
+            .len()
+            .try_into()
+            .unwrap_or(u16::MAX);
+        assert_eq!(cell.desired_height(width), rendered_len);
+        assert_eq!(cell.desired_transcript_height(width), rendered_len);
     }
 
     #[test]

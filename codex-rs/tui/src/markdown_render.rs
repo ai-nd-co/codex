@@ -1,3 +1,5 @@
+use crate::render::line_utils::is_box_table_text;
+use crate::render::line_utils::line_to_plain_string;
 use crate::render::line_utils::line_to_static;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
@@ -192,7 +194,7 @@ fn normalize_table_blocks(input: &str) -> String {
 
     while idx < lines.len() {
         let line = lines[idx];
-        if is_box_table_line(line) {
+        if is_box_table_text(line) {
             idx += 1;
             continue;
         }
@@ -203,7 +205,11 @@ fn normalize_table_blocks(input: &str) -> String {
             continue;
         };
 
-        if !is_pipe_table_line(content) {
+        let next_content = lines
+            .get(idx + 1)
+            .map(|next| strip_prefix(next, strip_len))
+            .unwrap_or_default();
+        if !is_pipe_table_block_start(content, next_content.as_str()) {
             out.push(line.to_string());
             idx += 1;
             continue;
@@ -219,12 +225,12 @@ fn normalize_table_blocks(input: &str) -> String {
                 idx += 1;
                 break;
             }
-            if is_box_table_line(line) {
+            if is_box_table_text(line) {
                 idx += 1;
                 continue;
             }
             let stripped = strip_prefix(line, strip_len);
-            if is_pipe_table_line(&stripped) || is_pipe_table_separator(&stripped) {
+            if is_pipe_table_row_candidate(&stripped) || is_pipe_table_separator(&stripped) {
                 rows.push(stripped);
                 idx += 1;
                 continue;
@@ -232,10 +238,10 @@ fn normalize_table_blocks(input: &str) -> String {
             break;
         }
 
-        if !rows.iter().any(|row| is_pipe_table_separator(row)) {
-            if let Some(separator) = build_pipe_table_separator(&rows) {
-                rows.insert(1, separator);
-            }
+        if !rows.iter().any(|row| is_pipe_table_separator(row))
+            && let Some(separator) = build_pipe_table_separator(&rows)
+        {
+            rows.insert(1, separator);
         }
 
         out.extend(rows);
@@ -312,8 +318,28 @@ fn strip_prefix(line: &str, strip_len: usize) -> String {
 }
 
 fn is_pipe_table_line(line: &str) -> bool {
+    is_pipe_table_row_candidate(line)
+}
+
+fn is_pipe_table_row_candidate(line: &str) -> bool {
     let trimmed = line.trim();
     trimmed.contains('|') && !trimmed.is_empty() && !is_pipe_table_separator(trimmed)
+}
+
+fn is_pipe_table_block_start(line: &str, next_line: &str) -> bool {
+    let trimmed = line.trim();
+    if !is_pipe_table_row_candidate(trimmed) {
+        return false;
+    }
+
+    trimmed.starts_with('|')
+        || trimmed.ends_with('|')
+        || pipe_count(trimmed) >= 2
+        || is_pipe_table_separator(next_line.trim())
+}
+
+fn pipe_count(line: &str) -> usize {
+    line.chars().filter(|ch| *ch == '|').count()
 }
 
 fn is_pipe_table_separator(line: &str) -> bool {
@@ -336,10 +362,13 @@ fn build_pipe_table_separator(rows: &[String]) -> Option<String> {
     let header = rows.iter().find(|row| is_pipe_table_line(row))?;
     let trimmed = header.trim();
     let mut parts: Vec<&str> = trimmed.split('|').collect();
-    if trimmed.starts_with('|') && trimmed.ends_with('|') && parts.len() >= 2 {
-        parts = parts[1..parts.len() - 1].to_vec();
+    if trimmed.starts_with('|') && !parts.is_empty() {
+        parts.remove(0);
     }
-    let col_count = parts.iter().filter(|cell| !cell.trim().is_empty()).count();
+    if trimmed.ends_with('|') && !parts.is_empty() {
+        parts.pop();
+    }
+    let col_count = parts.len();
     if col_count == 0 {
         return None;
     }
@@ -892,7 +921,7 @@ where
         if let Some(line) = self.current_line_content.take() {
             let style = self.current_line_style;
             let line_str = line_to_plain_string(&line);
-            let no_wrap_table = is_box_table_line(&line_str);
+            let no_wrap_table = is_box_table_text(&line_str);
             // NB we don't wrap code in code blocks, in order to preserve whitespace for copy/paste.
             if !self.current_line_in_code_block
                 && !no_wrap_table
@@ -989,19 +1018,6 @@ where
 
         prefix
     }
-}
-
-fn line_to_plain_string(line: &Line<'_>) -> String {
-    line.spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect::<Vec<_>>()
-        .join("")
-}
-
-fn is_box_table_line(text: &str) -> bool {
-    let trimmed = text.trim_start();
-    matches!(trimmed.chars().next(), Some('┌' | '├' | '└' | '│'))
 }
 
 fn terminal_width_cols() -> Option<usize> {

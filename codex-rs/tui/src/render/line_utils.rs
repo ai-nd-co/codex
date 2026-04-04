@@ -17,6 +17,25 @@ pub fn line_to_static(line: &Line<'_>) -> Line<'static> {
     }
 }
 
+/// Convert a line into plain text by concatenating all span content.
+pub fn line_to_plain_string(line: &Line<'_>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>()
+}
+
+/// Returns whether the text begins with rendered box-table glyphs.
+pub fn is_box_table_text(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    matches!(trimmed.chars().next(), Some('┌' | '├' | '└' | '│'))
+}
+
+/// Returns whether a line looks like a rendered box-table row.
+pub fn is_box_table_line(line: &Line<'_>) -> bool {
+    is_box_table_text(&line_to_plain_string(line))
+}
+
 /// Append owned copies of borrowed lines to `out`.
 pub fn push_owned_lines<'a>(src: &[Line<'a>], out: &mut Vec<Line<'static>>) {
     for l in src {

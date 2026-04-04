@@ -2,7 +2,8 @@ use std::fmt;
 use std::io;
 use std::io::Write;
 
-use crate::wrapping::word_wrap_lines_borrowed;
+use crate::render::line_utils::is_box_table_line;
+use crate::wrapping::word_wrap_line;
 use crossterm::Command;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
@@ -38,9 +39,19 @@ where
     let last_cursor_pos = terminal.last_known_cursor_pos;
     let writer = terminal.backend_mut();
 
-    // Pre-wrap lines using word-aware wrapping so terminal scrollback sees the same
-    // formatting as the TUI. This avoids character-level hard wrapping by the terminal.
-    let wrapped = word_wrap_lines_borrowed(&lines, area.width.max(1) as usize);
+    // Pre-wrap lines using the same word-aware logic as the TUI, but preserve
+    // rendered box tables verbatim. Once markdown_render has produced table
+    // geometry with box-drawing glyphs, re-wrapping those lines here can split
+    // rows and corrupt the visible table.
+    let mut wrapped: Vec<Line<'_>> = Vec::new();
+    let wrap_width = area.width.max(1) as usize;
+    for line in &lines {
+        if is_box_table_line(line) {
+            wrapped.push(line.clone());
+        } else {
+            wrapped.extend(word_wrap_line(line, wrap_width));
+        }
+    }
     let wrapped_lines = wrapped.len() as u16;
     let cursor_top = if area.bottom() < screen_size.height {
         // If the viewport is not at the bottom of the screen, scroll it down to make room.
@@ -526,5 +537,47 @@ mod tests {
                 cell.fgcolor()
             );
         }
+    }
+
+    #[test]
+    fn vt100_box_table_lines_are_inserted_without_corruption() {
+        let prev_tables_enabled = crate::markdown_render::tables_enabled();
+        crate::markdown_render::set_tables_enabled(true);
+
+        let md = "| x | 1 | 2 | 3 | 4 | 5 |\n|---|---|---|---|---|---|\n| 1 | 1 | 2 | 3 | 4 | 5 |\n| 2 | 2 | 4 | 6 | 8 | 10 |\n| 3 | 3 | 6 | 9 | 12 | 15 |\n| 4 | 4 | 8 | 12 | 16 | 20 |\n| 5 | 5 | 10 | 15 | 20 | 25 |\n";
+        let text = render_markdown_text(md);
+        let expected: Vec<String> = text
+            .lines
+            .iter()
+            .map(std::string::ToString::to_string)
+            .filter(|line| !line.trim().is_empty())
+            .collect();
+
+        let width: u16 = 40;
+        let height: u16 = 20;
+        let backend = VT100Backend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        term.set_viewport_area(Rect::new(0, height - 1, width, 1));
+
+        insert_history_lines(&mut term, text.lines.clone()).expect("insert table history");
+
+        let actual: Vec<String> = term
+            .backend()
+            .vt100()
+            .screen()
+            .rows(0, width)
+            .filter_map(|row| {
+                let trimmed = row.trim_end().to_string();
+                if trimmed.trim().is_empty() {
+                    None
+                } else {
+                    Some(trimmed)
+                }
+            })
+            .collect();
+
+        assert_eq!(actual, expected);
+
+        crate::markdown_render::set_tables_enabled(prev_tables_enabled);
     }
 }

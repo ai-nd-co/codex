@@ -5386,6 +5386,99 @@ printf 'fenced within fenced\n'
 }
 
 #[tokio::test]
+async fn chatwidget_markdown_table_matrix_vt100_snapshot() {
+    let prev_tables_enabled = crate::markdown_render::tables_enabled();
+    crate::markdown_render::set_tables_enabled(true);
+
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    let width: u16 = 80;
+    let height: u16 = 30;
+    let backend = VT100Backend::new(width, height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    term.set_viewport_area(Rect::new(0, height - 1, width, 1));
+
+    let source: &str = r#"Here is a simple Markdown multiplication matrix example for `1-5`:
+
+```md
+| x | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|
+| 1 | 1 | 2 | 3 | 4 | 5 |
+| 2 | 2 | 4 | 6 | 8 | 10 |
+| 3 | 3 | 6 | 9 | 12 | 15 |
+| 4 | 4 | 8 | 12 | 16 | 20 |
+| 5 | 5 | 10 | 15 | 20 | 25 |
+```
+
+Rendered:
+
+| x | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|
+| 1 | 1 | 2 | 3 | 4 | 5 |
+| 2 | 2 | 4 | 6 | 8 | 10 |
+| 3 | 3 | 6 | 9 | 12 | 15 |
+| 4 | 4 | 8 | 12 | 16 | 20 |
+| 5 | 5 | 10 | 15 | 20 | 25 |
+"#;
+
+    let mut it = source.chars();
+    loop {
+        let mut delta = String::new();
+        match it.next() {
+            Some(c) => delta.push(c),
+            None => break,
+        }
+        if let Some(next) = it.next() {
+            delta.push(next);
+        }
+
+        chat.handle_codex_event(Event {
+            id: "t1".into(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
+        });
+
+        loop {
+            chat.on_commit_tick();
+            let mut inserted_any = false;
+            while let Ok(app_ev) = rx.try_recv() {
+                if let AppEvent::InsertHistoryCell(cell) = app_ev {
+                    let lines = cell.display_lines(width);
+                    crate::insert_history::insert_history_lines(&mut term, lines)
+                        .expect("Failed to insert history lines in test");
+                    inserted_any = true;
+                }
+            }
+            if !inserted_any {
+                break;
+            }
+        }
+    }
+
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+    for lines in drain_insert_history(&mut rx) {
+        crate::insert_history::insert_history_lines(&mut term, lines)
+            .expect("Failed to insert history lines in test");
+    }
+
+    assert_snapshot!(term.backend().vt100().screen().contents());
+
+    crate::markdown_render::set_tables_enabled(prev_tables_enabled);
+}
+
+#[tokio::test]
 async fn chatwidget_tall() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
