@@ -163,7 +163,7 @@ pub enum Feature {
     DisableSystemPrompt,
     /// Allow request_user_input in Default collaboration mode.
     DefaultModeRequestUserInput,
-    /// Use model-driven smart compaction for `/compact` and auto-compaction.
+    /// Legacy compatibility flag for smart compaction.
     SmartCompact,
     /// Skip automatic compaction while still allowing explicit manual compaction.
     DisableCompaction,
@@ -802,11 +802,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::SmartCompact,
         key: "smart_compact",
-        stage: Stage::Experimental {
-            name: "Smart compact",
-            menu_description: "Use model-driven smart compaction for /compact and auto-compaction.",
-            announcement: "NEW! Smart compaction can preserve recent context while compacting older turns.",
-        },
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {

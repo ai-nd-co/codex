@@ -35,7 +35,7 @@ pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
 pub const SMART_COMPACT_PROMPT: &str = include_str!("../templates/smart_compact/prompt.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
-const SMART_COMPACT_RATIO: f64 = 0.5;
+const SMART_COMPACT_TAIL_TOKEN_BUDGET: usize = 150_000;
 
 /// Controls whether compaction replacement history must include initial context.
 ///
@@ -70,21 +70,6 @@ pub(crate) async fn run_inline_auto_compact_task(
 
     run_compact_task_inner(sess, turn_context, input, initial_context_injection).await?;
     Ok(())
-}
-
-pub(crate) async fn run_inline_smart_auto_compact_task(
-    sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
-    initial_context_injection: InitialContextInjection,
-) -> CodexResult<()> {
-    let prompt = turn_context.smart_compact_prompt().to_string();
-    let input = vec![UserInput::Text {
-        text: prompt,
-        // Compaction prompt is synthesized; no UI element ranges to preserve.
-        text_elements: Vec::new(),
-    }];
-
-    run_smart_compact_task_inner(sess, turn_context, input, initial_context_injection).await
 }
 
 pub(crate) async fn run_compact_task(
@@ -626,8 +611,10 @@ fn split_items_for_smart_compaction(
     if total_tokens == 0 {
         return (Vec::new(), items.to_vec());
     }
+    if total_tokens <= SMART_COMPACT_TAIL_TOKEN_BUDGET {
+        return (Vec::new(), items.to_vec());
+    }
 
-    let cutoff_tokens = ((total_tokens as f64) * SMART_COMPACT_RATIO) as usize;
     let mut preserved_tokens = 0usize;
     let mut cut_index = turn_starts[0];
 
@@ -643,7 +630,7 @@ fn split_items_for_smart_compaction(
                 .sum(),
         );
         cut_index = *start_idx;
-        if preserved_tokens >= cutoff_tokens {
+        if preserved_tokens >= SMART_COMPACT_TAIL_TOKEN_BUDGET {
             break;
         }
     }

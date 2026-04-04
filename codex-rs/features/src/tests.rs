@@ -183,12 +183,8 @@ fn disable_system_prompt_is_experimental_and_disabled_by_default() {
 }
 
 #[test]
-fn smart_compact_is_experimental_and_disabled_by_default() {
-    let spec = Feature::SmartCompact.info();
-    let stage = spec.stage;
-
-    assert!(matches!(stage, Stage::Experimental { .. }));
-    assert_eq!(stage.experimental_menu_name(), Some("Smart compact"));
+fn smart_compact_is_removed_and_disabled_by_default() {
+    assert_eq!(Feature::SmartCompact.stage(), Stage::Removed);
     assert_eq!(Feature::SmartCompact.default_enabled(), false);
 }
 

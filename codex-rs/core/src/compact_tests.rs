@@ -186,7 +186,7 @@ fn build_token_limited_compacted_history_appends_summary_message() {
 }
 
 #[test]
-fn split_items_for_smart_compaction_keeps_recent_turns() {
+fn split_items_for_smart_compaction_keeps_recent_tail_budget() {
     fn user(text: &str) -> ResponseItem {
         ResponseItem::Message {
             id: None,
@@ -212,14 +212,14 @@ fn split_items_for_smart_compaction_keeps_recent_turns() {
     }
 
     let items = vec![
-        user("turn 1"),
-        assistant("assistant 1"),
-        user("turn 2"),
-        assistant("assistant 2"),
-        user("turn 3"),
-        assistant("assistant 3"),
-        user("turn 4"),
-        assistant("assistant 4"),
+        user(&"turn 1 ".repeat(5_000)),
+        assistant(&"assistant 1 ".repeat(5_000)),
+        user(&"turn 2 ".repeat(5_000)),
+        assistant(&"assistant 2 ".repeat(5_000)),
+        user(&"turn 3 ".repeat(20_000)),
+        assistant(&"assistant 3 ".repeat(20_000)),
+        user(&"turn 4 ".repeat(20_000)),
+        assistant(&"assistant 4 ".repeat(20_000)),
     ];
 
     let (first_half, second_half) = split_items_for_smart_compaction(&items);
@@ -228,11 +228,11 @@ fn split_items_for_smart_compaction_keeps_recent_turns() {
     assert_eq!(second_half.len(), 4);
     assert_eq!(
         content_items_to_text(message_content(&second_half[0])),
-        Some("turn 3".to_string())
+        Some("turn 3 ".repeat(20_000))
     );
     assert_eq!(
         content_items_to_text(message_content(&second_half[2])),
-        Some("turn 4".to_string())
+        Some("turn 4 ".repeat(20_000))
     );
 }
 

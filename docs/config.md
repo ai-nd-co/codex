@@ -52,13 +52,12 @@ disable_system_prompt = true
 
 ## Smart compact
 
-To use model-driven smart compaction for `/compact` and automatic compaction,
-enable:
+Use `/smart-compact` to preserve the newest ~150,000 tokens of the conversation
+and compact everything older into a single summary message.
 
-```toml
-[features]
-smart_compact = true
-```
+The legacy `smart_compact` feature key is retained only for backward
+compatibility; `/compact` and automatic compaction remain on the standard
+compaction path.
 
 ## Disable auto-compaction
 
