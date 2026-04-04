@@ -2,6 +2,7 @@
 
 import React from "react";
 import { ChatTimeline, type ChatEvent } from "@/components/chat/timeline";
+import { markApprovalRequestSent, takeNextQueuedDraft } from "@/lib/chat-state";
 
 type Project = { id: string; path: string; createdAt: number };
 type Thread = {
@@ -523,23 +524,32 @@ export default function Home() {
     }
   }, []);
 
-  const submitDraft = React.useCallback(async () => {
-    if (!selectedThreadId) return;
-    if (!draft.trim()) return;
+  const submitText = React.useCallback(async (text: string) => {
+    if (!selectedThreadId) return false;
+    if (!text.trim()) return false;
 
-    const text = draft;
-    setDraft("");
-
+    setIsWorking(true);
     const res = await fetch(`/api/threads/${selectedThreadId}/turn`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
     });
-    const json = await res.json();
-    if (!json?.ok) {
+    const json = await res.json().catch(() => null);
+    const ok = res.ok && json?.ok;
+    if (!ok) {
       setRaw((r) => [`[turn/start error] ${safeStringify(json)}`, ...r].slice(0, 200));
+      setIsWorking(false);
     }
-  }, [draft, selectedThreadId]);
+    return ok;
+  }, [selectedThreadId]);
+
+  const submitDraft = React.useCallback(async () => {
+    if (!draft.trim()) return;
+
+    const text = draft;
+    setDraft("");
+    await submitText(text);
+  }, [draft, submitText]);
 
   const rawToolCallsRef = React.useRef<
     Map<string, { name: string; args: unknown }>
@@ -548,25 +558,26 @@ export default function Home() {
   const sendApprovalDecision = React.useCallback(
     async (req: { requestId: string; decision: "accept" | "decline" }) => {
       setPendingApprovals((p) => ({ ...p, [req.requestId]: true }));
-      const res = await fetch("/api/approvals", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: req.requestId, decision: req.decision }),
-      });
-      const json = await res.json().catch(() => null);
-      setRaw((r) => [`[approval] ${safeStringify(json)}`, ...r].slice(0, 200));
-      setEvents((prev) =>
-        prev.map((e) =>
-          e.kind === "approval" && e.requestId === req.requestId
-            ? { ...e, status: "sent" }
-            : e,
-        ),
-      );
-      setPendingApprovals((p) => {
-        const next = { ...p };
-        delete next[req.requestId];
-        return next;
-      });
+      try {
+        const res = await fetch("/api/approvals", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: req.requestId, decision: req.decision }),
+        });
+        const json = await res.json().catch(() => null);
+        setRaw((r) => [`[approval] ${safeStringify(json)}`, ...r].slice(0, 200));
+        if (res.ok && json?.ok) {
+          setEvents((prev) => markApprovalRequestSent(prev, req.requestId));
+        }
+      } catch (error) {
+        setRaw((r) => [`[approval error] ${String(error)}`, ...r].slice(0, 200));
+      } finally {
+        setPendingApprovals((p) => {
+          const next = { ...p };
+          delete next[req.requestId];
+          return next;
+        });
+      }
     },
     [],
   );
@@ -608,6 +619,20 @@ export default function Home() {
     if (!selectedProjectId) return;
     void refreshThreads();
   }, [refreshThreads, selectedProjectId]);
+
+  React.useEffect(() => {
+    const { nextDraft, remainingQueued } = takeNextQueuedDraft({
+      draft,
+      isWorking,
+      queued,
+      selectedThreadId,
+    });
+    if (!nextDraft) {
+      return;
+    }
+    setQueued(remainingQueued);
+    void submitText(nextDraft);
+  }, [draft, isWorking, queued, selectedThreadId, submitText]);
 
   // Live event stream for selected thread.
   React.useEffect(() => {

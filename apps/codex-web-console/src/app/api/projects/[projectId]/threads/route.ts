@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { bridgeRpc } from "@/server/bridge";
+import { projectThreadPathsMatch } from "@/lib/thread-path";
 import {
   getProject,
   type ProjectId,
@@ -22,11 +23,6 @@ export async function GET(
       { status: 404 },
     );
   }
-
-  const normalizedProjectCwd = project.path
-    .replaceAll("\\", "/")
-    .replace(/\/+$/, "")
-    .toLowerCase();
 
   const threads: Array<{
     id: string;
@@ -61,11 +57,7 @@ export async function GET(
           typeof (t as Record<string, unknown>).cwd === "string"
             ? ((t as Record<string, unknown>).cwd as string)
             : "";
-        const normalizedCwd = cwd
-          .replaceAll("\\", "/")
-          .replace(/\/+$/, "")
-          .toLowerCase();
-        if (normalizedCwd !== normalizedProjectCwd) continue;
+        if (!projectThreadPathsMatch(project.path, cwd)) continue;
         threads.push({
           id:
             "id" in (t as Record<string, unknown>)
