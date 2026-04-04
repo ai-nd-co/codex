@@ -100,6 +100,7 @@ struct DependencyTool {
 
 const SKILLS_FILENAME: &str = "SKILL.md";
 const AGENTS_DIR_NAME: &str = ".agents";
+const CLAUDE_DIR_NAME: &str = ".claude";
 const SKILLS_METADATA_DIR: &str = "agents";
 const SKILLS_METADATA_FILENAME: &str = "openai.yaml";
 const SKILLS_DIR_NAME: &str = "skills";
@@ -241,12 +242,14 @@ fn skill_roots_from_layer_stack_inner(
                     scope: SkillScope::User,
                 });
 
-                // `$HOME/.agents/skills` (user-installed skills).
+                // `$HOME/.agents/skills` and `$HOME/.claude/skills` (compat user-installed skills).
                 if let Some(home_dir) = home_dir {
-                    roots.push(SkillRoot {
-                        path: home_dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME),
-                        scope: SkillScope::User,
-                    });
+                    for skills_home in [AGENTS_DIR_NAME, CLAUDE_DIR_NAME] {
+                        roots.push(SkillRoot {
+                            path: home_dir.join(skills_home).join(SKILLS_DIR_NAME),
+                            scope: SkillScope::User,
+                        });
+                    }
                 }
 
                 // Embedded system skills are cached under `$CODEX_HOME/skills/.system` and are a
@@ -280,12 +283,14 @@ fn repo_agents_skill_roots(config_layer_stack: &ConfigLayerStack, cwd: &Path) ->
     let dirs = dirs_between_project_root_and_cwd(cwd, &project_root);
     let mut roots = Vec::new();
     for dir in dirs {
-        let agents_skills = dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME);
-        if agents_skills.is_dir() {
-            roots.push(SkillRoot {
-                path: agents_skills,
-                scope: SkillScope::Repo,
-            });
+        for skills_dir_name in [AGENTS_DIR_NAME, CLAUDE_DIR_NAME] {
+            let compat_skills = dir.join(skills_dir_name).join(SKILLS_DIR_NAME);
+            if compat_skills.is_dir() {
+                roots.push(SkillRoot {
+                    path: compat_skills,
+                    scope: SkillScope::Repo,
+                });
+            }
         }
     }
     roots

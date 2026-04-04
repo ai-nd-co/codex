@@ -13,6 +13,7 @@ use tempfile::TempDir;
 use toml::Value as TomlValue;
 
 const REPO_ROOT_CONFIG_DIR_NAME: &str = ".codex";
+const REPO_ROOT_CONFIG_DIR_NAME_CLOUD: &str = ".claude";
 
 struct TestConfig {
     cwd: PathBuf,
@@ -58,17 +59,21 @@ fn project_layers_for_cwd(cwd: &Path) -> Vec<ConfigLayerEntry> {
 
     layers
         .into_iter()
-        .filter_map(|dir| {
-            let dot_codex = dir.join(REPO_ROOT_CONFIG_DIR_NAME);
-            dot_codex.is_dir().then(|| {
-                ConfigLayerEntry::new(
-                    ConfigLayerSource::Project {
-                        dot_codex_folder: AbsolutePathBuf::from_absolute_path(dot_codex)
-                            .expect("project .codex path should be absolute"),
-                    },
-                    TomlValue::Table(toml::map::Map::new()),
-                )
-            })
+        .flat_map(|dir| {
+            [REPO_ROOT_CONFIG_DIR_NAME, REPO_ROOT_CONFIG_DIR_NAME_CLOUD]
+                .into_iter()
+                .filter_map(move |config_dir_name| {
+                    let config_dir = dir.join(config_dir_name);
+                    config_dir.is_dir().then(|| {
+                        ConfigLayerEntry::new(
+                            ConfigLayerSource::Project {
+                                dot_codex_folder: AbsolutePathBuf::from_absolute_path(config_dir)
+                                    .expect("project config dir path should be absolute"),
+                            },
+                            TomlValue::Table(toml::map::Map::new()),
+                        )
+                    })
+                })
         })
         .collect()
 }
@@ -175,6 +180,10 @@ fn skill_roots_from_layer_stack_maps_user_to_user_and_system_cache_and_system_to
                 home_folder.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME)
             ),
             (
+                SkillScope::User,
+                home_folder.join(CLAUDE_DIR_NAME).join(SKILLS_DIR_NAME)
+            ),
+            (
                 SkillScope::System,
                 user_folder.join("skills").join(".system")
             ),
@@ -195,10 +204,13 @@ fn skill_roots_from_layer_stack_includes_disabled_project_layers() -> anyhow::Re
 
     let project_root = tmp.path().join("repo");
     let dot_codex = project_root.join(".codex");
+    let dot_claude = project_root.join(".claude");
     fs::create_dir_all(&dot_codex)?;
+    fs::create_dir_all(&dot_claude)?;
 
     let user_file = AbsolutePathBuf::from_absolute_path(user_folder.join("config.toml"))?;
     let project_dot_codex = AbsolutePathBuf::from_absolute_path(&dot_codex)?;
+    let project_dot_claude = AbsolutePathBuf::from_absolute_path(&dot_claude)?;
 
     let layers = vec![
         ConfigLayerEntry::new(
@@ -208,6 +220,13 @@ fn skill_roots_from_layer_stack_includes_disabled_project_layers() -> anyhow::Re
         ConfigLayerEntry::new_disabled(
             ConfigLayerSource::Project {
                 dot_codex_folder: project_dot_codex,
+            },
+            TomlValue::Table(toml::map::Map::new()),
+            "marked untrusted",
+        ),
+        ConfigLayerEntry::new_disabled(
+            ConfigLayerSource::Project {
+                dot_codex_folder: project_dot_claude,
             },
             TomlValue::Table(toml::map::Map::new()),
             "marked untrusted",
@@ -227,11 +246,16 @@ fn skill_roots_from_layer_stack_includes_disabled_project_layers() -> anyhow::Re
     assert_eq!(
         got,
         vec![
+            (SkillScope::Repo, dot_claude.join("skills")),
             (SkillScope::Repo, dot_codex.join("skills")),
             (SkillScope::User, user_folder.join("skills")),
             (
                 SkillScope::User,
                 home_folder.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME)
+            ),
+            (
+                SkillScope::User,
+                home_folder.join(CLAUDE_DIR_NAME).join(SKILLS_DIR_NAME)
             ),
             (
                 SkillScope::System,
@@ -280,6 +304,55 @@ fn loads_skills_from_home_agents_dir_for_user_scope() -> anyhow::Result<()> {
         vec![SkillMetadata {
             name: "agents-home-skill".to_string(),
             description: "from home agents".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: normalized(&skill_path),
+            scope: SkillScope::User,
+        }]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn loads_skills_from_home_claude_dir_for_user_scope() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+
+    let home_folder = tmp.path().join("home");
+    let user_folder = home_folder.join("codex");
+    fs::create_dir_all(&user_folder)?;
+
+    let user_file = AbsolutePathBuf::from_absolute_path(user_folder.join("config.toml"))?;
+    let layers = vec![ConfigLayerEntry::new(
+        ConfigLayerSource::User { file: user_file },
+        TomlValue::Table(toml::map::Map::new()),
+    )];
+    let stack = ConfigLayerStack::new(
+        layers,
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )?;
+
+    let skill_path = write_skill_at(
+        &home_folder.join(CLAUDE_DIR_NAME).join(SKILLS_DIR_NAME),
+        "claude-home",
+        "claude-home-skill",
+        "from home claude",
+    );
+
+    let outcome = load_skills_from_roots(skill_roots_from_layer_stack(&stack, Some(&home_folder)));
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    assert_eq!(
+        outcome.skills,
+        vec![SkillMetadata {
+            name: "claude-home-skill".to_string(),
+            description: "from home claude".to_string(),
             short_description: None,
             interface: None,
             dependencies: None,
@@ -1295,6 +1368,44 @@ async fn loads_skills_from_agents_dir_without_codex_dir() {
         vec![SkillMetadata {
             name: "agents-skill".to_string(),
             description: "from agents".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: normalized(&skill_path),
+            scope: SkillScope::Repo,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn loads_skills_from_claude_dir_without_codex_dir() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let repo_dir = tempfile::tempdir().expect("tempdir");
+    mark_as_git_repo(repo_dir.path());
+
+    let skill_path = write_skill_at(
+        &repo_dir
+            .path()
+            .join(REPO_ROOT_CONFIG_DIR_NAME_CLOUD)
+            .join(SKILLS_DIR_NAME),
+        "claude",
+        "claude-skill",
+        "from claude",
+    );
+    let cfg = make_config_for_cwd(&codex_home, repo_dir.path().to_path_buf()).await;
+
+    let outcome = load_skills_for_test(&cfg);
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    assert_eq!(
+        outcome.skills,
+        vec![SkillMetadata {
+            name: "claude-skill".to_string(),
+            description: "from claude".to_string(),
             short_description: None,
             interface: None,
             dependencies: None,
