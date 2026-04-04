@@ -67,8 +67,6 @@ jobs:
       matrix:
         include:
           - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-musl
-          - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
@@ -391,7 +389,7 @@ jobs:
             --package codex \
             --package codex-responses-api-proxy \
             --package codex-sdk \
-            --target x86_64-unknown-linux-musl \
+            --target x86_64-unknown-linux-gnu \
             --target x86_64-pc-windows-msvc
 
       - name: Create GitHub Release

@@ -3,23 +3,12 @@
 
 import { spawn } from "node:child_process";
 import { existsSync } from "fs";
-import { createRequire } from "node:module";
 import path from "path";
 import { fileURLToPath } from "url";
 
 // __dirname equivalent in ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const require = createRequire(import.meta.url);
-
-const PLATFORM_PACKAGE_BY_TARGET = {
-  "x86_64-unknown-linux-musl": "@ai-nd-co/codex-linux-x64",
-  "aarch64-unknown-linux-musl": "@ai-nd-co/codex-linux-arm64",
-  "x86_64-apple-darwin": "@ai-nd-co/codex-darwin-x64",
-  "aarch64-apple-darwin": "@ai-nd-co/codex-darwin-arm64",
-  "x86_64-pc-windows-msvc": "@ai-nd-co/codex-win32-x64",
-  "aarch64-pc-windows-msvc": "@ai-nd-co/codex-win32-arm64",
-};
 
 const { platform, arch } = process;
 
@@ -29,10 +18,10 @@ switch (platform) {
   case "android":
     switch (arch) {
       case "x64":
-        targetTriple = "x86_64-unknown-linux-musl";
+        targetTriple = "x86_64-unknown-linux-gnu";
         break;
       case "arm64":
-        targetTriple = "aarch64-unknown-linux-musl";
+        targetTriple = "aarch64-unknown-linux-gnu";
         break;
       default:
         break;
@@ -70,51 +59,9 @@ if (!targetTriple) {
   throw new Error(`Unsupported platform: ${platform} (${arch})`);
 }
 
-const platformPackage = PLATFORM_PACKAGE_BY_TARGET[targetTriple];
-if (!platformPackage) {
-  throw new Error(`Unsupported target triple: ${targetTriple}`);
-}
-
-const codexBinaryName = process.platform === "win32" ? "codex.exe" : "codex";
-const localVendorRoot = path.join(__dirname, "..", "vendor");
-const localBinaryPath = path.join(
-  localVendorRoot,
-  targetTriple,
-  "codex",
-  codexBinaryName,
-);
-
-let vendorRoot;
-try {
-  const packageJsonPath = require.resolve(`${platformPackage}/package.json`);
-  vendorRoot = path.join(path.dirname(packageJsonPath), "vendor");
-} catch {
-  if (existsSync(localBinaryPath)) {
-    vendorRoot = localVendorRoot;
-  } else {
-    const packageManager = detectPackageManager();
-    const updateCommand =
-      packageManager === "bun"
-        ? "bun install -g @ai-nd-co/codex@latest"
-        : "npm install -g @ai-nd-co/codex@latest";
-    throw new Error(
-      `Missing optional dependency ${platformPackage}. Reinstall Codex: ${updateCommand}`,
-    );
-  }
-}
-
-if (!vendorRoot) {
-  const packageManager = detectPackageManager();
-  const updateCommand =
-    packageManager === "bun"
-      ? "bun install -g @ai-nd-co/codex@latest"
-      : "npm install -g @ai-nd-co/codex@latest";
-  throw new Error(
-    `Missing optional dependency ${platformPackage}. Reinstall Codex: ${updateCommand}`,
-  );
-}
-
+const vendorRoot = path.join(__dirname, "..", "vendor");
 const archRoot = path.join(vendorRoot, targetTriple);
+const codexBinaryName = process.platform === "win32" ? "codex.exe" : "codex";
 const binaryPath = path.join(archRoot, "codex", codexBinaryName);
 
 // Use an asynchronous spawn instead of spawnSync so that Node is able to
