@@ -76,6 +76,7 @@ pub(crate) struct FooterProps {
     pub(crate) quit_shortcut_key: KeyBinding,
     pub(crate) context_window_percent: Option<i64>,
     pub(crate) context_window_used_tokens: Option<i64>,
+    pub(crate) context_window_total_tokens: Option<i64>,
     pub(crate) status_line_value: Option<Line<'static>>,
     pub(crate) status_line_enabled: bool,
     /// Active thread label shown when the footer is rendering contextual information instead of an
@@ -114,7 +115,7 @@ impl CollaborationModeIndicator {
         }
     }
 
-    fn styled_span(self, show_cycle_hint: bool) -> Span<'static> {
+    pub(crate) fn styled_span(self, show_cycle_hint: bool) -> Span<'static> {
         let label = self.label(show_cycle_hint);
         match self {
             CollaborationModeIndicator::Plan => Span::from(label).magenta(),
@@ -469,13 +470,6 @@ pub(crate) fn single_line_footer_layout(
     }
 
     (SummaryLeft::None, true)
-}
-
-pub(crate) fn mode_indicator_line(
-    indicator: Option<CollaborationModeIndicator>,
-    show_cycle_hint: bool,
-) -> Option<Line<'static>> {
-    indicator.map(|indicator| Line::from(vec![indicator.styled_span(show_cycle_hint)]))
 }
 
 fn right_aligned_x(area: Rect, content_width: u16) -> Option<u16> {
@@ -845,15 +839,41 @@ fn build_columns(entries: Vec<Line<'static>>) -> Vec<Line<'static>> {
         .collect()
 }
 
-pub(crate) fn context_window_line(percent: Option<i64>, used_tokens: Option<i64>) -> Line<'static> {
+pub(crate) fn context_window_line(
+    percent: Option<i64>,
+    used_tokens: Option<i64>,
+    total_tokens: Option<i64>,
+) -> Line<'static> {
+    if let Some(tokens) = used_tokens {
+        let used_fmt = format_tokens_compact(tokens);
+        if let Some(total) = total_tokens {
+            let total_fmt = format_tokens_compact(total);
+            let mut line = Line::from(vec![
+                Span::from(format!("{used_fmt} / {total_fmt} tokens")).dim(),
+            ]);
+            if let Some(percent) = percent {
+                let percent = percent.clamp(0, 100);
+                line.push_span(" · ".dim());
+                line.push_span(Span::from(format!("{percent}% context left")).dim());
+            }
+            return line;
+        }
+
+        if let Some(percent) = percent {
+            let percent = percent.clamp(0, 100);
+            return Line::from(vec![
+                Span::from(format!("{used_fmt} tokens")).dim(),
+                Span::from(" · ").dim(),
+                Span::from(format!("{percent}% context left")).dim(),
+            ]);
+        }
+
+        return Line::from(vec![Span::from(format!("{used_fmt} tokens")).dim()]);
+    }
+
     if let Some(percent) = percent {
         let percent = percent.clamp(0, 100);
         return Line::from(vec![Span::from(format!("{percent}% context left")).dim()]);
-    }
-
-    if let Some(tokens) = used_tokens {
-        let used_fmt = format_tokens_compact(tokens);
-        return Line::from(vec![Span::from(format!("{used_fmt} used")).dim()]);
     }
 
     Line::from(vec![Span::from("100% context left").dim()])
@@ -1109,15 +1129,49 @@ mod tests {
                     collaboration_mode_indicator
                 };
                 let available_width = area.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
+                fn truncate_status_line_with_mode_indicator(
+                    base: &Line<'static>,
+                    indicator: Option<CollaborationModeIndicator>,
+                    show_cycle_hint: bool,
+                    max_width: usize,
+                ) -> Line<'static> {
+                    if max_width == 0 {
+                        return Line::from("");
+                    }
+                    let Some(indicator) = indicator else {
+                        return truncate_line_with_ellipsis_if_overflow(base.clone(), max_width);
+                    };
+                    let suffix = Line::from(vec![
+                        Span::from(" · ").dim(),
+                        indicator.styled_span(show_cycle_hint),
+                    ]);
+                    let suffix_width = suffix.width();
+                    if suffix_width >= max_width {
+                        return truncate_line_with_ellipsis_if_overflow(
+                            Line::from(vec![indicator.styled_span(show_cycle_hint)]),
+                            max_width,
+                        );
+                    }
+                    let prefix_budget = max_width.saturating_sub(suffix_width);
+                    let mut out =
+                        truncate_line_with_ellipsis_if_overflow(base.clone(), prefix_budget);
+                    out.extend(suffix.spans);
+                    out
+                }
+                let status_line_base = passive_status_line.as_ref().map(|line| line.clone().dim());
                 let mut truncated_status_line = if status_line_active
                     && matches!(
                         props.mode,
                         FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
                     ) {
-                    passive_status_line
-                        .as_ref()
-                        .map(|line| line.clone().dim())
-                        .map(|line| truncate_line_with_ellipsis_if_overflow(line, available_width))
+                    status_line_base.as_ref().map(|base| {
+                        truncate_status_line_with_mode_indicator(
+                            base,
+                            collaboration_mode_indicator,
+                            false,
+                            available_width,
+                        )
+                    })
                 } else {
                     None
                 };
@@ -1135,24 +1189,11 @@ mod tests {
                         show_queue_hint,
                     )
                 };
-                let right_line = if status_line_active {
-                    let full = mode_indicator_line(collaboration_mode_indicator, show_cycle_hint);
-                    let compact = mode_indicator_line(
-                        collaboration_mode_indicator,
-                        /*show_cycle_hint*/ false,
-                    );
-                    let full_width = full.as_ref().map(|line| line.width() as u16).unwrap_or(0);
-                    if can_show_left_with_context(area, left_width, full_width) {
-                        full
-                    } else {
-                        compact
-                    }
-                } else {
-                    Some(context_window_line(
-                        props.context_window_percent,
-                        props.context_window_used_tokens,
-                    ))
-                };
+                let right_line = Some(context_window_line(
+                    props.context_window_percent,
+                    props.context_window_used_tokens,
+                    props.context_window_total_tokens,
+                ));
                 let right_width = right_line
                     .as_ref()
                     .map(|line| line.width() as u16)
@@ -1160,13 +1201,14 @@ mod tests {
                 if status_line_active
                     && let Some(max_left) = max_left_width_for_right(area, right_width)
                     && left_width > max_left
-                    && let Some(line) = passive_status_line
-                        .as_ref()
-                        .map(|line| line.clone().dim())
-                        .map(|line| {
-                            truncate_line_with_ellipsis_if_overflow(line, max_left as usize)
-                        })
+                    && let Some(base) = status_line_base.as_ref()
                 {
+                    let line = truncate_status_line_with_mode_indicator(
+                        base,
+                        collaboration_mode_indicator,
+                        false,
+                        max_left as usize,
+                    );
                     left_width = line.width() as u16;
                     truncated_status_line = Some(line);
                 }
@@ -1275,6 +1317,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
@@ -1293,6 +1336,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
@@ -1311,6 +1355,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
@@ -1329,6 +1374,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
@@ -1347,6 +1393,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
@@ -1365,6 +1412,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
@@ -1383,6 +1431,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
@@ -1401,6 +1450,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: Some(72),
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
@@ -1419,6 +1469,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: Some(123_456),
+                context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
@@ -1437,6 +1488,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                context_window_total_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
@@ -1453,6 +1505,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
             context_window_used_tokens: None,
+            context_window_total_tokens: None,
             status_line_value: None,
             status_line_enabled: false,
             active_agent_label: None,
@@ -1482,6 +1535,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
             context_window_used_tokens: None,
+            context_window_total_tokens: None,
             status_line_value: None,
             status_line_enabled: false,
             active_agent_label: None,
@@ -1504,6 +1558,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
             context_window_used_tokens: None,
+            context_window_total_tokens: None,
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
             active_agent_label: None,
@@ -1521,6 +1576,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
             context_window_used_tokens: None,
+            context_window_total_tokens: None,
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
             active_agent_label: None,
@@ -1538,6 +1594,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
             context_window_used_tokens: None,
+            context_window_total_tokens: None,
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
             active_agent_label: None,
@@ -1555,6 +1612,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: Some(50),
             context_window_used_tokens: None,
+            context_window_total_tokens: None,
             status_line_value: None, // command timed out / empty
             status_line_enabled: true,
             active_agent_label: None,
@@ -1577,6 +1635,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: Some(50),
             context_window_used_tokens: None,
+            context_window_total_tokens: None,
             status_line_value: None,
             status_line_enabled: false,
             active_agent_label: None,
@@ -1599,6 +1658,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: Some(50),
             context_window_used_tokens: None,
+            context_window_total_tokens: None,
             status_line_value: None,
             status_line_enabled: true,
             active_agent_label: None,
@@ -1622,6 +1682,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: Some(50),
             context_window_used_tokens: None,
+            context_window_total_tokens: None,
             status_line_value: Some(Line::from(
                 "Status line content that should truncate before the mode indicator".to_string(),
             )),
@@ -1646,6 +1707,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
             context_window_used_tokens: None,
+            context_window_total_tokens: None,
             status_line_value: None,
             status_line_enabled: false,
             active_agent_label: Some("Robie [explorer]".to_string()),
@@ -1663,6 +1725,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
             context_window_used_tokens: None,
+            context_window_total_tokens: None,
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
             active_agent_label: Some("Robie [explorer]".to_string()),
@@ -1683,6 +1746,7 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: Some(50),
             context_window_used_tokens: None,
+            context_window_total_tokens: None,
             status_line_value: Some(Line::from(
                 "Status line content that is definitely too long to fit alongside the mode label"
                     .to_string(),

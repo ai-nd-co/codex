@@ -114,7 +114,6 @@
 //! overall state machine, since it affects which transitions are even possible from a given UI
 //! state.
 //!
-use crate::bottom_pane::footer::mode_indicator_line;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::has_ctrl_or_alt;
@@ -317,6 +316,7 @@ pub(crate) struct ChatComposer {
     #[cfg(not(target_os = "linux"))]
     next_element_id: u64,
     context_window_used_tokens: Option<i64>,
+    context_window_total_tokens: Option<i64>,
     skills: Option<Vec<SkillMetadata>>,
     plugins: Option<Vec<PluginCapabilitySummary>>,
     connectors_snapshot: Option<ConnectorsSnapshot>,
@@ -439,6 +439,7 @@ impl ChatComposer {
             #[cfg(not(target_os = "linux"))]
             next_element_id: 0,
             context_window_used_tokens: None,
+            context_window_total_tokens: None,
             skills: None,
             plugins: None,
             connectors_snapshot: None,
@@ -2805,6 +2806,7 @@ impl ChatComposer {
             is_wsl,
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
+            context_window_total_tokens: self.context_window_total_tokens,
             status_line_value: self.status_line_value.clone(),
             status_line_enabled: self.status_line_enabled,
             active_agent_label: self.active_agent_label.clone(),
@@ -3288,13 +3290,21 @@ impl ChatComposer {
         self.is_task_running = running;
     }
 
-    pub(crate) fn set_context_window(&mut self, percent: Option<i64>, used_tokens: Option<i64>) {
-        if self.context_window_percent == percent && self.context_window_used_tokens == used_tokens
+    pub(crate) fn set_context_window(
+        &mut self,
+        percent: Option<i64>,
+        used_tokens: Option<i64>,
+        total_tokens: Option<i64>,
+    ) {
+        if self.context_window_percent == percent
+            && self.context_window_used_tokens == used_tokens
+            && self.context_window_total_tokens == total_tokens
         {
             return;
         }
         self.context_window_percent = percent;
         self.context_window_used_tokens = used_tokens;
+        self.context_window_total_tokens = total_tokens;
     }
 
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
@@ -3509,9 +3519,44 @@ impl ChatComposer {
                 } else {
                     None
                 };
+                fn truncate_status_line_with_mode_indicator(
+                    base: &Line<'static>,
+                    indicator: Option<CollaborationModeIndicator>,
+                    show_cycle_hint: bool,
+                    max_width: usize,
+                ) -> Line<'static> {
+                    if max_width == 0 {
+                        return Line::from("");
+                    }
+                    let Some(indicator) = indicator else {
+                        return truncate_line_with_ellipsis_if_overflow(base.clone(), max_width);
+                    };
+                    let suffix = Line::from(vec![
+                        Span::from(" · ").dim(),
+                        indicator.styled_span(show_cycle_hint),
+                    ]);
+                    let suffix_width = suffix.width();
+                    if suffix_width >= max_width {
+                        return truncate_line_with_ellipsis_if_overflow(
+                            Line::from(vec![indicator.styled_span(show_cycle_hint)]),
+                            max_width,
+                        );
+                    }
+                    let prefix_budget = max_width.saturating_sub(suffix_width);
+                    let mut out =
+                        truncate_line_with_ellipsis_if_overflow(base.clone(), prefix_budget);
+                    out.extend(suffix.spans);
+                    out
+                }
+                let status_line_base = combined_status_line.clone();
                 let mut truncated_status_line = if status_line_active {
-                    combined_status_line.as_ref().map(|line| {
-                        truncate_line_with_ellipsis_if_overflow(line.clone(), available_width)
+                    status_line_base.as_ref().map(|base| {
+                        truncate_status_line_with_mode_indicator(
+                            base,
+                            self.collaboration_mode_indicator,
+                            false,
+                            available_width,
+                        )
                     })
                 } else {
                     None
@@ -3542,33 +3587,23 @@ impl ChatComposer {
                         show_queue_hint,
                     )
                 };
-                let right_line = if status_line_active {
-                    let full =
-                        mode_indicator_line(self.collaboration_mode_indicator, show_cycle_hint);
-                    let compact = mode_indicator_line(
-                        self.collaboration_mode_indicator,
-                        /*show_cycle_hint*/ false,
-                    );
-                    let full_width = full.as_ref().map(|l| l.width() as u16).unwrap_or(0);
-                    if can_show_left_with_context(hint_rect, left_width, full_width) {
-                        full
-                    } else {
-                        compact
-                    }
-                } else {
-                    Some(context_window_line(
-                        footer_props.context_window_percent,
-                        footer_props.context_window_used_tokens,
-                    ))
-                };
+                let right_line = Some(context_window_line(
+                    footer_props.context_window_percent,
+                    footer_props.context_window_used_tokens,
+                    footer_props.context_window_total_tokens,
+                ));
                 let right_width = right_line.as_ref().map(|l| l.width() as u16).unwrap_or(0);
                 if status_line_active
                     && let Some(max_left) = max_left_width_for_right(hint_rect, right_width)
                     && left_width > max_left
-                    && let Some(line) = combined_status_line.as_ref().map(|line| {
-                        truncate_line_with_ellipsis_if_overflow(line.clone(), max_left as usize)
-                    })
+                    && let Some(base) = status_line_base.as_ref()
                 {
+                    let line = truncate_status_line_with_mode_indicator(
+                        base,
+                        self.collaboration_mode_indicator,
+                        false,
+                        max_left as usize,
+                    );
                     left_width = line.width() as u16;
                     truncated_status_line = Some(line);
                 }
@@ -4127,7 +4162,11 @@ mod tests {
         ) {
             composer.set_collaboration_modes_enabled(/*enabled*/ true);
             composer.set_collaboration_mode_indicator(indicator);
-            composer.set_context_window(Some(context_percent), /*used_tokens*/ None);
+            composer.set_context_window(
+                Some(context_percent),
+                /*used_tokens*/ None,
+                /*total_tokens*/ None,
+            );
         }
 
         // Empty textarea, agent idle: shortcuts hint can show, and cycle hint is hidden.

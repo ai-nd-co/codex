@@ -1,5 +1,6 @@
 ---
 source: tui/src/bottom_pane/footer.rs
+assertion_line: 1297
 expression: terminal.backend()
 ---
-"  Status line content that … Plan mode  "
+"  Status… · Plan mode 50% context left  "
