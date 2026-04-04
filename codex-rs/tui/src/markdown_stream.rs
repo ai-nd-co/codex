@@ -133,6 +133,14 @@ fn truncate_incomplete_table_source(source: &str) -> Option<String> {
     }
 
     let table_tail = &lines[idx..];
+    let first_tail = strip_table_prefix(table_tail[0]);
+    let next_tail = table_tail
+        .get(1)
+        .map(|line| strip_table_prefix(line))
+        .unwrap_or("");
+    if !is_table_block_start(first_tail, next_tail) {
+        return None;
+    }
     if table_tail
         .iter()
         .any(|line| is_table_separator(strip_table_prefix(line)))
@@ -154,15 +162,31 @@ fn is_table_line(line: &str) -> bool {
     if trimmed.is_empty() || !trimmed.contains('|') {
         return false;
     }
-    is_table_separator(trimmed) || is_table_row(trimmed)
+    is_table_separator(trimmed) || is_table_row_candidate(trimmed)
 }
 
-fn is_table_row(line: &str) -> bool {
+fn is_table_row_candidate(line: &str) -> bool {
     let trimmed = line.trim();
     if trimmed.is_empty() || !trimmed.contains('|') {
         return false;
     }
     !is_table_separator(trimmed)
+}
+
+fn is_table_block_start(line: &str, next_line: &str) -> bool {
+    let trimmed = line.trim();
+    if !is_table_row_candidate(trimmed) {
+        return false;
+    }
+
+    trimmed.starts_with('|')
+        || trimmed.ends_with('|')
+        || pipe_count(trimmed) >= 2
+        || is_table_separator(next_line.trim())
+}
+
+fn pipe_count(line: &str) -> usize {
+    line.chars().filter(|ch| *ch == '|').count()
 }
 
 fn is_table_separator(line: &str) -> bool {
@@ -358,6 +382,29 @@ mod tests {
                 && lines.iter().any(|line| line.starts_with('└')),
             "expected a rendered box table once the separator and row arrive, got: {lines:?}"
         );
+
+        crate::markdown_render::set_tables_enabled(prev_tables_enabled);
+    }
+
+    #[tokio::test]
+    async fn commit_complete_lines_does_not_buffer_pipe_prose() {
+        let prev_tables_enabled = crate::markdown_render::tables_enabled();
+        crate::markdown_render::set_tables_enabled(true);
+
+        let mut c = super::MarkdownStreamCollector::new(/*width*/ None, &super::test_cwd());
+        c.push_delta("foo | bar\n");
+        let out = c.commit_complete_lines();
+        let lines: Vec<String> = out
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.clone())
+                    .collect::<String>()
+            })
+            .collect();
+
+        assert_eq!(lines, vec!["foo | bar".to_string()]);
 
         crate::markdown_render::set_tables_enabled(prev_tables_enabled);
     }

@@ -232,7 +232,11 @@ fn normalize_table_blocks(input: &str) -> String {
             continue;
         };
 
-        if !is_pipe_table_line(content) {
+        let next_content = lines
+            .get(idx + 1)
+            .map(|next| strip_prefix(next, strip_len))
+            .unwrap_or_default();
+        if !is_pipe_table_block_start(content, next_content.as_str()) {
             out.push(line.to_string());
             idx += 1;
             continue;
@@ -253,7 +257,7 @@ fn normalize_table_blocks(input: &str) -> String {
                 continue;
             }
             let stripped = strip_prefix(line, strip_len);
-            if is_pipe_table_line(&stripped) || is_pipe_table_separator(&stripped) {
+            if is_pipe_table_row_candidate(&stripped) || is_pipe_table_separator(&stripped) {
                 rows.push(stripped);
                 idx += 1;
                 continue;
@@ -340,8 +344,28 @@ fn strip_prefix(line: &str, strip_len: usize) -> String {
 }
 
 fn is_pipe_table_line(line: &str) -> bool {
+    is_pipe_table_row_candidate(line)
+}
+
+fn is_pipe_table_row_candidate(line: &str) -> bool {
     let trimmed = line.trim();
     trimmed.contains('|') && !trimmed.is_empty() && !is_pipe_table_separator(trimmed)
+}
+
+fn is_pipe_table_block_start(line: &str, next_line: &str) -> bool {
+    let trimmed = line.trim();
+    if !is_pipe_table_row_candidate(trimmed) {
+        return false;
+    }
+
+    trimmed.starts_with('|')
+        || trimmed.ends_with('|')
+        || pipe_count(trimmed) >= 2
+        || is_pipe_table_separator(next_line.trim())
+}
+
+fn pipe_count(line: &str) -> usize {
+    line.chars().filter(|ch| *ch == '|').count()
 }
 
 fn is_pipe_table_separator(line: &str) -> bool {
