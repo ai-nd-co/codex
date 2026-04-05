@@ -159,14 +159,27 @@ def prepare_staging_dir(staging_dir: Path | None) -> tuple[Path, bool]:
     return temp_dir, True
 
 
+def list_relative_files(root: Path) -> set[Path]:
+    return {path.relative_to(root) for path in root.rglob("*") if path.is_file()}
+
+
+def validate_staged_codex_bin(staging_dir: Path) -> None:
+    source_bin = CODEX_CLI_ROOT / "bin"
+    staged_bin = staging_dir / "bin"
+
+    missing_files = sorted(
+        str(path).replace("\\", "/")
+        for path in (list_relative_files(source_bin) - list_relative_files(staged_bin))
+    )
+    if missing_files:
+        missing_str = ", ".join(missing_files)
+        raise RuntimeError(f"Staged codex package is missing bin files: {missing_str}")
+
+
 def stage_sources(staging_dir: Path, version: str, package: str) -> None:
     if package == "codex":
-        bin_dir = staging_dir / "bin"
-        bin_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(CODEX_CLI_ROOT / "bin" / "codex.js", bin_dir / "codex.js")
-        rg_manifest = CODEX_CLI_ROOT / "bin" / "rg"
-        if rg_manifest.exists():
-            shutil.copy2(rg_manifest, bin_dir / "rg")
+        shutil.copytree(CODEX_CLI_ROOT / "bin", staging_dir / "bin", dirs_exist_ok=True)
+        validate_staged_codex_bin(staging_dir)
 
         readme_src = REPO_ROOT / "README.md"
         if readme_src.exists():

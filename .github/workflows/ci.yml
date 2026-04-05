@@ -33,6 +33,9 @@ jobs:
       - name: Test codex-cli launcher runtime staging
         run: node --test codex-cli/tests/runtime.test.js
 
+      - name: Test codex npm package staging
+        run: python3 codex-cli/scripts/test_build_npm_package.py
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
