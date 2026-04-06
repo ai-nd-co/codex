@@ -689,7 +689,10 @@ where
         table_output.load_preset(UTF8_TABLE_PRESET);
         table_output.set_content_arrangement(ContentArrangement::Dynamic);
 
-        let max_width = self.wrap_width.unwrap_or(TABLE_MAX_WIDTH_FALLBACK);
+        let max_width = self
+            .wrap_width
+            .or_else(terminal_width_cols)
+            .unwrap_or(TABLE_MAX_WIDTH_FALLBACK);
         let prefix_width: usize = self
             .prefix_spans(self.pending_marker_line)
             .iter()
@@ -1143,6 +1146,13 @@ where
 fn is_box_table_line(text: &str) -> bool {
     let trimmed = text.trim_start();
     matches!(trimmed.chars().next(), Some('┌' | '├' | '└' | '│'))
+}
+
+fn terminal_width_cols() -> Option<usize> {
+    match crossterm::terminal::size() {
+        Ok((cols, _rows)) => Some(cols as usize),
+        Err(_) => None,
+    }
 }
 
 fn is_local_path_like_link(dest_url: &str) -> bool {

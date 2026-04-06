@@ -106,6 +106,34 @@ fn unicode_tables_respect_render_width_cap() {
 }
 
 #[test]
+fn unicode_tables_use_terminal_width_when_wrap_width_missing() {
+    let prev_tables_enabled = crate::markdown_render::tables_enabled();
+    crate::markdown_render::set_tables_enabled(true);
+
+    let md = "| A | B |\n| --- | --- |\n| This is a very long cell | Another very long cell |\n";
+    let text = crate::markdown_render::render_markdown_text_with_width(md, None);
+
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.clone())
+                .collect::<String>()
+        })
+        .collect();
+
+    assert!(
+        lines.iter().any(|line| line.starts_with('┌'))
+            && lines.iter().any(|line| line.starts_with('└')),
+        "expected a box table rendered from markdown; got: {lines:?}"
+    );
+
+    crate::markdown_render::set_tables_enabled(prev_tables_enabled);
+}
+
+#[test]
 fn pipe_prose_does_not_render_as_table() {
     let prev_tables_enabled = crate::markdown_render::tables_enabled();
     crate::markdown_render::set_tables_enabled(true);

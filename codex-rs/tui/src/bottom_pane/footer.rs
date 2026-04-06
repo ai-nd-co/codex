@@ -1477,6 +1477,25 @@ mod tests {
         );
 
         snapshot_footer(
+            "footer_context_tokens_used_total_and_percent",
+            FooterProps {
+                mode: FooterMode::ComposerEmpty,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                is_task_running: false,
+                collaboration_modes_enabled: false,
+                is_wsl: false,
+                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+                context_window_percent: Some(30),
+                context_window_used_tokens: Some(12_700),
+                context_window_total_tokens: Some(13_000),
+                status_line_value: None,
+                status_line_enabled: false,
+                active_agent_label: None,
+            },
+        );
+
+        snapshot_footer(
             "footer_composer_has_draft_queue_hint_enabled",
             FooterProps {
                 mode: FooterMode::ComposerHasDraft,
