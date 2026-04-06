@@ -4380,7 +4380,7 @@ pub enum ThreadItem {
     #[ts(rename_all = "camelCase")]
     ContextCompaction {
         id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
         #[ts(optional)]
         summary: Option<String>,
     },
@@ -8322,5 +8322,26 @@ mod tests {
         let serialized_without_override =
             serde_json::to_value(&without_override).expect("params should serialize");
         assert_eq!(serialized_without_override.get("serviceTier"), None);
+    }
+
+    #[test]
+    fn context_compaction_thread_item_preserves_explicit_null_summary() {
+        let item = ThreadItem::ContextCompaction {
+            id: "compact-1".to_string(),
+            summary: None,
+        };
+
+        let serialized = serde_json::to_value(&item).expect("item should serialize");
+        assert_eq!(serialized.get("summary"), Some(&serde_json::Value::Null));
+
+        let round_tripped: ThreadItem =
+            serde_json::from_value(serialized).expect("item should deserialize");
+        assert_eq!(
+            round_tripped,
+            ThreadItem::ContextCompaction {
+                id: "compact-1".to_string(),
+                summary: None,
+            }
+        );
     }
 }
