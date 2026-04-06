@@ -842,11 +842,14 @@ impl ThreadHistoryBuilder {
         });
     }
 
-    fn handle_context_compacted(&mut self, _payload: &ContextCompactedEvent) {
+    fn handle_context_compacted(&mut self, payload: &ContextCompactedEvent) {
         let id = self.next_item_id();
         self.ensure_turn()
             .items
-            .push(ThreadItem::ContextCompaction { id });
+            .push(ThreadItem::ContextCompaction {
+                id,
+                summary: payload.summary.clone(),
+            });
     }
 
     fn handle_entered_review_mode(&mut self, payload: &codex_protocol::protocol::ReviewRequest) {
@@ -2829,5 +2832,34 @@ mod tests {
         let turns = build_turns_from_rollout_items(&items);
         assert_eq!(turns.len(), 1);
         assert!(turns[0].items.is_empty());
+    }
+
+    #[test]
+    fn preserves_context_compaction_summary_from_legacy_event() {
+        let items = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-a".into(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            })),
+            RolloutItem::EventMsg(EventMsg::ContextCompacted(ContextCompactedEvent {
+                summary: Some("SUMMARY_ONLY_CONTEXT".into()),
+            })),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "turn-a".into(),
+                last_agent_message: None,
+            })),
+        ];
+
+        let turns = build_turns_from_rollout_items(&items);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].items.len(), 1);
+        assert_eq!(
+            turns[0].items[0],
+            ThreadItem::ContextCompaction {
+                id: turns[0].items[0].id().to_string(),
+                summary: Some("SUMMARY_ONLY_CONTEXT".into()),
+            }
+        );
     }
 }

@@ -247,8 +247,17 @@ async fn run_compact_task_inner(
         .await;
     sess.recompute_token_usage(&turn_context).await;
 
-    sess.emit_turn_item_completed(&turn_context, compaction_item)
-        .await;
+    let TurnItem::ContextCompaction(compaction_item) = compaction_item else {
+        unreachable!("compaction turn item should stay a context compaction item");
+    };
+    sess.emit_turn_item_completed(
+        &turn_context,
+        TurnItem::ContextCompaction(ContextCompactionItem {
+            id: compaction_item.id,
+            summary: Some(summary_text.clone()),
+        }),
+    )
+    .await;
     let warning = EventMsg::Warning(WarningEvent {
         message: "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.".to_string(),
     });
@@ -400,8 +409,17 @@ async fn run_smart_compact_task_inner(
         .await;
     sess.recompute_token_usage(&turn_context).await;
 
-    sess.emit_turn_item_completed(&turn_context, compaction_item)
-        .await;
+    let TurnItem::ContextCompaction(compaction_item) = compaction_item else {
+        unreachable!("compaction turn item should stay a context compaction item");
+    };
+    sess.emit_turn_item_completed(
+        &turn_context,
+        TurnItem::ContextCompaction(ContextCompactionItem {
+            id: compaction_item.id,
+            summary: Some(summary_text.clone()),
+        }),
+    )
+    .await;
     let warning = EventMsg::Warning(WarningEvent {
         message: "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.".to_string(),
     });

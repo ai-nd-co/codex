@@ -463,6 +463,69 @@ async fn smart_compact_uses_smart_compact_prompt() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn smart_compact_emits_summary_in_item_and_legacy_event() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed("r1"),
+    ]);
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", SUMMARY_TEXT),
+        ev_completed("r2"),
+    ]);
+    mount_sse_sequence(&server, vec![sse1, sse2]).await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+    });
+    let test = builder.build(&server).await.unwrap();
+    let codex = test.codex.clone();
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello world".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::SmartCompact).await.unwrap();
+
+    let completed_item = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            item: TurnItem::ContextCompaction(item),
+            ..
+        }) => Some(item.clone()),
+        _ => None,
+    })
+    .await;
+    let legacy_event = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ContextCompacted(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let expected_summary = summary_with_prefix(SUMMARY_TEXT);
+    assert_eq!(
+        completed_item.summary.as_deref(),
+        Some(expected_summary.as_str())
+    );
+    assert_eq!(
+        legacy_event.summary.as_deref(),
+        Some(expected_summary.as_str())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn manual_compact_stays_standard_even_with_smart_compact_feature_enabled() {
     skip_if_no_network!();
 
