@@ -2587,7 +2587,7 @@ impl ChatWidget {
     }
 
     fn context_used_tokens(&self, info: &TokenUsageInfo) -> Option<i64> {
-        Some(info.total_token_usage.tokens_in_context_window())
+        Some(info.last_token_usage.tokens_in_context_window())
     }
 
     fn context_total_tokens(&self, info: &TokenUsageInfo) -> Option<i64> {
