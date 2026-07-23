@@ -9,6 +9,7 @@ use crate::permissions_toml::PermissionsToml;
 use crate::profile_toml::ConfigProfile;
 use crate::types::AnalyticsConfigToml;
 use crate::types::ApprovalsReviewer;
+use crate::types::ApprovalsToml;
 use crate::types::AppsConfigToml;
 use crate::types::AuthCredentialsStoreMode;
 use crate::types::FeedbackConfigToml;
@@ -173,6 +174,11 @@ pub struct ConfigToml {
     /// been escalated. This does not disable separate safety checks such as
     /// ARC.
     pub approvals_reviewer: Option<ApprovalsReviewer>,
+
+    /// Force approval prompts for matching shell-like commands, even when
+    /// approval prompting would otherwise be disabled.
+    #[serde(default)]
+    pub approvals: Option<ApprovalsToml>,
 
     /// Optional policy instructions for the guardian auto-reviewer.
     #[serde(default)]

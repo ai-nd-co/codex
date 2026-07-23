@@ -136,6 +136,8 @@ struct ParsedSkillFrontmatter {
 
 const SKILLS_FILENAME: &str = "SKILL.md";
 const AGENTS_DIR_NAME: &str = ".agents";
+const CODEX_DIR_NAME: &str = ".codex";
+const CLAUDE_DIR_NAME: &str = ".claude";
 const SKILLS_METADATA_DIR: &str = "agents";
 const SKILLS_METADATA_FILENAME: &str = "openai.yaml";
 const SKILLS_DIR_NAME: &str = "skills";
@@ -340,16 +342,19 @@ fn skill_roots_from_layer_stack_inner(
                     plugin_root: None,
                 });
 
-                // `$HOME/.agents/skills` (user-installed skills).
+                // `$HOME/.agents/skills` and `$HOME/.claude/skills`
+                // (compat user-installed skills).
                 if let Some(home_dir) = home_dir {
-                    roots.push(SkillRoot {
-                        path: home_dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME),
-                        scope: SkillScope::User,
-                        file_system: Arc::clone(&LOCAL_FS),
-                        plugin_id: None,
-                        plugin_namespace: None,
-                        plugin_root: None,
-                    });
+                    for skills_home in [AGENTS_DIR_NAME, CLAUDE_DIR_NAME] {
+                        roots.push(SkillRoot {
+                            path: home_dir.join(skills_home).join(SKILLS_DIR_NAME),
+                            scope: SkillScope::User,
+                            file_system: Arc::clone(&LOCAL_FS),
+                            plugin_id: None,
+                            plugin_namespace: None,
+                            plugin_root: None,
+                        });
+                    }
                 }
 
                 // Embedded system skills are cached under `$CODEX_HOME/skills/.system` and are a
@@ -404,28 +409,54 @@ async fn repo_agents_skill_roots(
             async move {
                 let agents_skills = dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME);
                 let agents_skills_uri = PathUri::from_abs_path(&agents_skills);
-                let result = fs.get_metadata(&agents_skills_uri, /*sandbox*/ None).await;
-                (agents_skills, result)
+                let agents_result = fs.get_metadata(&agents_skills_uri, /*sandbox*/ None).await;
+
+                let codex_skills = dir.join(CODEX_DIR_NAME).join(SKILLS_DIR_NAME);
+                let codex_skills_uri = PathUri::from_abs_path(&codex_skills);
+                let codex_exists = match fs.get_metadata(&codex_skills_uri, /*sandbox*/ None).await
+                {
+                    Ok(metadata) => metadata.is_directory,
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => false,
+                    Err(err) => {
+                        tracing::warn!(
+                            "failed to stat repo skills shadow root {}: {err:#}",
+                            codex_skills.display()
+                        );
+                        false
+                    }
+                };
+
+                let mut results = Vec::with_capacity(2);
+                results.push((agents_skills, agents_result));
+                if !codex_exists {
+                    let claude_skills = dir.join(CLAUDE_DIR_NAME).join(SKILLS_DIR_NAME);
+                    let claude_skills_uri = PathUri::from_abs_path(&claude_skills);
+                    let claude_result = fs.get_metadata(&claude_skills_uri, /*sandbox*/ None).await;
+                    results.push((claude_skills, claude_result));
+                }
+                results
             }
         })
         .buffered(MAX_CONCURRENT_ANCESTOR_PROBES);
-    while let Some((agents_skills, result)) = results.next().await {
-        match result {
-            Ok(metadata) if metadata.is_directory => roots.push(SkillRoot {
-                path: agents_skills,
-                scope: SkillScope::Repo,
-                file_system: Arc::clone(&fs),
-                plugin_id: None,
-                plugin_namespace: None,
-                plugin_root: None,
-            }),
-            Ok(_) => {}
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-            Err(err) => {
-                tracing::warn!(
-                    "failed to stat repo skills root {}: {err:#}",
-                    agents_skills.display()
-                );
+    while let Some(candidate_results) = results.next().await {
+        for (compat_skills, result) in candidate_results {
+            match result {
+                Ok(metadata) if metadata.is_directory => roots.push(SkillRoot {
+                    path: compat_skills,
+                    scope: SkillScope::Repo,
+                    file_system: Arc::clone(&fs),
+                    plugin_id: None,
+                    plugin_namespace: None,
+                    plugin_root: None,
+                }),
+                Ok(_) => {}
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    tracing::warn!(
+                        "failed to stat repo skills root {}: {err:#}",
+                        compat_skills.display()
+                    );
+                }
             }
         }
     }

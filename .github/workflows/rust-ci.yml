@@ -176,19 +176,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: Linux
-            runner: ubuntu-24.04
-            timeout_minutes: 30
-          - name: macOS
-            runner: macos-15-xlarge
-            timeout_minutes: 30
-          - name: Windows
-            runner: windows-x64
-            timeout_minutes: 30
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
+        include: ${{ fromJSON((github.repository == 'openai/codex' || vars.CODEX_ENABLE_BAZEL_WINDOWS == 'true')
+          && format('[{{"name":"Linux","runner":"ubuntu-24.04","timeout_minutes":30}},{{"name":"macOS","runner":"macos-15-xlarge","timeout_minutes":30}},{{"name":"Windows","runner":"windows-x64","timeout_minutes":30,"runs_on":{{"group":"{0}-runners","labels":"{0}-windows-x64"}}}}]', github.event.repository.name)
+          || '[{"name":"Linux","runner":"ubuntu-24.04","timeout_minutes":30},{"name":"macOS","runner":"macos-15-xlarge","timeout_minutes":30}]') }}
     steps:
       - name: Check whether argument comment lint should run
         id: argument_comment_lint_gate

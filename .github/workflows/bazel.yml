@@ -131,6 +131,7 @@ jobs:
         uses: ./.github/actions/check-clean-worktree
 
   test-windows-shard:
+    if: ${{ github.repository == 'openai/codex' || vars.CODEX_ENABLE_BAZEL_WINDOWS == 'true' }}
     # Split the Windows Bazel test leg across separate Windows hosts. Jobs with
     # BuildBuddy credentials use Linux RBE for build actions; test execution
     # remains on a Windows runner.
@@ -241,7 +242,7 @@ jobs:
   test-windows:
     # Preserve the existing required-check surface while the real work happens
     # in the sharded Windows jobs above.
-    if: always()
+    if: ${{ always() && (github.repository == 'openai/codex' || vars.CODEX_ENABLE_BAZEL_WINDOWS == 'true') }}
     needs: test-windows-shard
     runs-on: ubuntu-24.04
     name: Bazel test on windows-latest for x86_64-pc-windows-gnullvm
@@ -259,7 +260,7 @@ jobs:
     # Native Windows Bazel tests are slower and frequently approach the
     # 30-minute PR budget. Run this only for post-merge commits to main and give
     # it a larger timeout.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: ${{ (github.repository == 'openai/codex' || vars.CODEX_ENABLE_BAZEL_WINDOWS == 'true') && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     timeout-minutes: 40
     runs-on:
       group: ${{ github.event.repository.name }}-runners
@@ -340,20 +341,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # Keep Linux lint coverage on x64 and add the arm64 macOS path that
-          # the Bazel test job already exercises. Add Windows gnullvm as well
-          # so PRs get Bazel-native lint signal on the same Windows toolchain
-          # that the Bazel test job uses.
-          - os: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-          - os: macos-15-xlarge
-            target: aarch64-apple-darwin
-          - os: windows-latest
-            target: x86_64-pc-windows-gnullvm
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
+        include: ${{ fromJSON((github.repository == 'openai/codex' || vars.CODEX_ENABLE_BAZEL_WINDOWS == 'true')
+          && format('[{{"os":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"}},{{"os":"macos-15-xlarge","target":"aarch64-apple-darwin"}},{{"os":"windows-latest","target":"x86_64-pc-windows-gnullvm","runs_on":{{"group":"{0}-runners","labels":"{0}-windows-x64"}}}}]', github.event.repository.name)
+          || '[{"os":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"},{"os":"macos-15-xlarge","target":"aarch64-apple-darwin"}]') }}
     runs-on: ${{ matrix.runs_on || matrix.os }}
     name: Bazel clippy on ${{ matrix.os }} for ${{ matrix.target }}
     environment:
@@ -444,16 +434,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-          - os: macos-15-xlarge
-            target: aarch64-apple-darwin
-          - os: windows-latest
-            target: x86_64-pc-windows-gnullvm
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
+        include: ${{ fromJSON((github.repository == 'openai/codex' || vars.CODEX_ENABLE_BAZEL_WINDOWS == 'true')
+          && format('[{{"os":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"}},{{"os":"macos-15-xlarge","target":"aarch64-apple-darwin"}},{{"os":"windows-latest","target":"x86_64-pc-windows-gnullvm","runs_on":{{"group":"{0}-runners","labels":"{0}-windows-x64"}}}}]', github.event.repository.name)
+          || '[{"os":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"},{"os":"macos-15-xlarge","target":"aarch64-apple-darwin"}]') }}
     runs-on: ${{ matrix.runs_on || matrix.os }}
     name: Verify release build on ${{ matrix.os }} for ${{ matrix.target }}
     environment:

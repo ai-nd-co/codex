@@ -47,9 +47,11 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Stage npm package
+        if: ${{ github.repository == 'openai/codex' || vars.CODEX_ENABLE_REPO_CHECKS_NPM_STAGING == 'true' }}
         id: stage_npm_package
         env:
           GH_TOKEN: ${{ github.token }}
+          CODEX_REPO_CHECKS_NPM_STAGING_WORKFLOW_RUN_ID: ${{ vars.CODEX_REPO_CHECKS_NPM_STAGING_WORKFLOW_RUN_ID }}
         run: |
           set -euo pipefail
           # Use a recent successful rust-release run that published the full
@@ -57,10 +59,16 @@ jobs:
           # Passing the workflow URL directly avoids relying on old rust-v*
           # branches remaining discoverable via `gh run list --branch ...`.
           CODEX_VERSION=0.133.0-alpha.4
-          WORKFLOW_URL="https://github.com/openai/codex/actions/runs/26201494185"
+          if [[ "${GITHUB_REPOSITORY}" == "openai/codex" ]]; then
+            WORKFLOW_URL="https://github.com/openai/codex/actions/runs/26201494185"
+          else
+            : "${CODEX_REPO_CHECKS_NPM_STAGING_WORKFLOW_RUN_ID:?Set CODEX_REPO_CHECKS_NPM_STAGING_WORKFLOW_RUN_ID to a successful fork rust-release run ID before enabling CODEX_ENABLE_REPO_CHECKS_NPM_STAGING.}"
+            WORKFLOW_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${CODEX_REPO_CHECKS_NPM_STAGING_WORKFLOW_RUN_ID}"
+          fi
           OUTPUT_DIR="${RUNNER_TEMP}"
           python3 ./scripts/stage_npm_packages.py \
             --release-version "$CODEX_VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
             --workflow-url "$WORKFLOW_URL" \
             --package codex \
             --output-dir "$OUTPUT_DIR"
@@ -68,6 +76,7 @@ jobs:
           echo "pack_output=$PACK_OUTPUT" >> "$GITHUB_OUTPUT"
 
       - name: Upload staged npm package artifact
+        if: ${{ github.repository == 'openai/codex' || vars.CODEX_ENABLE_REPO_CHECKS_NPM_STAGING == 'true' }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: codex-npm-staging

@@ -8,6 +8,7 @@ use arc_swap::ArcSwap;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
+use codex_config::config_toml::ConfigToml;
 use codex_execpolicy::AmendError;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Error as ExecPolicyRuleError;
@@ -27,6 +28,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_shell_command::is_dangerous_command::DangerousCommandMatch;
 use codex_shell_command::is_dangerous_command::dangerous_command_match;
 use codex_shell_command::is_safe_command::is_known_safe_command;
+use regex_lite::Regex;
 use thiserror::Error;
 use tokio::fs;
 use tokio::sync::Semaphore;
@@ -199,6 +201,8 @@ pub(crate) fn child_uses_parent_exec_policy(parent_config: &Config, child_config
                 .ignore_user_and_project_exec_policy_rules()
         && parent_config.config_layer_stack.requirements().exec_policy
             == child_config.config_layer_stack.requirements().exec_policy
+        && always_prompt_regex_patterns(&parent_config.config_layer_stack)
+            == always_prompt_regex_patterns(&child_config.config_layer_stack)
 }
 
 fn is_policy_match(rule_match: &RuleMatch) -> bool {
@@ -277,6 +281,7 @@ pub enum ExecPolicyUpdateError {
 pub(crate) struct ExecPolicyManager {
     policy: ArcSwap<Policy>,
     update_lock: Semaphore,
+    always_prompt_regexes: Arc<Vec<Regex>>,
 }
 
 pub(crate) struct ExecApprovalRequest<'a> {
@@ -293,6 +298,18 @@ impl ExecPolicyManager {
         Self {
             policy: ArcSwap::from(policy),
             update_lock: Semaphore::new(/*permits*/ 1),
+            always_prompt_regexes: Arc::new(Vec::new()),
+        }
+    }
+
+    pub(crate) fn new_with_always_prompt_regexes(
+        policy: Arc<Policy>,
+        always_prompt_regexes: Arc<Vec<Regex>>,
+    ) -> Self {
+        Self {
+            policy: ArcSwap::from(policy),
+            update_lock: Semaphore::new(/*permits*/ 1),
+            always_prompt_regexes,
         }
     }
 
@@ -302,7 +319,10 @@ impl ExecPolicyManager {
         if let Some(err) = warning.as_ref() {
             tracing::warn!("failed to parse rules: {err}");
         }
-        Ok(Self::new(Arc::new(policy)))
+        Ok(Self::new_with_always_prompt_regexes(
+            Arc::new(policy),
+            load_always_prompt_regexes(config_stack),
+        ))
     }
 
     pub(crate) fn current(&self) -> Arc<Policy> {
@@ -321,6 +341,15 @@ impl ExecPolicyManager {
             sandbox_permissions,
             prefix_rule,
         } = req;
+        let rendered = shlex_try_join(command.iter().map(String::as_str))
+            .unwrap_or_else(|_| command.join(" "));
+        let always_prompt_regex_reason = self
+            .always_prompt_regexes
+            .iter()
+            .any(|regex| regex.is_match(&rendered))
+            .then(|| {
+                format!("`{rendered}` requires approval (matched approvals.always_prompt_regex)")
+            });
         let exec_policy = self.current();
         let ExecPolicyCommands {
             commands,
@@ -379,6 +408,12 @@ impl ExecPolicyManager {
                 ),
             },
             Decision::Prompt => {
+                if let Some(reason) = always_prompt_regex_reason.clone() {
+                    return ExecApprovalRequirement::NeedsApproval {
+                        reason: Some(reason),
+                        proposed_execpolicy_amendment: None,
+                    };
+                }
                 let prompt_is_rule = evaluation.matched_rules.iter().any(|rule_match| {
                     is_policy_match(rule_match) && rule_match.decision() == Decision::Prompt
                 });
@@ -410,27 +445,39 @@ impl ExecPolicyManager {
                     },
                 }
             }
-            Decision::Allow => ExecApprovalRequirement::Skip {
-                // Bypass sandbox only when every parsed command segment is
-                // explicitly allowed by execpolicy.
-                bypass_sandbox: commands.iter().all(|command| {
-                    exec_policy
-                        .matches_for_command_with_options(
-                            command,
-                            /*heuristics_fallback*/ None,
-                            &match_options,
-                        )
-                        .iter()
-                        .any(|rule_match| {
-                            is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
-                        })
-                }),
-                proposed_execpolicy_amendment: if auto_amendment_allowed {
-                    try_derive_execpolicy_amendment_for_allow_rules(&evaluation.matched_rules)
+            Decision::Allow => {
+                if let Some(reason) = always_prompt_regex_reason {
+                    ExecApprovalRequirement::NeedsApproval {
+                        reason: Some(reason),
+                        proposed_execpolicy_amendment: None,
+                    }
                 } else {
-                    None
-                },
-            },
+                    ExecApprovalRequirement::Skip {
+                        // Bypass sandbox only when every parsed command segment is
+                        // explicitly allowed by execpolicy.
+                        bypass_sandbox: commands.iter().all(|command| {
+                            exec_policy
+                                .matches_for_command_with_options(
+                                    command,
+                                    /*heuristics_fallback*/ None,
+                                    &match_options,
+                                )
+                                .iter()
+                                .any(|rule_match| {
+                                    is_policy_match(rule_match)
+                                        && rule_match.decision() == Decision::Allow
+                                })
+                        }),
+                        proposed_execpolicy_amendment: if auto_amendment_allowed {
+                            try_derive_execpolicy_amendment_for_allow_rules(
+                                &evaluation.matched_rules,
+                            )
+                        } else {
+                            None
+                        },
+                    }
+                }
+            }
         }
     }
 
@@ -689,6 +736,41 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
     };
 
     Ok(policy.merge_overlay(requirements_policy.as_ref()))
+}
+
+fn always_prompt_regex_patterns(config_stack: &ConfigLayerStack) -> Option<Vec<String>> {
+    config_stack
+        .effective_config()
+        .try_into::<ConfigToml>()
+        .ok()
+        .and_then(|config| {
+            config
+                .approvals
+                .and_then(|approvals| approvals.always_prompt_regex)
+        })
+}
+
+fn load_always_prompt_regexes(config_stack: &ConfigLayerStack) -> Arc<Vec<Regex>> {
+    let patterns = always_prompt_regex_patterns(config_stack).unwrap_or_default();
+    compile_always_prompt_regexes(&patterns)
+}
+
+fn compile_always_prompt_regexes(patterns: &[String]) -> Arc<Vec<Regex>> {
+    let compiled = patterns
+        .iter()
+        .filter_map(|pattern| match Regex::new(pattern) {
+            Ok(regex) => Some(regex),
+            Err(err) => {
+                tracing::warn!(
+                    pattern,
+                    %err,
+                    "invalid approvals.always_prompt_regex pattern; ignoring"
+                );
+                None
+            }
+        })
+        .collect();
+    Arc::new(compiled)
 }
 
 fn dangerous_command_match_for_origin(

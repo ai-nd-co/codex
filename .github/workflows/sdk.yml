@@ -5,6 +5,7 @@ on:
 
 jobs:
   python-sdk:
+    if: ${{ github.repository == 'openai/codex' || vars.CODEX_ENABLE_SDK_CI == 'true' }}
     runs-on:
       group: ${{ github.event.repository.name }}-runners
       labels: ${{ github.event.repository.name }}-linux-x64
@@ -44,6 +45,7 @@ jobs:
         uses: ./.github/actions/check-clean-worktree
 
   sdks:
+    if: ${{ github.repository == 'openai/codex' || vars.CODEX_ENABLE_SDK_CI == 'true' }}
     runs-on:
       group: ${{ github.event.repository.name }}-runners
       labels: ${{ github.event.repository.name }}-linux-x64

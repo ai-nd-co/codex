@@ -1,4 +1,5 @@
 use super::*;
+use crate::ConfigLayerStackOrdering;
 use codex_file_system::CopyOptions;
 use codex_file_system::CreateDirectoryOptions;
 use codex_file_system::ExecutorFileSystemFuture;
@@ -10,6 +11,27 @@ use codex_file_system::RemoveOptions;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
+
+fn config_layer_project_folders(stack: &ConfigLayerStack) -> Vec<String> {
+    stack
+        .get_layers(
+            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ true,
+        )
+        .into_iter()
+        .filter_map(|layer| match &layer.name {
+            ConfigLayerSource::Project { dot_codex_folder } => Some(
+                dot_codex_folder
+                    .as_path()
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .expect("project folder name")
+                    .to_string(),
+            ),
+            _ => None,
+        })
+        .collect()
+}
 
 struct TestFileSystem;
 
@@ -70,10 +92,21 @@ impl ExecutorFileSystem for TestFileSystem {
 
     fn get_metadata<'a>(
         &'a self,
-        _path: &'a PathUri,
+        path: &'a PathUri,
         _sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
-        Box::pin(async move { unimplemented!("test filesystem only supports reads") })
+        Box::pin(async move {
+            let path = path.to_abs_path()?;
+            let metadata = std::fs::metadata(path.as_path())?;
+            Ok(FileMetadata {
+                is_directory: metadata.is_dir(),
+                is_file: metadata.is_file(),
+                is_symlink: metadata.file_type().is_symlink(),
+                size: metadata.len(),
+                created_at_ms: 0,
+                modified_at_ms: 0,
+            })
+        })
     }
 
     fn read_directory<'a>(
@@ -253,4 +286,100 @@ model = "gpt-dev"
     )
     .await
     .expect("profile-v2 should allow unrelated legacy profiles in base user config");
+}
+
+#[tokio::test]
+async fn project_layer_loading_scans_claude_and_codex_config_dirs() {
+    let tmp = tempdir().expect("tempdir");
+    let codex_home = tmp.path().join("home");
+    let project_root = tmp.path().join("repo");
+    let cwd = project_root.join("nested");
+
+    std::fs::create_dir_all(&codex_home).expect("create codex_home");
+    std::fs::create_dir_all(&cwd).expect("create cwd");
+    std::fs::create_dir_all(project_root.join(".git")).expect("create .git");
+    std::fs::create_dir_all(project_root.join(".claude")).expect("create .claude");
+    std::fs::create_dir_all(project_root.join(".codex")).expect("create .codex");
+    std::fs::write(project_root.join(".claude").join(CONFIG_TOML_FILE), "")
+        .expect("write .claude config");
+    std::fs::write(project_root.join(".codex").join(CONFIG_TOML_FILE), "")
+        .expect("write .codex config");
+
+    let stack = load_config_layers_state(
+        &TestFileSystem,
+        &codex_home,
+        Some(AbsolutePathBuf::from_absolute_path(&cwd).expect("absolute cwd")),
+        &[],
+        LoaderOverrides::without_managed_config_for_tests(),
+        &crate::NoopThreadConfigLoader,
+    )
+    .await
+    .expect("load config layers");
+
+    assert_eq!(
+        config_layer_project_folders(&stack),
+        vec![".codex".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn project_layer_loading_uses_claude_as_fallback_when_codex_absent() {
+    let tmp = tempdir().expect("tempdir");
+    let codex_home = tmp.path().join("home");
+    let project_root = tmp.path().join("repo");
+    let cwd = project_root.join("nested");
+
+    std::fs::create_dir_all(&codex_home).expect("create codex_home");
+    std::fs::create_dir_all(&cwd).expect("create cwd");
+    std::fs::create_dir_all(project_root.join(".git")).expect("create .git");
+    std::fs::create_dir_all(project_root.join(".claude")).expect("create .claude");
+    std::fs::write(project_root.join(".claude").join(CONFIG_TOML_FILE), "")
+        .expect("write .claude config");
+
+    let stack = load_config_layers_state(
+        &TestFileSystem,
+        &codex_home,
+        Some(AbsolutePathBuf::from_absolute_path(&cwd).expect("absolute cwd")),
+        &[],
+        LoaderOverrides::without_managed_config_for_tests(),
+        &crate::NoopThreadConfigLoader,
+    )
+    .await
+    .expect("load config layers");
+
+    assert_eq!(
+        config_layer_project_folders(&stack),
+        vec![".claude".to_string()]
+    );
+}
+
+#[test]
+fn linked_worktree_hook_override_preserves_active_project_folder_name() {
+    let checkout_root =
+        AbsolutePathBuf::from_absolute_path("/tmp/worktrees/repo").expect("checkout root");
+    let repo_root = AbsolutePathBuf::from_absolute_path("/tmp/root/repo").expect("repo root");
+    let config_file =
+        AbsolutePathBuf::from_absolute_path("/tmp/home/config.toml").expect("user config");
+
+    let context = ProjectTrustContext {
+        project_root: checkout_root.clone(),
+        project_root_key: "repo".to_string(),
+        project_root_lookup_keys: vec!["repo".to_string()],
+        checkout_root: Some(checkout_root.clone()),
+        repo_root: Some(repo_root.clone()),
+        repo_root_key: Some("repo".to_string()),
+        repo_root_lookup_keys: Some(vec!["repo".to_string()]),
+        projects_trust: std::collections::HashMap::new(),
+        user_config_file: config_file,
+    };
+
+    let nested = checkout_root.join("subdir");
+    assert_eq!(
+        context.root_checkout_hooks_folder_for_dir(&nested, ".claude"),
+        Some(repo_root.join("subdir").join(".claude"))
+    );
+    assert_eq!(
+        context.root_checkout_hooks_folder_for_dir(&nested, ".codex"),
+        Some(repo_root.join("subdir").join(".codex"))
+    );
 }

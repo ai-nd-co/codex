@@ -169,6 +169,16 @@ pub struct WindowsToml {
     pub sandbox_private_desktop: Option<bool>,
 }
 
+/// Approval-related settings deserialized from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ApprovalsToml {
+    /// Regex patterns that force approval for matching shell-like commands,
+    /// even when approval prompting is otherwise disabled.
+    #[serde(default)]
+    pub always_prompt_regex: Option<Vec<String>>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, JsonSchema)]
 pub enum UriBasedFileOpener {
     #[serde(rename = "vscode")]

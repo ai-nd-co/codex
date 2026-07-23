@@ -1478,6 +1478,56 @@ async fn agents_local_md_preferred() {
 
 /// When AGENTS.md is absent but a configured fallback exists, the fallback is used.
 #[tokio::test]
+async fn uses_code_md_when_agents_missing() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        tmp.path().join(CLOUD_PROJECT_DOC_FILENAME),
+        "code instructions",
+    )
+    .unwrap();
+
+    let cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+
+    let res = get_user_instructions(&cfg)
+        .await
+        .expect("CODE.md fallback expected");
+
+    assert_eq!(res, "code instructions");
+
+    let discovery = agents_md_paths(&cfg).await.expect("discover paths");
+    assert_eq!(discovery.len(), 1);
+    assert_eq!(
+        discovery[0].basename().as_deref(),
+        Some(CLOUD_PROJECT_DOC_FILENAME)
+    );
+}
+
+#[tokio::test]
+async fn uses_claude_md_when_agents_missing() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        tmp.path().join(CLOUD_PROJECT_DOC_FILENAME_ALT),
+        "claude instructions",
+    )
+    .unwrap();
+
+    let cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+
+    let res = get_user_instructions(&cfg)
+        .await
+        .expect("CLAUDE.md fallback expected");
+
+    assert_eq!(res, "claude instructions");
+
+    let discovery = agents_md_paths(&cfg).await.expect("discover paths");
+    assert_eq!(discovery.len(), 1);
+    assert_eq!(
+        discovery[0].basename().as_deref(),
+        Some(CLOUD_PROJECT_DOC_FILENAME_ALT)
+    );
+}
+
+#[tokio::test]
 async fn uses_configured_fallback_when_agents_missing() {
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(tmp.path().join("EXAMPLE.md"), "example instructions").unwrap();
@@ -1495,6 +1545,40 @@ async fn uses_configured_fallback_when_agents_missing() {
         .expect("fallback doc expected");
 
     assert_eq!(res, "example instructions");
+}
+
+#[tokio::test]
+async fn configured_fallback_precedes_compatibility_defaults() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join("WORKFLOW.md"), "workflow instructions").unwrap();
+    fs::write(
+        tmp.path().join(CLOUD_PROJECT_DOC_FILENAME),
+        "code instructions",
+    )
+    .unwrap();
+    fs::write(
+        tmp.path().join(CLOUD_PROJECT_DOC_FILENAME_ALT),
+        "claude instructions",
+    )
+    .unwrap();
+
+    let cfg = make_config_with_fallback(
+        &tmp,
+        /*limit*/ 4096,
+        /*instructions*/ None,
+        &["WORKFLOW.md"],
+    )
+    .await;
+
+    let res = get_user_instructions(&cfg)
+        .await
+        .expect("configured fallback doc expected");
+
+    assert_eq!(res, "workflow instructions");
+
+    let discovery = agents_md_paths(&cfg).await.expect("discover paths");
+    assert_eq!(discovery.len(), 1);
+    assert_eq!(discovery[0].basename().as_deref(), Some("WORKFLOW.md"));
 }
 
 /// AGENTS.md remains preferred when both AGENTS.md and fallbacks are present.

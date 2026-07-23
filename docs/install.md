@@ -4,9 +4,14 @@
 
 | Requirement                 | Details                                                         |
 | --------------------------- | --------------------------------------------------------------- |
-| Operating systems           | macOS 12+, Ubuntu 20.04+/Debian 10+, or Windows 11 **via WSL2** |
+| Operating systems           | macOS 12+, Ubuntu 20.04+/Debian 10+, or Windows 11              |
 | Git (optional, recommended) | 2.23+ for built-in PR helpers                                   |
 | RAM                         | 4-GB minimum (8-GB recommended)                                 |
+
+On native Windows, Codex prefers Git Bash when it is available and falls back to
+PowerShell only when Bash cannot be resolved. See
+[`docs/windows-git-bash-shell.md`](./windows-git-bash-shell.md) for override
+variables and Windows-specific troubleshooting.
 
 ### DotSlash
 
@@ -16,7 +21,7 @@ The GitHub Release also contains a [DotSlash](https://dotslash-cli.com/) file fo
 
 ```bash
 # Clone the repository and navigate to the root of the Cargo workspace.
-git clone https://github.com/openai/codex.git
+git clone https://github.com/ai-nd-co/codex.git
 cd codex/codex-rs
 
 # Install the Rust toolchain, if necessary.

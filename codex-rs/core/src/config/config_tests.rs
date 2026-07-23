@@ -39,6 +39,7 @@ use codex_config::permissions_toml::PermissionsToml;
 use codex_config::permissions_toml::WorkspaceRootsToml;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
+use codex_config::types::ApprovalsToml;
 use codex_config::types::BundledSkillsConfig;
 use codex_config::types::FeedbackConfigToml;
 use codex_config::types::HistoryPersistence;
@@ -320,6 +321,37 @@ consolidation_model = "gpt-5.2"
                 .expect("legacy memories config")
         )
         .disable_on_external_context
+    );
+
+    let approvals = r#"
+[approvals]
+always_prompt_regex = ["^git push$", "^rm -rf"]
+"#;
+    let approvals_cfg =
+        toml::from_str::<ConfigToml>(approvals).expect("TOML deserialization should succeed");
+    assert_eq!(
+        approvals_cfg.approvals,
+        Some(ApprovalsToml {
+            always_prompt_regex: Some(vec!["^git push$".to_string(), "^rm -rf".to_string()]),
+        })
+    );
+}
+
+#[test]
+fn approvals_always_prompt_regex_toml_parses() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[approvals]
+always_prompt_regex = ["^git push$", "^rm -rf"]
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.approvals,
+        Some(ApprovalsToml {
+            always_prompt_regex: Some(vec!["^git push$".to_string(), "^rm -rf".to_string()]),
+        })
     );
 }
 

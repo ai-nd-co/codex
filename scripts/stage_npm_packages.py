@@ -8,18 +8,20 @@ from dataclasses import dataclass
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import tarfile
 import tempfile
 from pathlib import Path
 from typing import Sequence
+from urllib.parse import urlparse
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BUILD_SCRIPT = REPO_ROOT / "codex-cli" / "scripts" / "build_npm_package.py"
 WORKFLOW_NAME = ".github/workflows/rust-release.yml"
-GITHUB_REPO = "openai/codex"
+DEFAULT_GITHUB_REPO = "openai/codex"
 BINARY_TARGETS = (
     "x86_64-unknown-linux-musl",
     "aarch64-unknown-linux-musl",
@@ -102,6 +104,14 @@ def parse_args() -> argparse.Namespace:
         help="Optional workflow URL to reuse for native artifacts.",
     )
     parser.add_argument(
+        "--repo",
+        help=(
+            "Optional GitHub repo slug to use for workflow/artifact lookups "
+            "(for example ai-nd-co/codex). Defaults to the workflow URL repo, "
+            "GITHUB_REPOSITORY, or the local origin remote."
+        ),
+    )
+    parser.add_argument(
         "--artifacts-dir",
         type=Path,
         help="Directory containing previously downloaded workflow artifacts.",
@@ -146,7 +156,68 @@ def expand_packages(packages: list[str]) -> list[str]:
     return expanded
 
 
-def resolve_release_workflow(version: str) -> dict:
+def parse_repo_from_workflow_url(workflow_url: str) -> str | None:
+    parsed = urlparse(workflow_url.strip())
+    path_parts = [part for part in parsed.path.split("/") if part]
+    if parsed.netloc.lower() != "github.com" or len(path_parts) < 4:
+        return None
+
+    owner, repo, actions, runs = path_parts[:4]
+    if actions != "actions" or runs != "runs":
+        return None
+
+    return f"{owner}/{repo}"
+
+
+def parse_repo_slug(remote_url: str) -> str | None:
+    remote_url = remote_url.strip()
+    if not remote_url:
+        return None
+
+    if remote_url.startswith("git@github.com:"):
+        slug = remote_url.removeprefix("git@github.com:")
+    else:
+        parsed = urlparse(remote_url)
+        if parsed.netloc.lower() != "github.com":
+            return None
+        slug = parsed.path.lstrip("/")
+
+    slug = re.sub(r"\.git$", "", slug)
+    if slug.count("/") != 1:
+        return None
+    return slug
+
+
+def detect_current_github_repo() -> str | None:
+    if github_repo := os.environ.get("GITHUB_REPOSITORY"):
+        return github_repo.strip() or None
+
+    try:
+        remote_url = subprocess.check_output(
+            ["git", "config", "--get", "remote.origin.url"],
+            cwd=REPO_ROOT,
+            text=True,
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+    return parse_repo_slug(remote_url)
+
+
+def resolve_github_repo(
+    repo_override: str | None,
+    workflow_url: str | None,
+) -> str:
+    if repo_override:
+        return repo_override
+    if workflow_url and (workflow_repo := parse_repo_from_workflow_url(workflow_url)):
+        return workflow_repo
+    if detected_repo := detect_current_github_repo():
+        return detected_repo
+    return DEFAULT_GITHUB_REPO
+
+
+def resolve_release_workflow(version: str, github_repo: str) -> dict:
     stdout = subprocess.check_output(
         [
             "gh",
@@ -158,6 +229,8 @@ def resolve_release_workflow(version: str) -> dict:
             "workflowName,url,headSha",
             "--workflow",
             WORKFLOW_NAME,
+            "--repo",
+            github_repo,
             "--jq",
             "first(.[])",
         ],
@@ -172,16 +245,21 @@ def resolve_release_workflow(version: str) -> dict:
     return workflow
 
 
-def resolve_workflow_url(version: str, override: str | None) -> tuple[str, str | None]:
+def resolve_workflow_url(
+    version: str,
+    override: str | None,
+    github_repo: str,
+) -> tuple[str, str | None]:
     if override:
         return override, None
 
-    workflow = resolve_release_workflow(version)
+    workflow = resolve_release_workflow(version, github_repo)
     return workflow["url"], workflow.get("headSha")
 
 
 def install_native_components(
     workflow_url: str,
+    github_repo: str,
     components: set[str],
     vendor_root: Path,
     artifacts_dir: Path,
@@ -198,6 +276,7 @@ def install_native_components(
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         install_from_workflow_artifacts(
             workflow_id,
+            github_repo,
             artifacts_dir,
             sorted(components),
             vendor_dir,
@@ -207,12 +286,13 @@ def install_native_components(
 
 def install_from_workflow_artifacts(
     workflow_id: str,
+    github_repo: str,
     artifacts_dir: Path,
     components: Sequence[str],
     vendor_dir: Path,
 ) -> None:
-    artifacts = select_target_artifacts(workflow_id, components)
-    download_artifacts(workflow_id, artifacts_dir, artifacts)
+    artifacts = select_target_artifacts(workflow_id, github_repo, components)
+    download_artifacts(workflow_id, github_repo, artifacts_dir, artifacts)
     if CODEX_PACKAGE_COMPONENT in components:
         install_codex_package_archives(artifacts_dir, vendor_dir, BINARY_TARGETS)
     install_binary_components(
@@ -224,6 +304,7 @@ def install_from_workflow_artifacts(
 
 def select_target_artifacts(
     workflow_id: str,
+    github_repo: str,
     components: Sequence[str],
 ) -> list[WorkflowArtifact]:
     needs_target_artifacts = CODEX_PACKAGE_COMPONENT in components or any(
@@ -233,7 +314,8 @@ def select_target_artifacts(
         return []
 
     artifacts_by_name = {
-        artifact.name: artifact for artifact in list_workflow_artifacts(workflow_id)
+        artifact.name: artifact
+        for artifact in list_workflow_artifacts(workflow_id, github_repo)
     }
     selected_artifacts: list[WorkflowArtifact] = []
     for target in BINARY_TARGETS:
@@ -250,12 +332,14 @@ def select_target_artifacts(
     return selected_artifacts
 
 
-def list_workflow_artifacts(workflow_id: str) -> list[WorkflowArtifact]:
+def list_workflow_artifacts(
+    workflow_id: str, github_repo: str
+) -> list[WorkflowArtifact]:
     stdout = subprocess.check_output(
         [
             "gh",
             "api",
-            f"repos/{GITHUB_REPO}/actions/runs/{workflow_id}/artifacts",
+            f"repos/{github_repo}/actions/runs/{workflow_id}/artifacts",
             "--paginate",
             "--jq",
             ".artifacts[] | [.name, .size_in_bytes] | @tsv",
@@ -271,6 +355,7 @@ def list_workflow_artifacts(workflow_id: str) -> list[WorkflowArtifact]:
 
 def download_artifacts(
     workflow_id: str,
+    github_repo: str,
     dest_dir: Path,
     artifacts: Sequence[WorkflowArtifact],
 ) -> None:
@@ -303,7 +388,7 @@ def download_artifacts(
                 "--dir",
                 str(artifact_dir),
                 "--repo",
-                GITHUB_REPO,
+                github_repo,
                 workflow_id,
             ]
         )
@@ -480,6 +565,7 @@ def tarball_name_for_package(package: str, version: str) -> str:
 
 def main() -> int:
     args = parse_args()
+    github_repo = resolve_github_repo(args.repo, args.workflow_url)
 
     output_dir = args.output_dir or (REPO_ROOT / "dist" / "npm")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -508,9 +594,10 @@ def main() -> int:
     try:
         if native_component_sets:
             workflow_url, resolved_head_sha = resolve_workflow_url(
-                args.release_version, args.workflow_url
+                args.release_version, args.workflow_url, github_repo
             )
             print(f"Using native artifacts from {workflow_url}", flush=True)
+            print(f"Resolving workflow artifacts from {github_repo}", flush=True)
             if args.artifacts_dir is not None:
                 artifacts_temp_root = args.artifacts_dir.resolve()
                 artifacts_temp_root.mkdir(parents=True, exist_ok=True)
@@ -533,6 +620,7 @@ def main() -> int:
                 )
                 install_native_components(
                     workflow_url,
+                    github_repo,
                     set(components),
                     vendor_temp_root,
                     artifacts_temp_root,

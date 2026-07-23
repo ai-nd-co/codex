@@ -27,6 +27,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+use regex_lite::Regex;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -34,6 +35,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tempfile::tempdir;
 use toml::Value as TomlValue;
+use tracing_test::traced_test;
 
 #[cfg(windows)]
 #[path = "exec_policy_windows_tests.rs"]
@@ -113,6 +115,18 @@ async fn test_config() -> (TempDir, Config) {
         .build()
         .await
         .expect("load default test config");
+    (home, config)
+}
+
+async fn test_config_with_toml(contents: &str) -> (TempDir, Config) {
+    let home = TempDir::new().expect("create temp dir");
+    fs::write(home.path().join(CONFIG_TOML_FILE), contents).expect("write config.toml");
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(home.path().to_path_buf())
+        .fallback_cwd(Some(home.path().to_path_buf()))
+        .build()
+        .await
+        .expect("load test config");
     (home, config)
 }
 
@@ -206,6 +220,216 @@ async fn child_does_not_use_parent_exec_policy_when_requirements_exec_policy_dif
         &parent_config,
         &child_config
     ));
+}
+
+#[tokio::test]
+async fn child_does_not_use_parent_exec_policy_when_always_prompt_regex_differs() {
+    let (_parent_home, parent_config) =
+        test_config_with_toml("[approvals]\nalways_prompt_regex = [\"^git push$\"]\n").await;
+    let mut child_config = parent_config.clone();
+    let mut layers: Vec<_> = child_config
+        .config_layer_stack
+        .get_layers(
+            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ true,
+        )
+        .into_iter()
+        .cloned()
+        .collect();
+    layers.push(ConfigLayerEntry::new(
+        ConfigLayerSource::SessionFlags,
+        toml::from_str(
+            r#"
+[approvals]
+always_prompt_regex = ["^rm -rf"]
+"#,
+        )
+        .expect("session flags approvals toml"),
+    ));
+    child_config.config_layer_stack = ConfigLayerStack::new(
+        layers,
+        child_config.config_layer_stack.requirements().clone(),
+        child_config.config_layer_stack.requirements_toml().clone(),
+    )
+    .expect("config layer stack");
+
+    assert!(!child_uses_parent_exec_policy(
+        &parent_config,
+        &child_config
+    ));
+}
+
+#[tokio::test]
+async fn always_prompt_regex_non_match_falls_back_to_normal_exec_policy_behavior() {
+    let manager = ExecPolicyManager::new_with_always_prompt_regexes(
+        Arc::new(Policy::empty()),
+        Arc::new(vec![
+            Regex::new(r"^git push origin main$").expect("compile regex"),
+        ]),
+    );
+    let command = vec!["cargo".to_string(), "build".to_string()];
+
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::OnRequest,
+            permission_profile: PermissionProfile::read_only(),
+            windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
+        }
+    );
+}
+
+#[tokio::test]
+#[traced_test]
+async fn always_prompt_regex_forces_approval_even_when_approval_policy_is_never() {
+    let manager = ExecPolicyManager::new_with_always_prompt_regexes(
+        Arc::new(Policy::empty()),
+        Arc::new(vec![
+            Regex::new(r"^git push origin main$").expect("compile regex"),
+        ]),
+    );
+    let command = vec![
+        "git".to_string(),
+        "push".to_string(),
+        "origin".to_string(),
+        "main".to_string(),
+    ];
+
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::Never,
+            permission_profile: PermissionProfile::read_only(),
+            windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: Some(
+                "`git push origin main` requires approval (matched approvals.always_prompt_regex)"
+                    .to_string(),
+            ),
+            proposed_execpolicy_amendment: None,
+        }
+    );
+}
+
+#[tokio::test]
+async fn always_prompt_regex_does_not_override_explicit_forbidden_rule() {
+    let mut policy = Policy::empty();
+    policy
+        .add_prefix_rule(
+            &["git".to_string(), "push".to_string()],
+            Decision::Forbidden,
+        )
+        .expect("add forbidden rule");
+    let manager = ExecPolicyManager::new_with_always_prompt_regexes(
+        Arc::new(policy),
+        Arc::new(vec![
+            Regex::new(r"^git push origin main$").expect("compile regex"),
+        ]),
+    );
+    let command = vec![
+        "git".to_string(),
+        "push".to_string(),
+        "origin".to_string(),
+        "main".to_string(),
+    ];
+
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::Never,
+            permission_profile: PermissionProfile::read_only(),
+            windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert!(
+        matches!(requirement, ExecApprovalRequirement::Forbidden { .. }),
+        "expected forbidden requirement, got {requirement:?}"
+    );
+}
+
+#[tokio::test]
+async fn always_prompt_regex_matches_rendered_shell_wrapper_command() {
+    let manager = ExecPolicyManager::new_with_always_prompt_regexes(
+        Arc::new(Policy::empty()),
+        Arc::new(vec![
+            Regex::new(r"^bash -lc 'git push origin main'$").expect("compile regex"),
+        ]),
+    );
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "git push origin main".to_string(),
+    ];
+
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::OnRequest,
+            permission_profile: PermissionProfile::read_only(),
+            windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: Some(
+                "`bash -lc 'git push origin main'` requires approval (matched approvals.always_prompt_regex)"
+                    .to_string(),
+            ),
+            proposed_execpolicy_amendment: None,
+        }
+    );
+}
+
+#[tokio::test]
+#[traced_test]
+async fn invalid_always_prompt_regex_is_ignored_during_exec_policy_load() {
+    let (_home, config) =
+        test_config_with_toml("[approvals]\nalways_prompt_regex = [\"(\"]\n").await;
+
+    let manager = ExecPolicyManager::load(&config.config_layer_stack)
+        .await
+        .expect("load exec policy");
+
+    assert!(manager.always_prompt_regexes.is_empty());
+    logs_assert(|lines: &[&str]| {
+        lines
+            .iter()
+            .find(|line| {
+                line.contains("invalid approvals.always_prompt_regex pattern; ignoring")
+                    && line.contains("pattern=\"(\"")
+            })
+            .map(|_| Ok(()))
+            .unwrap_or_else(|| {
+                Err(
+                    "expected invalid approvals.always_prompt_regex warning to be logged"
+                        .to_string(),
+                )
+            })
+    });
 }
 
 #[tokio::test]

@@ -38,6 +38,10 @@ use tracing::error;
 pub const DEFAULT_AGENTS_MD_FILENAME: &str = "AGENTS.md";
 /// Preferred local override for AGENTS.md instructions.
 pub const LOCAL_AGENTS_MD_FILENAME: &str = "AGENTS.override.md";
+/// Fallback project doc filename used by cloud-style agents.
+pub const CLOUD_PROJECT_DOC_FILENAME: &str = "CODE.md";
+/// Alternate cloud-style doc filename.
+pub const CLOUD_PROJECT_DOC_FILENAME_ALT: &str = "CLAUDE.md";
 
 /// When both user and project AGENTS.md docs are present, they will be
 /// concatenated with the following separator.
@@ -232,7 +236,7 @@ async fn agents_md_paths(
 }
 
 fn candidate_filenames(config: &Config) -> Vec<&str> {
-    let mut names: Vec<&str> = Vec::with_capacity(2 + config.project_doc_fallback_filenames.len());
+    let mut names: Vec<&str> = Vec::with_capacity(4 + config.project_doc_fallback_filenames.len());
     names.push(LOCAL_AGENTS_MD_FILENAME);
     names.push(DEFAULT_AGENTS_MD_FILENAME);
     for candidate in &config.project_doc_fallback_filenames {
@@ -244,6 +248,8 @@ fn candidate_filenames(config: &Config) -> Vec<&str> {
             names.push(candidate);
         }
     }
+    names.push(CLOUD_PROJECT_DOC_FILENAME);
+    names.push(CLOUD_PROJECT_DOC_FILENAME_ALT);
     names
 }
 

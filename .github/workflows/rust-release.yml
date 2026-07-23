@@ -54,6 +54,7 @@ jobs:
           echo "::endgroup::"
 
   build:
+    if: ${{ github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true' }}
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
@@ -488,6 +489,7 @@ jobs:
             codex-rs/dist/${{ matrix.target }}/*
 
   sign-macos-binaries:
+    if: ${{ github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true' }}
     needs: build
     name: Sign macOS binaries - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ubuntu-latest
@@ -613,6 +615,7 @@ jobs:
           if-no-files-found: warn
 
   package-macos:
+    if: ${{ github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true' }}
     needs: sign-macos-binaries
     name: Package macOS artifacts - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: macos-15-xlarge
@@ -816,6 +819,7 @@ jobs:
           if-no-files-found: error
 
   sign-macos-dmg:
+    if: ${{ github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true' }}
     needs: package-macos
     name: Sign macOS DMG - ${{ matrix.target }}
     runs-on: ubuntu-latest
@@ -912,6 +916,7 @@ jobs:
           if-no-files-found: warn
 
   finalize-macos:
+    if: ${{ github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true' }}
     needs:
       - package-macos
       - sign-macos-dmg
@@ -1095,11 +1100,13 @@ jobs:
           if-no-files-found: error
 
   build-windows:
+    if: ${{ github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true' }}
     needs: tag-check
     uses: ./.github/workflows/rust-release-windows.yml
     secrets: inherit
 
   argument-comment-lint-release-assets:
+    if: ${{ github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true' }}
     name: argument-comment-lint release assets
     needs: tag-check
     uses: ./.github/workflows/rust-release-argument-comment-lint.yml
@@ -1116,6 +1123,7 @@ jobs:
     if: >-
       ${{
         always() &&
+        (github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true') &&
         needs.tag-check.result == 'success' &&
         needs.build.result == 'success' &&
         needs.finalize-macos.result == 'success' &&
@@ -1284,6 +1292,7 @@ jobs:
 
   publish-r2:
     name: publish-r2
+    if: ${{ github.repository == 'openai/codex' || vars.CODEX_ENABLE_R2_RELEASE == 'true' }}
     needs: [release, publish-dotslash]
     permissions:
       contents: read
@@ -1295,6 +1304,7 @@ jobs:
       prerelease: ${{ fromJSON(needs.release.outputs.prerelease) }}
 
   publish-dotslash:
+    if: ${{ github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true' }}
     name: publish-dotslash
     needs: release
     runs-on: ubuntu-latest
@@ -1329,7 +1339,8 @@ jobs:
       ${{
         !cancelled() &&
         needs.release.result == 'success' &&
-        needs.release.outputs.should_publish_npm == 'true'
+        needs.release.outputs.should_publish_npm == 'true' &&
+        (github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true')
       }}
     name: publish-npm
     needs: release
@@ -1345,7 +1356,7 @@ jobs:
           # Node 24 bundles npm >= 11.5.1, which trusted publishing requires.
           node-version: 24
           registry-url: "https://registry.npmjs.org"
-          scope: "@openai"
+          scope: "@ai-nd-co"
 
       - name: Download npm tarballs from release
         env:
@@ -1372,11 +1383,13 @@ jobs:
               --dir dist/npm
           done
 
-      # No NODE_AUTH_TOKEN needed because we use OIDC.
+      # No NODE_AUTH_TOKEN needed because the default path uses OIDC.
       - name: Publish to npm
         env:
           VERSION: ${{ needs.release.outputs.version }}
           NPM_TAG: ${{ needs.release.outputs.npm_tag }}
+          NPM_PUBLISH_USE_TOKEN_FALLBACK: ${{ vars.NPM_PUBLISH_USE_TOKEN_FALLBACK }}
+          FALLBACK_NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           prefix=""
@@ -1384,11 +1397,25 @@ jobs:
             prefix="${NPM_TAG}-"
           fi
 
+          if [[ "${NPM_PUBLISH_USE_TOKEN_FALLBACK:-}" == "true" ]]; then
+            if [[ -z "${FALLBACK_NPM_TOKEN:-}" ]]; then
+              echo "::error::NPM_PUBLISH_USE_TOKEN_FALLBACK=true requires secrets.NPM_TOKEN."
+              exit 1
+            fi
+            auth_file="${RUNNER_TEMP}/npm-publishrc"
+            trap 'rm -f "${auth_file}"' EXIT
+            printf '//registry.npmjs.org/:_authToken=%s\n' "${FALLBACK_NPM_TOKEN}" > "${auth_file}"
+            export NPM_CONFIG_USERCONFIG="${auth_file}"
+            echo "Using opt-in NPM_TOKEN fallback for npm publish."
+          else
+            echo "Using OIDC trusted publishing for npm publish."
+          fi
+
           root_tarball="dist/npm/codex-npm-${VERSION}.tgz"
           sdk_tarball="dist/npm/codex-sdk-npm-${VERSION}.tgz"
           # Keep this list in sync with CODEX_PLATFORM_PACKAGES in
           # codex-cli/scripts/build_npm_package.py. The root wrapper advances
-          # @openai/codex@latest as soon as it publishes, so every platform
+          # @ai-nd-co/codex@latest as soon as it publishes, so every platform
           # package it aliases must already exist in the registry first.
           platform_tarballs=(
             "dist/npm/codex-npm-linux-x64-${VERSION}.tgz"
@@ -1428,7 +1455,7 @@ jobs:
           done
 
           # npm returns HTTP 409 when concurrent publishes update the same
-          # packument. Every platform tarball is a version of @openai/codex,
+          # packument. Every platform tarball is a version of @ai-nd-co/codex,
           # so publish all tarballs serially.
           tarballs=(
             "${platform_tarballs[@]}"
@@ -1492,7 +1519,8 @@ jobs:
       ${{
         !cancelled() &&
         needs.release.result == 'success' &&
-        !contains(needs.release.outputs.version, '-')
+        !contains(needs.release.outputs.version, '-') &&
+        (github.repository == 'openai/codex' || vars.CODEX_ENABLE_DEV_WEBSITE_DEPLOY == 'true')
       }}
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -1521,7 +1549,8 @@ jobs:
       ${{
         !cancelled() &&
         needs.release.result == 'success' &&
-        !contains(needs.release.outputs.version, '-')
+        !contains(needs.release.outputs.version, '-') &&
+        (github.repository == 'openai/codex' || vars.CODEX_ENABLE_WINGET_PUBLISH == 'true')
       }}
     # This job only invokes a GitHub Action to open/update the winget-pkgs PR;
     # it does not execute Windows-only tooling, so Linux is sufficient.
@@ -1548,7 +1577,8 @@ jobs:
     if: >-
       ${{
         !cancelled() &&
-        needs.release.result == 'success'
+        needs.release.result == 'success' &&
+        (github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true')
       }}
     permissions:
       contents: write

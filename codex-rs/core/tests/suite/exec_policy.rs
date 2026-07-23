@@ -62,7 +62,9 @@ async fn submit_user_turn(
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                environments: Some(local_selections(test.config.cwd.clone())),
+                // Preserve the thread's selected environment so auto-env tests
+                // exercise the same session/environment path as the runtime.
+                environments: None,
                 approval_policy: Some(approval_policy),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -81,6 +83,36 @@ async fn submit_user_turn(
         })
         .await?;
     Ok(())
+}
+
+fn derive_exec_args_for_shell_info(
+    shell_name: &str,
+    shell_path: &str,
+    command: &str,
+    use_login_shell: bool,
+) -> Vec<String> {
+    match shell_name {
+        "zsh" | "bash" | "sh" => vec![
+            shell_path.to_string(),
+            if use_login_shell { "-lc" } else { "-c" }.to_string(),
+            command.to_string(),
+        ],
+        "powershell" => {
+            let mut args = vec![shell_path.to_string()];
+            if !use_login_shell {
+                args.push("-NoProfile".to_string());
+            }
+            args.push("-Command".to_string());
+            args.push(command.to_string());
+            args
+        }
+        "cmd" => vec![
+            shell_path.to_string(),
+            "/c".to_string(),
+            command.to_string(),
+        ],
+        other => panic!("unexpected environment shell `{other}`"),
+    }
 }
 
 fn assert_no_matched_rules_invariant(output_item: &Value) {
@@ -279,6 +311,116 @@ async fn granular_complex_forced_rm_requests_approval_when_allowed() -> Result<(
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg_attr(windows, ignore = "requires the Docker-backed POSIX executor")]
+async fn approvals_always_prompt_regex_surfaces_exec_approval_request_through_exec_command_path()
+-> Result<()> {
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::Never;
+    let command = "echo approval-regex-match";
+    let regex_toml = toml::Value::String("approval-regex-match".to_string()).to_string();
+    let config_contents = format!("[approvals]\nalways_prompt_regex = [{regex_toml}]\n");
+    let test = test_codex()
+        .with_pre_build_hook(move |home| {
+            fs::write(home.join("config.toml"), config_contents)
+                .expect("write approvals regex config");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let shell_info = test
+        .executor_environment()
+        .environment()
+        .info()
+        .await?
+        .shell;
+    let expected_command = derive_exec_args_for_shell_info(
+        shell_info.name.as_str(),
+        shell_info.path.as_str(),
+        command,
+        /*use_login_shell*/ true,
+    );
+    let rendered_command = shlex::try_join(expected_command.iter().map(String::as_str))
+        .unwrap_or_else(|_| expected_command.join(" "));
+
+    let call_id = "approvals-regex-exec-path";
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-approvals-regex-1"),
+            ev_function_call(
+                call_id,
+                "exec_command",
+                &serde_json::to_string(&json!({
+                    "cmd": command,
+                    "yield_time_ms": 1_000,
+                }))?,
+            ),
+            ev_completed("resp-approvals-regex-1"),
+        ]),
+    )
+    .await;
+    let results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-approvals-regex-1", "done"),
+            ev_completed("resp-approvals-regex-2"),
+        ]),
+    )
+    .await;
+
+    submit_user_turn(
+        &test,
+        "run approval-regex shell command",
+        approval_policy,
+        PermissionProfile::read_only(),
+        /*collaboration_mode*/ None,
+    )
+    .await?;
+
+    let approval_event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    let EventMsg::ExecApprovalRequest(approval) = approval_event else {
+        panic!("expected approvals regex to request approval before completion");
+    };
+    assert_eq!(
+        approval.command, expected_command,
+        "expected rendered argv to follow the selected environment shell {}",
+        shell_info.name
+    );
+    let expected_reason =
+        format!("`{rendered_command}` requires approval (matched approvals.always_prompt_regex)");
+    assert_eq!(approval.reason.as_deref(), Some(expected_reason.as_str()));
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let output_item = results.single_request().function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("function call output should include a string output payload");
+    assert!(
+        output.contains("approval-regex-match"),
+        "approved shell command should run and print output: {output}"
+    );
 
     Ok(())
 }

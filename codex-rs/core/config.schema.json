@@ -199,6 +199,21 @@
       ],
       "type": "string"
     },
+    "ApprovalsToml": {
+      "additionalProperties": false,
+      "description": "Approval-related settings deserialized from config.toml.",
+      "properties": {
+        "always_prompt_regex": {
+          "default": null,
+          "description": "Regex patterns that force approval for matching shell-like commands, even when approval prompting is otherwise disabled.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "AppsConfigToml": {
       "additionalProperties": {
         "$ref": "#/definitions/AppConfig"
@@ -4747,6 +4762,15 @@
         }
       ],
       "description": "Default approval policy for executing commands."
+    },
+    "approvals": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ApprovalsToml"
+        }
+      ],
+      "default": null,
+      "description": "Force approval prompts for matching shell-like commands, even when approval prompting would otherwise be disabled."
     },
     "approvals_reviewer": {
       "allOf": [
