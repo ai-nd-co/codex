@@ -421,7 +421,9 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serial_test::serial;
     #[cfg(windows)]
-    use std::ffi::{OsStr, OsString};
+    use std::ffi::OsStr;
+    #[cfg(windows)]
+    use std::ffi::OsString;
     use tempfile::tempdir;
 
     #[cfg(windows)]
