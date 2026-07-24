@@ -1,6 +1,6 @@
 {
   "name": "@ai-nd-co/codex-sdk",
-  "version": "0.0.0-dev",
+  "version": "0.1.0-alpha.1",
   "description": "TypeScript SDK for Codex APIs.",
   "repository": {
     "type": "git",

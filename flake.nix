@@ -24,9 +24,10 @@
       cargoToml = builtins.fromTOML (builtins.readFile ./codex-rs/Cargo.toml);
       cargoVersion = cargoToml.workspace.package.version;
 
-      # When building from a release commit the Cargo.toml already carries the
-      # real version (e.g. "0.101.0").  On the main branch it is the placeholder
-      # "0.0.0", so we fall back to a dev version derived from the flake source.
+      # When building from a release prep or release commit the Cargo.toml
+      # already carries the real version (for example "0.1.0-alpha.1"). Between
+      # release bumps the workspace may still use the placeholder "0.0.0", so we
+      # fall back to a dev version derived from the flake source in that case.
       version =
         if cargoVersion != "0.0.0"
         then cargoVersion

@@ -4,6 +4,19 @@ This guide is the non-destructive validation playbook for the fork release path.
 It is intentionally limited to dry runs, prerelease checks, and explicit stop
 conditions. It does not authorize a production publish.
 
+## Current prepared prerelease target on July 24, 2026
+
+This branch is prepared for the fork's first real npm prerelease:
+
+- release version: `0.1.0-alpha.1`
+- release tag: `rust-v0.1.0-alpha.1`
+- release model: upstream tag-driven `rust-release.yml`
+
+The checked-in Cargo workspace version and the three checked-in npm package
+manifests are intentionally pinned to that exact prerelease version. The
+release workflow now enforces that the pushed tag, `codex-rs/Cargo.toml`, and
+those npm manifests all match exactly.
+
 ## Current stop conditions on July 23, 2026
 
 Local inspection on July 23, 2026 shows that the manager integration line has
@@ -171,6 +184,16 @@ Use two separate tag styles depending on what you need to validate:
 | GitHub release asset smoke without npm publish | `rust-vX.Y.Z-beta.1` | The workflow accepts beta tags, but `publish-npm` should stay off because `should_publish_npm=false` for beta versions. |
 | End-to-end npm prerelease validation | `rust-vX.Y.Z-alpha.1` | The workflow marks numbered alpha versions as prereleases and still enables `publish-npm`. |
 
+Important contract:
+
+- `rust-release.yml` validates the tag against the checked-in Cargo version and
+  the checked-in npm manifest versions.
+- That means the current prep commit can only be tagged as
+  `rust-v0.1.0-alpha.1`.
+- If you want an optional beta smoke first, do it from a separate
+  beta-versioned prep commit or worktree where the checked-in versions are
+  bumped to the matching beta value before tagging.
+
 Recommended sequence:
 
 1. Run a beta tag first if you only need to validate tag parsing, artifact
@@ -184,15 +207,15 @@ Recommended sequence:
 Example commands:
 
 ```bash
-git tag -a rust-v0.0.0-beta.1 -m "fork dry run beta"
-git push origin rust-v0.0.0-beta.1
+git tag -a rust-v0.1.0-beta.1 -m "fork dry run beta"
+git push origin rust-v0.1.0-beta.1
 ```
 
 Later, for the npm path:
 
 ```bash
-git tag -a rust-v0.0.0-alpha.1 -m "fork dry run alpha"
-git push origin rust-v0.0.0-alpha.1
+git tag -a rust-v0.1.0-alpha.1 -m "fork dry run alpha"
+git push origin rust-v0.1.0-alpha.1
 ```
 
 ## External infrastructure required for the prerelease path

@@ -29,7 +29,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
-      - name: Validate tag matches Cargo.toml version
+      - name: Validate tag matches checked-in release versions
         shell: bash
         run: |
           set -euo pipefail
@@ -50,7 +50,19 @@ jobs:
           [[ "${tag_ver}" == "${cargo_ver}" ]] \
             || { echo "❌  Tag ${tag_ver} ≠ Cargo.toml ${cargo_ver}"; exit 1; }
 
-          echo "✅  Tag and Cargo.toml agree (${tag_ver})"
+          npm_manifest_paths=(
+            "codex-cli/package.json"
+            "sdk/typescript/package.json"
+            "codex-rs/responses-api-proxy/npm/package.json"
+          )
+
+          for manifest in "${npm_manifest_paths[@]}"; do
+            npm_ver="$(python -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["version"])' "$manifest")"
+            [[ "${tag_ver}" == "${npm_ver}" ]] \
+              || { echo "❌  Tag ${tag_ver} ≠ ${manifest} ${npm_ver}"; exit 1; }
+          done
+
+          echo "✅  Tag, Cargo.toml, and npm manifests agree (${tag_ver})"
           echo "::endgroup::"
 
   build:
