@@ -45,7 +45,7 @@ staging smoke step is still not authoritative for fork prerelease validation.
 | PR validation or pushes to `main` via `blocking-ci.yml`   | Ready now                                                            | Use this for non-release workflow validation; a branch push by itself does not trigger `blocking-ci.yml`.                                                                              |
 | Optional `repo-checks.yml` npm staging step               | Ready only when explicitly enabled with fork run context             | The fork path now requires `CODEX_REPO_CHECKS_NPM_STAGING_WORKFLOW_RUN_ID` and derives the run URL from the current repo; leave it off unless you intentionally want that smoke check. |
 | Tag-triggered `rust-release.yml` beta smoke               | Ready only after normal PR/`main` CI and release-infra gating checks | `publish-npm` stays off for beta tags, but the release asset path still depends on `CODEX_ENABLE_RELEASE_INFRA` plus the fork's release runners/signing environment.                   |
-| Tag-triggered `rust-release.yml` alpha prerelease publish | Ready only after final audit and Linux/Windows release infra checks | On the fork, numbered alpha tags now publish npm from Linux/Windows workflow artifacts directly and intentionally skip macOS release/signing.                                          |
+| Tag-triggered `rust-release.yml` alpha prerelease publish | Ready only after final audit and GitHub-hosted Linux/Windows x64 checks | On the fork, numbered alpha tags now publish npm from GitHub-hosted Linux x64 and Windows x64 workflow artifacts directly and intentionally skip macOS release/signing, Windows signing, and ARM64 alpha artifacts. |
 | R2, dev website, and winget satellites                    | Intentionally deferred                                               | Keep `CODEX_ENABLE_R2_RELEASE`, `CODEX_ENABLE_DEV_WEBSITE_DEPLOY`, and `CODEX_ENABLE_WINGET_PUBLISH` unset for the first fork dry run.                                                 |
 
 ## Prerequisites for any later dry run
@@ -182,7 +182,7 @@ Use two separate tag styles depending on what you need to validate:
 | Goal                                           | Tag shape             | Why                                                                                                                     |
 | ---------------------------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | GitHub release asset smoke without npm publish | `rust-vX.Y.Z-beta.1`  | The workflow accepts beta tags, but `publish-npm` should stay off because `should_publish_npm=false` for beta versions. |
-| End-to-end npm prerelease validation           | `rust-vX.Y.Z-alpha.1` | On the fork, numbered alpha tags publish npm from Linux/Windows artifacts only; stable/full release expectations remain unchanged. |
+| End-to-end npm prerelease validation           | `rust-vX.Y.Z-alpha.1` | On the fork, numbered alpha tags publish npm from GitHub-hosted Linux x64 and unsigned Windows x64 artifacts only; stable/full release expectations remain unchanged. |
 
 Important contract:
 
@@ -226,7 +226,7 @@ These cannot be proven locally:
 
 - GitHub Actions access to the fork repository
 - self-hosted Linux release runners referenced by the upstream release jobs
-- self-hosted Windows release runners used by `rust-release-windows.yml`
+- Windows ARM64 and Linux ARM64 release coverage for alpha prereleases
 - macOS codesigning and notarization environment required by the full/stable
   release jobs
 - Azure Trusted Signing or equivalent Windows signing environment

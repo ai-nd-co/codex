@@ -107,7 +107,11 @@ jobs:
           fi
 
   build:
-    if: ${{ github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true' }}
+    if: >-
+      ${{
+        (github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true') &&
+        needs.tag-check.outputs.alpha_linux_windows_only != 'true'
+      }}
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
@@ -541,6 +545,154 @@ jobs:
           # prebuilt archives staged above.
           path: |
             codex-rs/dist/${{ matrix.target }}/*
+
+  build-alpha-linux-x64-gh-hosted:
+    if: >-
+      ${{
+        needs.tag-check.result == 'success' &&
+        needs.tag-check.outputs.alpha_linux_windows_only == 'true' &&
+        (github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true')
+      }}
+    needs: tag-check
+    name: Build alpha Linux x64 - GitHub-hosted
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: off
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install Linux bwrap build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends binutils pkg-config libcap-dev
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: x86_64-unknown-linux-musl
+      - name: Use hermetic Cargo home (musl)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_home="${GITHUB_WORKSPACE}/.cargo-home"
+          mkdir -p "${cargo_home}/bin"
+          echo "CARGO_HOME=${cargo_home}" >> "$GITHUB_ENV"
+          echo "${cargo_home}/bin" >> "$GITHUB_PATH"
+          : > "${cargo_home}/config.toml"
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
+      - name: Install musl build tools
+        env:
+          TARGET: x86_64-unknown-linux-musl
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+      - name: Disable aws-lc jitter entropy (musl)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "AWS_LC_SYS_NO_JITTER_ENTROPY=1" >> "$GITHUB_ENV"
+          echo "AWS_LC_SYS_NO_JITTER_ENTROPY_X86_64_UNKNOWN_LINUX_MUSL=1" >> "$GITHUB_ENV"
+      - name: Configure rusty_v8 artifact overrides and verify checksums
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-unknown-linux-musl
+      - name: Build bwrap and export digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --target x86_64-unknown-linux-musl --release --timings --bin bwrap
+          bwrap_path="target/x86_64-unknown-linux-musl/release/bwrap"
+          strip --strip-debug --strip-unneeded "$bwrap_path"
+          digest="$(sha256sum "$bwrap_path" | awk '{print $1}')"
+          echo "CODEX_BWRAP_SHA256=${digest}" >> "$GITHUB_ENV"
+      - name: Cargo build
+        shell: bash
+        run: |
+          cargo build --target x86_64-unknown-linux-musl --release --timings \
+            --bin codex \
+            --bin codex-code-mode-host \
+            --bin codex-responses-api-proxy
+      - name: Cosign Linux artifacts
+        uses: ./.github/actions/linux-code-sign
+        with:
+          target: x86_64-unknown-linux-musl
+          artifacts-dir: ${{ github.workspace }}/codex-rs/target/x86_64-unknown-linux-musl/release
+          binaries: codex codex-code-mode-host codex-responses-api-proxy bwrap
+      - name: Stage artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="x86_64-unknown-linux-musl"
+          dest="dist/${target}"
+          mkdir -p "$dest"
+
+          for binary in codex codex-code-mode-host codex-responses-api-proxy bwrap; do
+            cp "target/${target}/release/${binary}" "$dest/${binary}-${target}"
+            cp "target/${target}/release/${binary}.sigstore" "$dest/${binary}-${target}.sigstore"
+          done
+
+          bundle_root="${RUNNER_TEMP}/codex-${target}-bundle"
+          rm -rf "$bundle_root"
+          mkdir -p "$bundle_root/codex-resources"
+          cp "$dest/codex-${target}" "$bundle_root/codex"
+          cp "$dest/codex-code-mode-host-${target}" "$bundle_root/codex-code-mode-host"
+          cp "$dest/bwrap-${target}" "$bundle_root/codex-resources/bwrap"
+          chmod 0755 \
+            "$bundle_root/codex" \
+            "$bundle_root/codex-code-mode-host" \
+            "$bundle_root/codex-resources/bwrap"
+          tar -C "$bundle_root" -cf - codex codex-code-mode-host codex-resources/bwrap |
+            zstd -T0 -19 -o "$dest/codex-${target}-bundle.tar.zst"
+      - name: Download packaged zsh manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
+            -o "${RUNNER_TEMP}/codex-zsh"
+      - name: Build Codex package archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
+            --target x86_64-unknown-linux-musl \
+            --bundle primary \
+            --entrypoint-dir "target/x86_64-unknown-linux-musl/release" \
+            --archive-dir "dist/x86_64-unknown-linux-musl" \
+            --zsh-manifest "${RUNNER_TEMP}/codex-zsh"
+      - name: Compress artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          dest="dist/x86_64-unknown-linux-musl"
+          for f in "$dest"/*; do
+            base="$(basename "$f")"
+            if [[ "$base" == *.tar.gz || "$base" == *.tar.zst || "$base" == *.zip || "$base" == *.dmg ]]; then
+              continue
+            fi
+            if [[ "$base" == *.sigstore ]]; then
+              continue
+            fi
+            tar -C "$dest" -czf "$dest/${base}.tar.gz" "$base"
+            zstd -T0 -19 --rm "$dest/$base"
+          done
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: x86_64-unknown-linux-musl
+          path: |
+            codex-rs/dist/x86_64-unknown-linux-musl/*
 
   sign-macos-binaries:
     if: ${{ github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true' }}
@@ -1577,20 +1729,20 @@ jobs:
 
   publish-npm-alpha-linux-windows:
     # Fork alpha prereleases can skip macOS release/signing and publish npm from
-    # the Linux/Windows workflow artifacts directly.
+    # GitHub-hosted Linux/Windows x64 workflow artifacts directly.
     if: >-
       ${{
         !cancelled() &&
         needs.tag-check.result == 'success' &&
         needs.tag-check.outputs.alpha_linux_windows_only == 'true' &&
-        needs.build.result == 'success' &&
+        needs.build-alpha-linux-x64-gh-hosted.result == 'success' &&
         needs.build-windows.result == 'success' &&
         (github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true')
       }}
     name: publish-npm-alpha-linux-windows
     needs:
       - tag-check
-      - build
+      - build-alpha-linux-x64-gh-hosted
       - build-windows
     runs-on: ubuntu-latest
     permissions:
@@ -1618,13 +1770,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Download Linux/Windows release artifacts
+      - name: Download Linux/Windows x64 release artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
-          pattern: "{aarch64,x86_64}-{unknown-linux-musl,pc-windows-msvc}"
+          pattern: "x86_64-{unknown-linux-musl,pc-windows-msvc}"
 
-      - name: Stage Linux/Windows-only alpha npm packages
+      - name: Stage Linux/Windows x64-only alpha npm packages
         env:
           RELEASE_VERSION: ${{ needs.tag-check.outputs.version }}
         run: |
@@ -1635,9 +1787,7 @@ jobs:
             --package codex-responses-api-proxy \
             --package codex-sdk \
             --target x86_64-unknown-linux-musl \
-            --target aarch64-unknown-linux-musl \
-            --target x86_64-pc-windows-msvc \
-            --target aarch64-pc-windows-msvc
+            --target x86_64-pc-windows-msvc
 
       # No NODE_AUTH_TOKEN needed because the default path uses OIDC.
       - name: Publish to npm
@@ -1671,9 +1821,7 @@ jobs:
           sdk_tarball="dist/npm/codex-sdk-npm-${VERSION}.tgz"
           platform_tarballs=(
             "dist/npm/codex-npm-linux-x64-${VERSION}.tgz"
-            "dist/npm/codex-npm-linux-arm64-${VERSION}.tgz"
             "dist/npm/codex-npm-win32-x64-${VERSION}.tgz"
-            "dist/npm/codex-npm-win32-arm64-${VERSION}.tgz"
           )
 
           for required_tarball in "${platform_tarballs[@]}" "${root_tarball}"; do

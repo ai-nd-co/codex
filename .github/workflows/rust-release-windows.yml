@@ -2,13 +2,18 @@ name: rust-release-windows
 
 on:
   workflow_call:
+    inputs:
+      alpha_gh_hosted_x64_only:
+        required: false
+        type: boolean
+        default: false
 
 env:
   WINDOWS_BINARIES: "codex codex-code-mode-host codex-responses-api-proxy codex-windows-sandbox-setup codex-command-runner codex-app-server"
 
 jobs:
   build-windows-binaries:
-    if: ${{ github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true' }}
+    if: ${{ (github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true') && !inputs.alpha_gh_hosted_x64_only }}
     name: Build Windows binaries - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ${{ matrix.runs_on }}
     # Windows release builds can exceed an hour, so keep the timeout aligned
@@ -143,7 +148,7 @@ jobs:
             ${{ env.CARGO_TARGET_DIR }}/${{ matrix.target }}/release/staged-${{ matrix.bundle }}/*
 
   build-windows-symbols:
-    if: ${{ github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true' }}
+    if: ${{ (github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true') && !inputs.alpha_gh_hosted_x64_only }}
     needs:
       - build-windows-binaries
     name: Build Windows symbols - ${{ matrix.target }}
@@ -188,7 +193,7 @@ jobs:
           if-no-files-found: error
 
   build-windows:
-    if: ${{ github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true' }}
+    if: ${{ (github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true') && !inputs.alpha_gh_hosted_x64_only }}
     needs:
       - build-windows-binaries
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
@@ -409,3 +414,182 @@ jobs:
           name: ${{ matrix.target }}
           path: |
             codex-rs/dist/${{ matrix.target }}/*
+
+  build-windows-binaries-alpha-gh-hosted:
+    if: ${{ (github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true') && inputs.alpha_gh_hosted_x64_only }}
+    name: Build Windows binaries - GitHub-hosted - x86_64-pc-windows-msvc - ${{ matrix.bundle }}
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: codex-rs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - bundle: primary
+            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+          - bundle: helpers
+            binaries: "codex-windows-sandbox-setup codex-command-runner"
+          - bundle: app-server
+            binaries: "codex-app-server codex-code-mode-host"
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Configure LLVM linker
+        uses: ./.github/actions/setup-msvc-env
+        with:
+          target: x86_64-pc-windows-msvc
+      - name: Cargo build (Windows binaries)
+        shell: bash
+        run: |
+          export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
+          build_args=()
+          for binary in ${{ matrix.binaries }}; do
+            build_args+=(--bin "$binary")
+          done
+          cargo build --target x86_64-pc-windows-msvc --release --timings "${build_args[@]}"
+      - name: Stage Windows binaries
+        shell: bash
+        run: |
+          release_dir="$CARGO_TARGET_DIR/x86_64-pc-windows-msvc/release"
+          output_dir="$release_dir/staged-${{ matrix.bundle }}"
+          mkdir -p "$output_dir"
+          for binary in ${{ matrix.binaries }}; do
+            pdb_name="${binary//-/_}"
+            pdb_path="$release_dir/${pdb_name}.pdb"
+            if [[ ! -f "$pdb_path" ]]; then
+              pdb_path="$release_dir/${binary}.pdb"
+            fi
+            if [[ ! -f "$pdb_path" ]]; then
+              echo "PDB for $binary not found at $release_dir/${pdb_name}.pdb or $release_dir/${binary}.pdb" >&2
+              exit 1
+            fi
+            cp "$release_dir/${binary}.exe" "$output_dir/${binary}.exe"
+            cp "$pdb_path" "$output_dir/${binary}.pdb"
+          done
+      - name: Upload Windows binaries
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: windows-binaries-x86_64-pc-windows-msvc-${{ matrix.bundle }}
+          path: |
+            ${{ env.CARGO_TARGET_DIR }}/x86_64-pc-windows-msvc/release/staged-${{ matrix.bundle }}/*
+
+  build-windows-alpha-gh-hosted:
+    if: ${{ (github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true') && inputs.alpha_gh_hosted_x64_only }}
+    needs:
+      - build-windows-binaries-alpha-gh-hosted
+    name: Build alpha Windows x64 - GitHub-hosted
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: codex-rs
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Download prebuilt Windows primary binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-binaries-x86_64-pc-windows-msvc-primary
+          path: ${{ env.CARGO_TARGET_DIR }}/x86_64-pc-windows-msvc/release
+      - name: Download prebuilt Windows helper binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-binaries-x86_64-pc-windows-msvc-helpers
+          path: ${{ env.CARGO_TARGET_DIR }}/x86_64-pc-windows-msvc/release
+      - name: Download prebuilt Windows app-server binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-binaries-x86_64-pc-windows-msvc-app-server
+          path: ${{ env.CARGO_TARGET_DIR }}/x86_64-pc-windows-msvc/release
+      - name: Verify binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          for binary in ${WINDOWS_BINARIES}; do
+            ls -lh "$CARGO_TARGET_DIR/x86_64-pc-windows-msvc/release/${binary}.exe"
+          done
+      - name: Stage artifacts
+        shell: bash
+        run: |
+          dest="dist/x86_64-pc-windows-msvc"
+          mkdir -p "$dest"
+
+          for binary in ${WINDOWS_BINARIES}; do
+            cp "$CARGO_TARGET_DIR/x86_64-pc-windows-msvc/release/${binary}.exe" \
+              "$dest/${binary}-x86_64-pc-windows-msvc.exe"
+          done
+      - name: Build Codex package archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive_script="${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh"
+          temp_root="${RUNNER_TEMP}/codex-package-archives"
+          mkdir -p "$temp_root/primary" "$temp_root/app-server"
+          printf '%s\0' primary app-server |
+            xargs -0 -P0 -I{} env \
+              TMPDIR="$temp_root/{}" \
+              TMP="$temp_root/{}" \
+              TEMP="$temp_root/{}" \
+              bash "$archive_script" \
+                --target x86_64-pc-windows-msvc \
+                --bundle "{}" \
+                --entrypoint-dir "$CARGO_TARGET_DIR/x86_64-pc-windows-msvc/release" \
+                --archive-dir "dist/x86_64-pc-windows-msvc"
+      - name: Compress artifacts
+        shell: bash
+        run: |
+          dest="dist/x86_64-pc-windows-msvc"
+          repo_root=$PWD
+          target="x86_64-pc-windows-msvc"
+          export dest repo_root target
+          printf '%s\0' "$dest"/* |
+            xargs -0 -n1 -P2 bash -c '
+            set -euo pipefail
+            f=$1
+            base="$(basename "$f")"
+            if [[ "$base" == *.tar.gz || "$base" == *.tar.zst || "$base" == *.zip || "$base" == *.dmg ]]; then
+              exit 0
+            fi
+            if [[ "$base" == *.sigstore ]]; then
+              exit 0
+            fi
+            tar -C "$dest" -czf "$dest/${base}.tar.gz" "$base"
+            if [[ "$base" == "codex-${target}.exe" ]]; then
+              bundle_dir="$(mktemp -d)"
+              runner_src="$dest/codex-command-runner-${target}.exe"
+              setup_src="$dest/codex-windows-sandbox-setup-${target}.exe"
+              if [[ -f "$runner_src" && -f "$setup_src" ]]; then
+                cp "$dest/$base" "$bundle_dir/$base"
+                cp "$runner_src" "$bundle_dir/codex-command-runner.exe"
+                cp "$setup_src" "$bundle_dir/codex-windows-sandbox-setup.exe"
+                (cd "$bundle_dir" && 7z a "$repo_root/$dest/${base}.zip" .)
+              else
+                echo "warning: missing sandbox binaries; falling back to single-binary zip"
+                (cd "$dest" && 7z a "${base}.zip" "$base")
+              fi
+              rm -rf "$bundle_dir"
+            else
+              (cd "$dest" && 7z a "${base}.zip" "$base")
+            fi
+            "${GITHUB_WORKSPACE}/.github/workflows/zstd" -T0 -19 "$dest/$base"
+          ' _
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: x86_64-pc-windows-msvc
+          path: |
+            codex-rs/dist/x86_64-pc-windows-msvc/*
