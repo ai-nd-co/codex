@@ -655,23 +655,18 @@ jobs:
             "$bundle_root/codex-resources/bwrap"
           tar -C "$bundle_root" -cf - codex codex-code-mode-host codex-resources/bwrap |
             zstd -T0 -19 -o "$dest/codex-${target}-bundle.tar.zst"
-      - name: Download packaged zsh manifest
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -fsSL \
-            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-zsh" \
-            -o "${RUNNER_TEMP}/codex-zsh"
       - name: Build Codex package archive
         shell: bash
         run: |
           set -euo pipefail
+          # The fork-only alpha path does not publish its own codex-zsh release
+          # manifest. Reuse the checked-in DotSlash manifest, which already
+          # points at the upstream OpenAI-hosted zsh artifacts.
           bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
             --target x86_64-unknown-linux-musl \
             --bundle primary \
             --entrypoint-dir "target/x86_64-unknown-linux-musl/release" \
-            --archive-dir "dist/x86_64-unknown-linux-musl" \
-            --zsh-manifest "${RUNNER_TEMP}/codex-zsh"
+            --archive-dir "dist/x86_64-unknown-linux-musl"
       - name: Compress artifacts
         shell: bash
         run: |
