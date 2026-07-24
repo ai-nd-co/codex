@@ -1,6 +1,9 @@
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dirs::home_dir;
 use std::path::PathBuf;
+use std::path::Path;
+
+pub const STATE_HOME_ENV: &str = "CODEX_STATE_HOME";
 
 /// Returns the path to the Codex configuration directory, which can be
 /// specified by the `CODEX_HOME` environment variable. If not set, defaults to
@@ -15,6 +18,26 @@ pub fn find_codex_home() -> std::io::Result<AbsolutePathBuf> {
         .ok()
         .filter(|val| !val.is_empty());
     find_codex_home_from_env(codex_home_env.as_deref())
+}
+
+pub fn find_codex_state_home() -> std::io::Result<AbsolutePathBuf> {
+    let cwd = std::env::current_dir()?;
+    find_codex_state_home_with_cwd(&cwd)
+}
+
+pub fn find_codex_state_home_with_cwd(cwd: &Path) -> std::io::Result<AbsolutePathBuf> {
+    let codex_home_env = std::env::var("CODEX_HOME")
+        .ok()
+        .filter(|val| !val.is_empty());
+    let state_home_env = std::env::var(STATE_HOME_ENV)
+        .ok()
+        .filter(|val| !val.is_empty());
+    find_codex_state_home_from_env(
+        codex_home_env.as_deref(),
+        state_home_env.as_deref(),
+        cwd,
+        home_dir(),
+    )
 }
 
 fn find_codex_home_from_env(codex_home_env: Option<&str>) -> std::io::Result<AbsolutePathBuf> {
@@ -62,14 +85,102 @@ fn find_codex_home_from_env(codex_home_env: Option<&str>) -> std::io::Result<Abs
     }
 }
 
+pub fn is_project_local_codex_home(codex_home: &Path, cwd: &Path) -> bool {
+    let Ok(codex_home) = canonicalize_existing_or_absolute(codex_home) else {
+        return false;
+    };
+    let Ok(cwd) = AbsolutePathBuf::from_absolute_path(cwd) else {
+        return false;
+    };
+
+    if cwd
+        .ancestors()
+        .map(|ancestor| canonicalize_existing_or_absolute(ancestor.join(".codex")))
+        .filter_map(Result::ok)
+        .any(|candidate| candidate == codex_home)
+    {
+        return true;
+    }
+
+    if codex_home
+        .as_path()
+        .file_name()
+        .and_then(|name| name.to_str())
+        != Some(".codex")
+    {
+        return false;
+    }
+
+    let Some(project_root) = codex_home.parent() else {
+        return false;
+    };
+    project_root.join(".git").as_path().exists()
+        || project_root.join(".jj").as_path().exists()
+        || project_root.join("AGENTS.md").as_path().exists()
+        || project_root.join("CODE.md").as_path().exists()
+        || project_root.join("CLAUDE.md").as_path().exists()
+}
+
+fn canonicalize_existing_or_absolute(path: impl AsRef<Path>) -> std::io::Result<AbsolutePathBuf> {
+    let path = path.as_ref();
+    if path.exists() {
+        let canonical = path.canonicalize()?;
+        AbsolutePathBuf::from_absolute_path(canonical)
+    } else {
+        AbsolutePathBuf::from_absolute_path(path)
+    }
+}
+
+fn find_codex_state_home_from_env(
+    codex_home_env: Option<&str>,
+    state_home_env: Option<&str>,
+    cwd: &Path,
+    user_home: Option<PathBuf>,
+) -> std::io::Result<AbsolutePathBuf> {
+    let codex_home = find_codex_home_from_env(codex_home_env)?;
+
+    if let Some(raw) = state_home_env {
+        return resolve_state_home_override(raw, cwd);
+    }
+
+    if is_project_local_codex_home(codex_home.as_path(), cwd) {
+        let mut default_state_home = user_home.ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Could not find home directory for CODEX_STATE_HOME default",
+            )
+        })?;
+        default_state_home.push(".codex");
+        default_state_home.push("state");
+        return AbsolutePathBuf::from_absolute_path(default_state_home);
+    }
+
+    Ok(codex_home)
+}
+
+fn resolve_state_home_override(raw: &str, cwd: &Path) -> std::io::Result<AbsolutePathBuf> {
+    let path = AbsolutePathBuf::resolve_path_against_base(raw, cwd);
+    match std::fs::metadata(path.as_path()) {
+        Ok(metadata) if !metadata.is_dir() => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{STATE_HOME_ENV} points to {raw:?}, but that path is not a directory"),
+        )),
+        Ok(_) | Err(_) => Ok(path),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::find_codex_home_from_env;
+    use super::find_codex_state_home_from_env;
+    use super::is_project_local_codex_home;
+    use super::canonicalize_existing_or_absolute;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::io::ErrorKind;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     #[test]
@@ -129,6 +240,137 @@ mod tests {
         let mut expected = home_dir().expect("home dir");
         expected.push(".codex");
         let expected = AbsolutePathBuf::from_absolute_path(expected).expect("absolute home");
+        assert_eq!(resolved, expected);
+    }
+
+    #[test]
+    fn project_local_codex_home_detects_ancestor_dot_codex() {
+        let repo = TempDir::new().expect("repo");
+        let cwd = repo.path().join("nested/worktree");
+        fs::create_dir_all(&cwd).expect("nested cwd");
+        let codex_home = repo.path().join(".codex");
+        fs::create_dir_all(&codex_home).expect(".codex");
+
+        assert!(is_project_local_codex_home(&codex_home, &cwd));
+    }
+
+    #[test]
+    fn project_local_codex_home_detects_repo_marker_parent() {
+        let repo = TempDir::new().expect("repo");
+        let cwd = TempDir::new().expect("cwd elsewhere");
+        let codex_home = repo.path().join(".codex");
+        fs::create_dir_all(&codex_home).expect(".codex");
+        fs::write(repo.path().join("CLAUDE.md"), "hi").expect("marker");
+
+        assert!(is_project_local_codex_home(&codex_home, cwd.path()));
+    }
+
+    #[test]
+    fn state_home_defaults_to_global_state_for_project_local_codex_home() {
+        let home = TempDir::new().expect("home");
+        let repo = home.path().join("repo");
+        let cwd = repo.join("nested");
+        let codex_home = repo.join(".codex");
+        fs::create_dir_all(&cwd).expect("cwd");
+        fs::create_dir_all(&codex_home).expect("codex home");
+
+        let resolved = find_codex_state_home_from_env(
+            Some(
+                codex_home
+                    .to_str()
+                    .expect("project-local codex home should be valid utf-8"),
+            ),
+            None,
+            &cwd,
+            Some(home.path().to_path_buf()),
+        )
+        .expect("state home");
+
+        let expected = canonicalize_existing_or_absolute(home.path().join(".codex/state"))
+            .unwrap_or_else(|_| {
+                AbsolutePathBuf::from_absolute_path(home.path().join(".codex/state"))
+                    .expect("absolute state home")
+            });
+        assert_eq!(resolved, expected);
+    }
+
+    #[test]
+    fn state_home_defaults_to_codex_home_for_non_project_local_home() {
+        let home = TempDir::new().expect("home");
+        let cwd = home.path().join("repo");
+        let codex_home = home.path().join("global-codex-home");
+        fs::create_dir_all(&cwd).expect("cwd");
+        fs::create_dir_all(&codex_home).expect("codex home");
+
+        let resolved = find_codex_state_home_from_env(
+            Some(
+                codex_home
+                    .to_str()
+                    .expect("global codex home should be valid utf-8"),
+            ),
+            None,
+            &cwd,
+            Some(home.path().to_path_buf()),
+        )
+        .expect("state home");
+
+        let expected = canonicalize_existing_or_absolute(codex_home).expect("absolute home");
+        assert_eq!(resolved, expected);
+    }
+
+    #[test]
+    fn state_home_override_wins_even_for_project_local_codex_home() {
+        let home = TempDir::new().expect("home");
+        let repo = home.path().join("repo");
+        let cwd = repo.join("nested");
+        let codex_home = repo.join(".codex");
+        let state_home = home.path().join("custom-state-home");
+        fs::create_dir_all(&cwd).expect("cwd");
+        fs::create_dir_all(&codex_home).expect("codex home");
+
+        let resolved = find_codex_state_home_from_env(
+            Some(
+                codex_home
+                    .to_str()
+                    .expect("project-local codex home should be valid utf-8"),
+            ),
+            Some(
+                state_home
+                    .to_str()
+                    .expect("state home override should be valid utf-8"),
+            ),
+            &cwd,
+            Some(home.path().to_path_buf()),
+        )
+        .expect("state home");
+
+        let expected = AbsolutePathBuf::from_absolute_path(state_home).expect("absolute home");
+        assert_eq!(resolved, expected);
+    }
+
+    #[test]
+    fn relative_state_home_override_resolves_against_cwd() {
+        let home = TempDir::new().expect("home");
+        let repo = home.path().join("repo");
+        let cwd = repo.join("nested");
+        let codex_home = repo.join(".codex");
+        fs::create_dir_all(&cwd).expect("cwd");
+        fs::create_dir_all(&codex_home).expect("codex home");
+
+        let resolved = find_codex_state_home_from_env(
+            Some(
+                codex_home
+                    .to_str()
+                    .expect("project-local codex home should be valid utf-8"),
+            ),
+            Some("../shared-state"),
+            &cwd,
+            Some(home.path().to_path_buf()),
+        )
+        .expect("state home");
+
+        let expected = AbsolutePathBuf::from_absolute_path(PathBuf::from(&cwd).join("../shared-state"))
+            .expect("absolute state home");
         assert_eq!(resolved, expected);
     }
 }

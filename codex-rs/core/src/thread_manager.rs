@@ -275,7 +275,7 @@ pub fn build_models_manager(
 ) -> SharedModelsManager {
     let provider = create_model_provider(config.model_provider.clone(), Some(auth_manager));
     provider.models_manager(
-        config.codex_home.to_path_buf(),
+        config.state_home.to_path_buf(),
         config.model_catalog.clone(),
     )
 }
@@ -290,7 +290,7 @@ pub fn thread_store_from_config(
                 .features
                 .enabled(Feature::LocalThreadStoreCompression)
             {
-                codex_rollout::spawn_rollout_compression_worker(config.codex_home.to_path_buf());
+                codex_rollout::spawn_rollout_compression_worker(config.state_home.to_path_buf());
             }
             Arc::new(LocalThreadStore::new(
                 LocalThreadStoreConfig::from_config(config),
@@ -328,11 +328,11 @@ impl ThreadManager {
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
         external_time_provider: Option<Arc<dyn TimeProvider>>,
     ) -> Self {
-        let codex_home = config.codex_home.clone();
+        let state_home = config.state_home.clone();
         let restriction_product = session_source.restriction_product();
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let plugins_manager = Arc::new(PluginsManager::new_with_options(
-            codex_home.to_path_buf(),
+            state_home.to_path_buf(),
             restriction_product,
             auth_manager.get_api_auth_mode(),
         ));
@@ -342,7 +342,7 @@ impl ThreadManager {
             codex_apps_tools_cache,
         ));
         let skills_service = Arc::new(SkillsService::new_with_restriction_product(
-            codex_home,
+            state_home,
             config.bundled_skills_enabled(),
             restriction_product,
         ));

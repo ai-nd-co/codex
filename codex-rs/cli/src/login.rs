@@ -176,7 +176,7 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
 
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
     match login_with_chatgpt(
-        config.codex_home.to_path_buf(),
+        config.state_home.to_path_buf(),
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
@@ -209,7 +209,7 @@ pub async fn run_login_with_api_key(
     }
 
     match login_with_api_key(
-        &config.codex_home,
+        &config.state_home,
         &api_key,
         config.cli_auth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
@@ -240,7 +240,7 @@ pub async fn run_login_with_access_token(
 
     let auth_route_config = config.auth_route_config();
     match login_with_access_token(
-        &config.codex_home,
+        &config.state_home,
         &access_token,
         config.cli_auth_credentials_store_mode,
         config.forced_chatgpt_workspace_id.as_deref(),

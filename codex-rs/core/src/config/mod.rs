@@ -286,6 +286,163 @@ fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
     }
 }
 
+fn resolve_state_home(
+    codex_home: &AbsolutePathBuf,
+    resolved_cwd: &AbsolutePathBuf,
+) -> std::io::Result<AbsolutePathBuf> {
+    if let Some(raw) = std::env::var(codex_utils_home_dir::STATE_HOME_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        let path = AbsolutePathBuf::resolve_path_against_base(&raw, resolved_cwd.as_path());
+        if let Ok(metadata) = std::fs::metadata(path.as_path())
+            && !metadata.is_dir()
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "{} points to {raw:?}, but that path is not a directory",
+                    codex_utils_home_dir::STATE_HOME_ENV
+                ),
+            ));
+        }
+        return Ok(path);
+    }
+
+    if codex_utils_home_dir::is_project_local_codex_home(
+        codex_home.as_path(),
+        resolved_cwd.as_path(),
+    ) {
+        let home_dir = dirs::home_dir().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Could not find home directory for CODEX_STATE_HOME default",
+            )
+        })?;
+        return AbsolutePathBuf::from_absolute_path(home_dir.join(".codex").join("state"));
+    }
+
+    Ok(codex_home.clone())
+}
+
+fn migrate_project_local_runtime_state(
+    config_home: &AbsolutePathBuf,
+    state_home: &AbsolutePathBuf,
+    project_local_codex_home: bool,
+) -> std::io::Result<Option<String>> {
+    if !project_local_codex_home || config_home == state_home || state_home_initialized(state_home)
+    {
+        return Ok(None);
+    }
+
+    const DIRS: &[&str] = &[
+        "sessions",
+        "archived_sessions",
+        "secrets",
+        "plugins/cache",
+        "marketplaces",
+        "memories",
+    ];
+    const FILES: &[&str] = &[
+        "session_index.jsonl",
+        "history.jsonl",
+        "auth.json",
+        ".credentials.json",
+        codex_state::STATE_DB_FILENAME,
+        codex_state::LOGS_DB_FILENAME,
+        codex_state::GOALS_DB_FILENAME,
+        codex_state::MEMORIES_DB_FILENAME,
+        codex_state::THREAD_HISTORY_DB_FILENAME,
+        "app-server-daemon/settings.json",
+    ];
+
+    let mut migrated = Vec::new();
+    for relative in DIRS {
+        let source = config_home.join(relative);
+        let target = state_home.join(relative);
+        if !source.as_path().exists() || target.as_path().exists() {
+            continue;
+        }
+        copy_dir_recursive(source.as_path(), target.as_path())?;
+        migrated.push(relative.to_string());
+    }
+
+    for relative in FILES {
+        let source = config_home.join(relative);
+        let target = state_home.join(relative);
+        if !source.as_path().exists() || target.as_path().exists() {
+            continue;
+        }
+        copy_file_non_destructive(source.as_path(), target.as_path())?;
+        migrated.push(relative.to_string());
+    }
+
+    if migrated.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(format!(
+            "Migrated project-local runtime state from {} to {} ({})",
+            config_home.display(),
+            state_home.display(),
+            migrated.join(", ")
+        )))
+    }
+}
+
+fn state_home_initialized(state_home: &AbsolutePathBuf) -> bool {
+    [
+        "sessions",
+        "archived_sessions",
+        "session_index.jsonl",
+        "history.jsonl",
+        "auth.json",
+        ".credentials.json",
+        "secrets",
+        "plugins/cache",
+        "marketplaces",
+        "memories",
+        codex_state::STATE_DB_FILENAME,
+        codex_state::LOGS_DB_FILENAME,
+        codex_state::GOALS_DB_FILENAME,
+        codex_state::MEMORIES_DB_FILENAME,
+        codex_state::THREAD_HISTORY_DB_FILENAME,
+        "app-server-daemon/settings.json",
+    ]
+    .into_iter()
+    .any(|relative| state_home.join(relative).as_path().exists())
+}
+
+fn copy_file_non_destructive(source: &Path, target: &Path) -> std::io::Result<()> {
+    if target.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::copy(source, target)?;
+    Ok(())
+}
+
+fn copy_dir_recursive(source: &Path, target: &Path) -> std::io::Result<()> {
+    if target.exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(target)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let entry_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            copy_dir_recursive(&entry_path, &target_path)?;
+        } else if file_type.is_file() {
+            copy_file_non_destructive(&entry_path, &target_path)?;
+        }
+    }
+    Ok(())
+}
+
 fn resolve_cli_auth_credentials_store_mode(
     configured: AuthCredentialsStoreMode,
     package_version: &str,
@@ -890,6 +1047,12 @@ pub struct Config {
     /// overridden by the `CODEX_HOME` environment variable).
     pub codex_home: AbsolutePathBuf,
 
+    /// Directory containing mutable runtime state. Defaults to
+    /// `CODEX_STATE_HOME` when set. When `CODEX_HOME` points to a project-local
+    /// `.codex`, this defaults to `~/.codex/state`; otherwise it defaults to
+    /// `CODEX_HOME`.
+    pub state_home: AbsolutePathBuf,
+
     /// Directory where Codex stores the SQLite state DB.
     pub sqlite_home: PathBuf,
 
@@ -1231,7 +1394,7 @@ pub struct TerminalResizeReflowConfig {
 
 impl AuthManagerConfig for Config {
     fn codex_home(&self) -> PathBuf {
-        self.codex_home.to_path_buf()
+        self.state_home.to_path_buf()
     }
 
     fn cli_auth_credentials_store_mode(&self) -> AuthCredentialsStoreMode {
@@ -3279,7 +3442,15 @@ impl Config {
             None => WindowsSandboxLevel::Disabled,
         };
         let memories_config: MemoriesConfig = cfg.memories.clone().unwrap_or_default().into();
-        let memories_root = memory_root(&codex_home);
+        let project_local_codex_home =
+            codex_utils_home_dir::is_project_local_codex_home(codex_home.as_path(), resolved_cwd.as_path());
+        let state_home = resolve_state_home(&codex_home, &resolved_cwd)?;
+        if let Some(message) =
+            migrate_project_local_runtime_state(&codex_home, &state_home, project_local_codex_home)?
+        {
+            startup_warnings.push(message);
+        }
+        let memories_root = memory_root(&state_home);
 
         let profiles_are_active = effective_permission_selection.profiles_are_active(
             default_permissions_override.as_deref(),
@@ -3775,7 +3946,7 @@ impl Config {
             .log_dir
             .as_ref()
             .map(AbsolutePathBuf::to_path_buf)
-            .unwrap_or_else(|| codex_home.join("log").to_path_buf());
+            .unwrap_or_else(|| state_home.join("log").to_path_buf());
         let sqlite_home_env = resolve_sqlite_home_env(&resolved_cwd);
         requirements::push_sqlite_home_env_override_warning(
             configured_sqlite_home.as_ref(),
@@ -3788,7 +3959,7 @@ impl Config {
             .as_ref()
             .map(AbsolutePathBuf::to_path_buf)
             .or(sqlite_home_env)
-            .unwrap_or_else(|| codex_home.to_path_buf());
+            .unwrap_or_else(|| state_home.to_path_buf());
         let original_permission_profile = permission_profile.clone();
         apply_requirement_constrained_value(
             "approval_policy",
@@ -3859,7 +4030,7 @@ impl Config {
             &network_permission_profile,
         )?;
         let mut helper_readable_roots = get_readable_roots_required_for_codex_runtime(
-            &codex_home,
+            state_home.as_path(),
             zsh_path.as_ref(),
             main_execve_wrapper_exe.as_ref(),
         );
@@ -3982,6 +4153,7 @@ impl Config {
             memories: memories_config,
             agent_interrupt_message_enabled,
             codex_home,
+            state_home,
             sqlite_home,
             log_dir,
             config_lock_export_dir: cfg
@@ -4469,6 +4641,10 @@ fn normalize_guardian_policy_config(value: Option<&str>) -> Option<String> {
 ///   directory exists.
 pub fn find_codex_home() -> std::io::Result<AbsolutePathBuf> {
     codex_utils_home_dir::find_codex_home()
+}
+
+pub fn find_codex_state_home() -> std::io::Result<AbsolutePathBuf> {
+    codex_utils_home_dir::find_codex_state_home()
 }
 
 /// Returns the path to the folder where Codex logs are stored. Does not verify

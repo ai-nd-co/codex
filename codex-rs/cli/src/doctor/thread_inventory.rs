@@ -92,7 +92,7 @@ impl RolloutScan {
 
 pub(super) async fn thread_inventory_check(config: &Config) -> DoctorCheck {
     thread_inventory_check_for_roots(
-        config.codex_home.as_path(),
+        config.state_home.as_path(),
         config.sqlite_home.as_path(),
         config.model_provider_id.as_str(),
     )
@@ -100,11 +100,11 @@ pub(super) async fn thread_inventory_check(config: &Config) -> DoctorCheck {
 }
 
 async fn thread_inventory_check_for_roots(
-    codex_home: &Path,
+    state_home: &Path,
     sqlite_home: &Path,
     default_provider: &str,
 ) -> DoctorCheck {
-    let scan = scan_rollout_files(codex_home).await;
+    let scan = scan_rollout_files(state_home).await;
     let state_db_path = codex_state::state_db_path(sqlite_home);
 
     let mut details = vec![
@@ -158,7 +158,7 @@ async fn thread_inventory_check_for_roots(
         }
     };
 
-    parity_check_from_scan_and_rows(codex_home, scan, rows, details)
+    parity_check_from_scan_and_rows(state_home, scan, rows, details)
 }
 
 fn missing_state_db_check(scan: RolloutScan, details: Vec<String>) -> DoctorCheck {
@@ -212,14 +212,14 @@ fn missing_state_db_check(scan: RolloutScan, details: Vec<String>) -> DoctorChec
                 scan.reached_scan_cap
             ))
             .expected("rollout directories are fully scannable")
-            .remedy("Check file permissions and unexpected files under CODEX_HOME sessions."),
+            .remedy("Check file permissions and unexpected files under the runtime state sessions directories."),
         );
     }
     check
 }
 
 fn parity_check_from_scan_and_rows(
-    codex_home: &Path,
+    state_home: &Path,
     scan: RolloutScan,
     rows: Vec<ThreadStateAuditRow>,
     mut details: Vec<String>,
@@ -263,7 +263,7 @@ fn parity_check_from_scan_and_rows(
                             .existing_keys
                             .contains(&rollout_path_key(&row.rollout_path))
                             || row.rollout_path.is_file())
-                        .then(|| archived_from_rollout_path(codex_home, &row.rollout_path))
+                        .then(|| archived_from_rollout_path(state_home, &row.rollout_path))
                         .flatten()
                     })?;
                 (expected_archived != row.archived).then_some(row)
@@ -430,22 +430,22 @@ fn parity_check_from_scan_and_rows(
                 scan.reached_scan_cap
             ))
             .expected("rollout directories are fully scannable")
-            .remedy("Check file permissions and unexpected files under CODEX_HOME sessions."),
+            .remedy("Check file permissions and unexpected files under the runtime state sessions directories."),
         );
     }
     check
 }
 
-async fn scan_rollout_files(codex_home: &Path) -> RolloutScan {
+async fn scan_rollout_files(state_home: &Path) -> RolloutScan {
     let mut scan = RolloutScan::default();
     scan_rollout_root(
-        &codex_home.join("sessions"),
+        &state_home.join("sessions"),
         /*archived*/ false,
         &mut scan,
     )
     .await;
     scan_rollout_root(
-        &codex_home.join("archived_sessions"),
+        &state_home.join("archived_sessions"),
         /*archived*/ true,
         &mut scan,
     )
@@ -602,12 +602,12 @@ fn rollout_path_key(path: &Path) -> PathBuf {
     path_key(&codex_rollout::plain_rollout_path(path))
 }
 
-fn archived_from_rollout_path(codex_home: &Path, path: &Path) -> Option<bool> {
+fn archived_from_rollout_path(state_home: &Path, path: &Path) -> Option<bool> {
     let key = path_key(path);
-    if key.starts_with(path_key(&codex_home.join("archived_sessions"))) {
+    if key.starts_with(path_key(&state_home.join("archived_sessions"))) {
         return Some(true);
     }
-    if key.starts_with(path_key(&codex_home.join("sessions"))) {
+    if key.starts_with(path_key(&state_home.join("sessions"))) {
         return Some(false);
     }
     None

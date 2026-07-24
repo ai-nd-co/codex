@@ -26,7 +26,7 @@ const UPDATE_PID_FILE_NAME: &str = "app-server-updater.pid";
 /// client connection problems without proving the daemon itself is broken.
 pub(super) async fn background_server_check(config: &Config) -> DoctorCheck {
     let mut details = Vec::new();
-    let state_dir = config.codex_home.join(STATE_DIR_NAME);
+    let state_dir = config.state_home.join(STATE_DIR_NAME);
     details.push(format!("daemon state dir: {}", state_dir.display()));
     push_file_detail(
         &mut details,
@@ -40,7 +40,7 @@ pub(super) async fn background_server_check(config: &Config) -> DoctorCheck {
         &state_dir.join(UPDATE_PID_FILE_NAME),
     );
 
-    let socket_path = match codex_app_server::app_server_control_socket_path(&config.codex_home) {
+    let socket_path = match codex_app_server::app_server_control_socket_path(&config.state_home) {
         Ok(socket_path) => socket_path,
         Err(err) => {
             return DoctorCheck::new(
@@ -193,7 +193,7 @@ mod tests {
     }
 
     fn create_socket_placeholder(config: &Config) {
-        let socket_path = codex_app_server::app_server_control_socket_path(&config.codex_home)
+        let socket_path = codex_app_server::app_server_control_socket_path(&config.state_home)
             .expect("socket path");
         std::fs::create_dir_all(socket_path.parent().expect("socket parent"))
             .expect("create socket dir");

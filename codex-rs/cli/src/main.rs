@@ -73,6 +73,7 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
+use codex_core::config::find_codex_state_home;
 use codex_core::config::resolve_profile_v2_config_path;
 use codex_features::FEATURES;
 use codex_features::Stage;
@@ -1198,8 +1199,8 @@ async fn cli_main(
                     let socket_path = match proxy_cli.socket_path {
                         Some(socket_path) => socket_path,
                         None => {
-                            let codex_home = find_codex_home()?;
-                            codex_app_server::app_server_control_socket_path(&codex_home)?
+                            let state_home = find_codex_state_home()?;
+                            codex_app_server::app_server_control_socket_path(&state_home)?
                         }
                     };
                     codex_stdio_to_uds::run(socket_path.as_path()).await?;
@@ -2056,7 +2057,7 @@ async fn run_debug_clear_memories_command(
     let cleared_memories_db =
         StateRuntime::clear_memory_data_in_sqlite_home(config.sqlite_home.as_path()).await?;
 
-    clear_memory_roots_contents(&config.codex_home).await?;
+    clear_memory_roots_contents(&config.state_home).await?;
 
     let mut message = if cleared_memories_db {
         format!("Cleared memory state from {}.", memories_path.display())
@@ -2861,8 +2862,8 @@ mod tests {
     }
 
     fn default_app_server_socket_path() -> AbsolutePathBuf {
-        let codex_home = find_codex_home().expect("codex home");
-        codex_app_server::app_server_control_socket_path(&codex_home)
+        let state_home = find_codex_state_home().expect("state home");
+        codex_app_server::app_server_control_socket_path(&state_home)
             .expect("default app-server socket path")
     }
 

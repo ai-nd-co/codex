@@ -1841,7 +1841,7 @@ async fn thread_session_state_from_thread_response(
         .transpose()
         .map_err(|err| format!("forked_from_id is invalid: {err}"))?;
     let history_config =
-        codex_message_history::HistoryConfig::new(config.codex_home.clone(), &config.history);
+        codex_message_history::HistoryConfig::new(config.state_home.clone(), &config.history);
     let (log_id, entry_count) = codex_message_history::history_metadata(&history_config).await;
     Ok(ThreadSessionState {
         thread_id,
@@ -2849,7 +2849,7 @@ mod tests {
         let thread_id = ThreadId::new();
 
         let history_config =
-            codex_message_history::HistoryConfig::new(config.codex_home.clone(), &config.history);
+            codex_message_history::HistoryConfig::new(config.state_home.clone(), &config.history);
 
         codex_message_history::append_entry("older", &thread_id, &history_config)
             .await

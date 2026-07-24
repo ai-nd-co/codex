@@ -113,11 +113,38 @@ use rmcp::model::FormElicitationCapability;
 use rmcp::model::UrlElicitationCapability;
 
 use codex_config::test_support::CloudConfigBundleFixture;
+use once_cell::sync::Lazy;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::Duration;
 use tempfile::TempDir;
+
+static STATE_HOME_ENV_TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+struct ScopedEnvVar {
+    key: &'static str,
+    previous: Option<String>,
+}
+
+impl ScopedEnvVar {
+    fn set(key: &'static str, value: &Path) -> Self {
+        let previous = std::env::var(key).ok();
+        unsafe { std::env::set_var(key, value) };
+        Self { key, previous }
+    }
+}
+
+impl Drop for ScopedEnvVar {
+    fn drop(&mut self) {
+        if let Some(previous) = self.previous.as_deref() {
+            unsafe { std::env::set_var(self.key, previous) };
+        } else {
+            unsafe { std::env::remove_var(self.key) };
+        }
+    }
+}
 
 fn stdio_mcp(command: &str) -> McpServerConfig {
     stdio_mcp_with_args(command, &[])
@@ -5388,6 +5415,121 @@ async fn sqlite_home_defaults_to_codex_home_for_workspace_write() -> std::io::Re
     .await?;
 
     assert_eq!(config.sqlite_home, codex_home.path().to_path_buf());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn state_home_override_decouples_runtime_paths_from_project_local_codex_home()
+-> std::io::Result<()> {
+    let _guard = STATE_HOME_ENV_TEST_LOCK.lock().expect("env lock");
+    let temp = TempDir::new()?;
+    let project_root = temp.path().join("repo");
+    let codex_home = project_root.join(".codex");
+    let cwd = project_root.join("nested");
+    let state_home = temp.path().join("state-home");
+    std::fs::create_dir_all(&codex_home)?;
+    std::fs::create_dir_all(&cwd)?;
+    let _state_home_env = ScopedEnvVar::set(codex_utils_home_dir::STATE_HOME_ENV, &state_home);
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(cwd),
+            ..Default::default()
+        },
+        AbsolutePathBuf::from_absolute_path(codex_home.clone())?,
+    )
+    .await?;
+
+    assert_eq!(
+        config.codex_home,
+        AbsolutePathBuf::from_absolute_path(codex_home)?
+    );
+    assert_eq!(
+        config.state_home,
+        AbsolutePathBuf::from_absolute_path(state_home.clone())?
+    );
+    assert_eq!(config.sqlite_home, state_home);
+    assert_eq!(config.log_dir, config.state_home.join("log").to_path_buf());
+
+    Ok(())
+}
+
+#[test]
+fn migration_copies_durable_runtime_state_and_skips_ephemeral_artifacts() -> std::io::Result<()> {
+    let temp = TempDir::new()?;
+    let config_home = temp.path().join("repo/.codex");
+    let state_home = temp.path().join("state-home");
+    std::fs::create_dir_all(config_home.join("sessions/2026/07/24"))?;
+    std::fs::create_dir_all(config_home.join("plugins/cache/debug"))?;
+    std::fs::create_dir_all(config_home.join("skills/.system/example"))?;
+    std::fs::create_dir_all(config_home.join(".tmp/marketplaces/example"))?;
+    std::fs::create_dir_all(config_home.join("app-server-daemon"))?;
+    std::fs::write(
+        config_home.join("sessions/2026/07/24/thread.jsonl"),
+        "rollout",
+    )?;
+    std::fs::write(config_home.join("session_index.jsonl"), "index")?;
+    std::fs::write(config_home.join("history.jsonl"), "history")?;
+    std::fs::write(config_home.join("auth.json"), "{}")?;
+    std::fs::write(config_home.join(codex_state::STATE_DB_FILENAME), "db")?;
+    std::fs::write(config_home.join("plugins/cache/debug/plugin.txt"), "plugin")?;
+    std::fs::write(config_home.join("models_cache.json"), "ephemeral")?;
+    std::fs::write(
+        config_home.join("skills/.system/example/SKILL.md"),
+        "cached",
+    )?;
+    std::fs::write(config_home.join(".tmp/marketplaces/example/tmp.txt"), "tmp")?;
+    std::fs::write(
+        config_home.join("app-server-daemon/settings.json"),
+        "{\"enabled\":true}",
+    )?;
+    std::fs::write(config_home.join("app-server-daemon/daemon.lock"), "lock")?;
+
+    let migrated = migrate_project_local_runtime_state(
+        &AbsolutePathBuf::from_absolute_path(config_home.clone())?,
+        &AbsolutePathBuf::from_absolute_path(state_home.clone())?,
+        /*project_local_codex_home*/ true,
+    )?;
+
+    assert!(migrated.is_some(), "expected migration message");
+    assert!(state_home.join("sessions/2026/07/24/thread.jsonl").exists());
+    assert!(state_home.join("session_index.jsonl").exists());
+    assert!(state_home.join("history.jsonl").exists());
+    assert!(state_home.join("auth.json").exists());
+    assert!(state_home.join(codex_state::STATE_DB_FILENAME).exists());
+    assert!(state_home.join("plugins/cache/debug/plugin.txt").exists());
+    assert!(state_home.join("app-server-daemon/settings.json").exists());
+    assert!(!state_home.join("models_cache.json").exists());
+    assert!(!state_home.join("skills/.system").exists());
+    assert!(!state_home.join(".tmp/marketplaces").exists());
+    assert!(!state_home.join("app-server-daemon/daemon.lock").exists());
+
+    Ok(())
+}
+
+#[test]
+fn migration_skips_when_state_home_is_already_initialized() -> std::io::Result<()> {
+    let temp = TempDir::new()?;
+    let config_home = temp.path().join("repo/.codex");
+    let state_home = temp.path().join("state-home");
+    std::fs::create_dir_all(config_home.join("sessions"))?;
+    std::fs::create_dir_all(&state_home)?;
+    std::fs::write(config_home.join("sessions/thread.jsonl"), "rollout")?;
+    std::fs::write(state_home.join("auth.json"), "{\"authoritative\":true}")?;
+
+    let migrated = migrate_project_local_runtime_state(
+        &AbsolutePathBuf::from_absolute_path(config_home)?,
+        &AbsolutePathBuf::from_absolute_path(state_home.clone())?,
+        /*project_local_codex_home*/ true,
+    )?;
+
+    assert!(
+        migrated.is_none(),
+        "initialized state home should skip migration"
+    );
+    assert!(!state_home.join("sessions/thread.jsonl").exists());
 
     Ok(())
 }

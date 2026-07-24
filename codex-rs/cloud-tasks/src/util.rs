@@ -59,7 +59,7 @@ pub async fn load_auth_manager(
     };
     let http_client_factory = config.http_client_factory();
     let auth_manager = AuthManager::new(
-        config.codex_home.to_path_buf(),
+        config.state_home.to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         config.cli_auth_credentials_store_mode,
         config.forced_chatgpt_workspace_id.clone(),
