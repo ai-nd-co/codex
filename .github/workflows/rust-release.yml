@@ -1160,10 +1160,16 @@ jobs:
       contents: read
       id-token: write
     uses: ./.github/workflows/rust-release-windows.yml
+    with:
+      alpha_gh_hosted_x64_only: ${{ needs.tag-check.outputs.alpha_linux_windows_only == 'true' }}
     secrets: inherit
 
   argument-comment-lint-release-assets:
-    if: ${{ github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true' }}
+    if: >-
+      ${{
+        (github.repository == 'openai/codex' || vars.CODEX_ENABLE_RELEASE_INFRA == 'true') &&
+        needs.tag-check.outputs.alpha_linux_windows_only != 'true'
+      }}
     name: argument-comment-lint release assets
     needs: tag-check
     uses: ./.github/workflows/rust-release-argument-comment-lint.yml
