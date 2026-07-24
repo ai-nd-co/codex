@@ -341,7 +341,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON((github.repository == 'openai/codex' || vars.CODEX_ENABLE_BAZEL_WINDOWS == 'true')
+        include:
+          ${{ fromJSON((github.repository == 'openai/codex' || vars.CODEX_ENABLE_BAZEL_WINDOWS == 'true')
           && format('[{{"os":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"}},{{"os":"macos-15-xlarge","target":"aarch64-apple-darwin"}},{{"os":"windows-latest","target":"x86_64-pc-windows-gnullvm","runs_on":{{"group":"{0}-runners","labels":"{0}-windows-x64"}}}}]', github.event.repository.name)
           || '[{"os":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"},{"os":"macos-15-xlarge","target":"aarch64-apple-darwin"}]') }}
     runs-on: ${{ matrix.runs_on || matrix.os }}
@@ -434,7 +435,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON((github.repository == 'openai/codex' || vars.CODEX_ENABLE_BAZEL_WINDOWS == 'true')
+        include:
+          ${{ fromJSON((github.repository == 'openai/codex' || vars.CODEX_ENABLE_BAZEL_WINDOWS == 'true')
           && format('[{{"os":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"}},{{"os":"macos-15-xlarge","target":"aarch64-apple-darwin"}},{{"os":"windows-latest","target":"x86_64-pc-windows-gnullvm","runs_on":{{"group":"{0}-runners","labels":"{0}-windows-x64"}}}}]', github.event.repository.name)
           || '[{"os":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"},{"os":"macos-15-xlarge","target":"aarch64-apple-darwin"}]') }}
     runs-on: ${{ matrix.runs_on || matrix.os }}
