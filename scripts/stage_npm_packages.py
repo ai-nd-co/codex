@@ -30,11 +30,6 @@ BINARY_TARGETS = (
     "x86_64-pc-windows-msvc",
     "aarch64-pc-windows-msvc",
 )
-TARGET_TO_PLATFORM_PACKAGE = {
-    package_config["target_triple"]: package_name
-    for package_name, package_config in CODEX_PLATFORM_PACKAGES.items()
-}
-
 _SPEC = importlib.util.spec_from_file_location("codex_build_npm_package", BUILD_SCRIPT)
 if _SPEC is None or _SPEC.loader is None:
     raise RuntimeError(f"Unable to load module from {BUILD_SCRIPT}")
@@ -46,6 +41,10 @@ CODEX_PLATFORM_PACKAGES = getattr(_BUILD_MODULE, "CODEX_PLATFORM_PACKAGES", {})
 CODEX_PACKAGE_COMPONENT = getattr(
     _BUILD_MODULE, "CODEX_PACKAGE_COMPONENT", "codex-package"
 )
+TARGET_TO_PLATFORM_PACKAGE = {
+    package_config["target_triple"]: package_name
+    for package_name, package_config in CODEX_PLATFORM_PACKAGES.items()
+}
 
 
 @dataclass(frozen=True)
