@@ -1,7 +1,7 @@
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dirs::home_dir;
-use std::path::PathBuf;
 use std::path::Path;
+use std::path::PathBuf;
 
 pub const STATE_HOME_ENV: &str = "CODEX_STATE_HOME";
 
@@ -171,10 +171,10 @@ fn resolve_state_home_override(raw: &str, cwd: &Path) -> std::io::Result<Absolut
 
 #[cfg(test)]
 mod tests {
+    use super::canonicalize_existing_or_absolute;
     use super::find_codex_home_from_env;
     use super::find_codex_state_home_from_env;
     use super::is_project_local_codex_home;
-    use super::canonicalize_existing_or_absolute;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
@@ -369,8 +369,9 @@ mod tests {
         )
         .expect("state home");
 
-        let expected = AbsolutePathBuf::from_absolute_path(PathBuf::from(&cwd).join("../shared-state"))
-            .expect("absolute state home");
+        let expected =
+            AbsolutePathBuf::from_absolute_path(PathBuf::from(&cwd).join("../shared-state"))
+                .expect("absolute state home");
         assert_eq!(resolved, expected);
     }
 }
