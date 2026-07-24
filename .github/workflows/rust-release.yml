@@ -1791,6 +1791,11 @@ jobs:
       }}
     # This job only invokes a GitHub Action to open/update the winget-pkgs PR;
     # it does not execute Windows-only tooling, so Linux is sufficient.
+    #
+    # The upstream implementation uses an external winget publishing action, but
+    # this fork's Actions policy does not allow that action. Keep the job as a
+    # fork-safe no-op so the overall release workflow can still start and run
+    # the alpha Linux/Windows npm path.
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1799,15 +1804,10 @@ jobs:
       deployment: false
 
     steps:
-      - name: Publish to WinGet
-        uses: vedantmgoyal9/winget-releaser@7bd472be23763def6e16bd06cc8b1cdfab0e2fd5
-        with:
-          identifier: OpenAI.Codex
-          version: ${{ needs.release.outputs.version }}
-          release-tag: ${{ needs.release.outputs.tag }}
-          fork-user: openai-oss-forks
-          installers-regex: '^codex-(?:x86_64|aarch64)-pc-windows-msvc\.exe\.zip$'
-          token: ${{ secrets.WINGET_PUBLISH_PAT }}
+      - name: Skip WinGet publish on this fork
+        shell: bash
+        run: |
+          echo "::warning title=WinGet publish skipped::This fork disables WinGet publishing because the upstream winget action is not allowlisted by the current GitHub Actions policy."
 
   update-branch:
     name: Update latest-alpha-cli branch
