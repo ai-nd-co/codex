@@ -30,6 +30,10 @@ BINARY_TARGETS = (
     "x86_64-pc-windows-msvc",
     "aarch64-pc-windows-msvc",
 )
+TARGET_TO_PLATFORM_PACKAGE = {
+    package_config["target_triple"]: package_name
+    for package_name, package_config in CODEX_PLATFORM_PACKAGES.items()
+}
 
 _SPEC = importlib.util.spec_from_file_location("codex_build_npm_package", BUILD_SCRIPT)
 if _SPEC is None or _SPEC.loader is None:
@@ -121,6 +125,16 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Directory where npm tarballs should be written (default: dist/npm).",
+    )
+    parser.add_argument(
+        "--target",
+        dest="targets",
+        action="append",
+        choices=BINARY_TARGETS,
+        help=(
+            "Limit native artifact staging to the given target triple. "
+            "May be provided multiple times. Defaults to all release targets."
+        ),
     )
     parser.add_argument(
         "--keep-staging-dirs",
@@ -263,6 +277,7 @@ def install_native_components(
     components: set[str],
     vendor_root: Path,
     artifacts_dir: Path,
+    targets: Sequence[str],
 ) -> None:
     if not components:
         return
@@ -280,6 +295,7 @@ def install_native_components(
             artifacts_dir,
             sorted(components),
             vendor_dir,
+            targets,
         )
     print(f"Installed native dependencies into {vendor_dir}", flush=True)
 
@@ -290,15 +306,17 @@ def install_from_workflow_artifacts(
     artifacts_dir: Path,
     components: Sequence[str],
     vendor_dir: Path,
+    targets: Sequence[str],
 ) -> None:
-    artifacts = select_target_artifacts(workflow_id, github_repo, components)
+    artifacts = select_target_artifacts(workflow_id, github_repo, components, targets)
     download_artifacts(workflow_id, github_repo, artifacts_dir, artifacts)
     if CODEX_PACKAGE_COMPONENT in components:
-        install_codex_package_archives(artifacts_dir, vendor_dir, BINARY_TARGETS)
+        install_codex_package_archives(artifacts_dir, vendor_dir, targets)
     install_binary_components(
         artifacts_dir,
         vendor_dir,
         [BINARY_COMPONENTS[name] for name in components if name in BINARY_COMPONENTS],
+        targets,
     )
 
 
@@ -306,6 +324,7 @@ def select_target_artifacts(
     workflow_id: str,
     github_repo: str,
     components: Sequence[str],
+    targets: Sequence[str],
 ) -> list[WorkflowArtifact]:
     needs_target_artifacts = CODEX_PACKAGE_COMPONENT in components or any(
         component in BINARY_COMPONENTS for component in components
@@ -318,7 +337,7 @@ def select_target_artifacts(
         for artifact in list_workflow_artifacts(workflow_id, github_repo)
     }
     selected_artifacts: list[WorkflowArtifact] = []
-    for target in BINARY_TARGETS:
+    for target in targets:
         for artifact_name in [target, f"{target}-unsigned"]:
             artifact = artifacts_by_name.get(artifact_name)
             if artifact is not None:
@@ -447,9 +466,10 @@ def install_binary_components(
     artifacts_dir: Path,
     vendor_dir: Path,
     selected_components: Sequence[BinaryComponent],
+    targets: Sequence[str],
 ) -> None:
     for component in selected_components:
-        component_targets = list(BINARY_TARGETS)
+        component_targets = list(targets)
 
         print(
             f"Installing {component.binary_basename} binaries for targets: "
@@ -566,6 +586,12 @@ def tarball_name_for_package(package: str, version: str) -> str:
 def main() -> int:
     args = parse_args()
     github_repo = resolve_github_repo(args.repo, args.workflow_url)
+    selected_targets = list(dict.fromkeys(args.targets or list(BINARY_TARGETS)))
+    selected_platform_packages = [
+        TARGET_TO_PLATFORM_PACKAGE[target]
+        for target in selected_targets
+        if target in TARGET_TO_PLATFORM_PACKAGE
+    ]
 
     output_dir = args.output_dir or (REPO_ROOT / "dist" / "npm")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -575,6 +601,7 @@ def main() -> int:
     packages = expand_packages(list(args.packages))
     native_component_sets = collect_native_component_sets(packages)
     print("Expanded packages: " + ", ".join(packages), flush=True)
+    print("Selected targets: " + ", ".join(selected_targets), flush=True)
     if native_component_sets:
         component_sets = [
             "(" + ", ".join(components) + ")" for components in native_component_sets
@@ -624,6 +651,7 @@ def main() -> int:
                     set(components),
                     vendor_temp_root,
                     artifacts_temp_root,
+                    selected_targets,
                 )
                 vendor_src_by_components[components] = vendor_temp_root / "vendor"
 
@@ -656,6 +684,9 @@ def main() -> int:
             )
             if vendor_src is not None:
                 cmd.extend(["--vendor-src", str(vendor_src)])
+            if package == "codex":
+                for platform_package in selected_platform_packages:
+                    cmd.extend(["--platform-package", platform_package])
 
             staging_jobs.append(
                 (staging_dir, cmd, f"Staged {package} at {pack_output}")

@@ -45,7 +45,7 @@ staging smoke step is still not authoritative for fork prerelease validation.
 | PR validation or pushes to `main` via `blocking-ci.yml`   | Ready now                                                            | Use this for non-release workflow validation; a branch push by itself does not trigger `blocking-ci.yml`.                                                                              |
 | Optional `repo-checks.yml` npm staging step               | Ready only when explicitly enabled with fork run context             | The fork path now requires `CODEX_REPO_CHECKS_NPM_STAGING_WORKFLOW_RUN_ID` and derives the run URL from the current repo; leave it off unless you intentionally want that smoke check. |
 | Tag-triggered `rust-release.yml` beta smoke               | Ready only after normal PR/`main` CI and release-infra gating checks | `publish-npm` stays off for beta tags, but the release asset path still depends on `CODEX_ENABLE_RELEASE_INFRA` plus the fork's release runners/signing environment.                   |
-| Tag-triggered `rust-release.yml` alpha prerelease publish | Ready only after final audit and external release infra checks       | This is the first end-to-end path that exercises npm publish.                                                                                                                          |
+| Tag-triggered `rust-release.yml` alpha prerelease publish | Ready only after final audit and Linux/Windows release infra checks | On the fork, numbered alpha tags now publish npm from Linux/Windows workflow artifacts directly and intentionally skip macOS release/signing.                                          |
 | R2, dev website, and winget satellites                    | Intentionally deferred                                               | Keep `CODEX_ENABLE_R2_RELEASE`, `CODEX_ENABLE_DEV_WEBSITE_DEPLOY`, and `CODEX_ENABLE_WINGET_PUBLISH` unset for the first fork dry run.                                                 |
 
 ## Prerequisites for any later dry run
@@ -62,7 +62,7 @@ staging smoke step is still not authoritative for fork prerelease validation.
    - `release-dry-run/2026-07-22-alpha1`
 4. Keep the first fork dry run narrow:
    - enable `CODEX_ENABLE_RELEASE_INFRA=true` only when the repo actually has
-     the full release environment
+     the Linux/Windows release environment needed for the path you are exercising
    - leave `CODEX_ENABLE_R2_RELEASE`, `CODEX_ENABLE_DEV_WEBSITE_DEPLOY`, and
      `CODEX_ENABLE_WINGET_PUBLISH` unset
 5. Do not enable `NPM_PUBLISH_USE_TOKEN_FALLBACK` unless you are explicitly
@@ -182,7 +182,7 @@ Use two separate tag styles depending on what you need to validate:
 | Goal                                           | Tag shape             | Why                                                                                                                     |
 | ---------------------------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | GitHub release asset smoke without npm publish | `rust-vX.Y.Z-beta.1`  | The workflow accepts beta tags, but `publish-npm` should stay off because `should_publish_npm=false` for beta versions. |
-| End-to-end npm prerelease validation           | `rust-vX.Y.Z-alpha.1` | The workflow marks numbered alpha versions as prereleases and still enables `publish-npm`.                              |
+| End-to-end npm prerelease validation           | `rust-vX.Y.Z-alpha.1` | On the fork, numbered alpha tags publish npm from Linux/Windows artifacts only; stable/full release expectations remain unchanged. |
 
 Important contract:
 
@@ -200,9 +200,11 @@ Recommended sequence:
    assembly, and GitHub Release creation.
 2. Run an alpha tag only after:
    - phase `008` is merged
-   - the repo has the full release environment enabled
+   - the repo has Linux and Windows release runners enabled for the fork
    - npm trusted publishing is configured for the fork, or you explicitly plan
      to test the fallback token path from phase `028`
+   - you accept that the alpha npm path intentionally skips macOS assets/signing
+     on the fork
 
 Example commands:
 
@@ -225,14 +227,16 @@ These cannot be proven locally:
 - GitHub Actions access to the fork repository
 - self-hosted Linux release runners referenced by the upstream release jobs
 - self-hosted Windows release runners used by `rust-release-windows.yml`
-- macOS codesigning and notarization environment required by the guarded macOS
+- macOS codesigning and notarization environment required by the full/stable
   release jobs
 - Azure Trusted Signing or equivalent Windows signing environment
 - npm trusted publisher configuration for the fork repository, or an explicit
   fallback `NPM_TOKEN` secret plus `NPM_PUBLISH_USE_TOKEN_FALLBACK=true`
 
 If any of those are unavailable, stop at branch/PR CI validation and do not push
-release tags yet.
+release tags yet. For the fork alpha npm path specifically, macOS release/signing
+is no longer a hard prerequisite; Linux/Windows runner availability and npm auth
+still are.
 
 ## Explicit stop conditions before a real release
 
@@ -243,8 +247,9 @@ true:
   `.github/workflows/rust-release.yml` or shipped installer scripts
 - `scripts/stage_npm_packages.py` still falls all the way through to the `openai/codex` default because no explicit or inferred fork repo context was supplied
 - `repo-checks.yml` is enabled for fork validation without also providing `CODEX_REPO_CHECKS_NPM_STAGING_WORKFLOW_RUN_ID`
-- the repo lacks the full release runner and signing environment required by
-  phase `007`
+- the repo lacks the Linux/Windows release runner and signing environment
+  required for the fork alpha path, or the full release runner/signing
+  environment required for stable/full desktop releases
 - the npm auth path is ambiguous; the recommended default is OIDC trusted
   publishing, with the token fallback used only when explicitly enabled
 

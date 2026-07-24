@@ -130,6 +130,16 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Directory containing pre-installed native binaries to bundle (vendor root).",
     )
+    parser.add_argument(
+        "--platform-package",
+        dest="platform_packages",
+        action="append",
+        choices=tuple(CODEX_PLATFORM_PACKAGES),
+        help=(
+            "Limit the root @ai-nd-co/codex package to the given platform package alias. "
+            "May be provided multiple times. Defaults to all platform packages."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -147,10 +157,16 @@ def main() -> int:
     if not version:
         raise RuntimeError("Must specify --version or --release-version.")
 
+    selected_platform_packages = (
+        list(dict.fromkeys(args.platform_packages))
+        if args.platform_packages
+        else [package for package in PACKAGE_EXPANSIONS["codex"] if package != "codex"]
+    )
+
     staging_dir, created_temp = prepare_staging_dir(args.staging_dir)
 
     try:
-        stage_sources(staging_dir, version, package)
+        stage_sources(staging_dir, version, package, selected_platform_packages)
 
         vendor_src = args.vendor_src.resolve() if args.vendor_src else None
         native_components = PACKAGE_NATIVE_COMPONENTS.get(package, [])
@@ -226,7 +242,12 @@ def prepare_staging_dir(staging_dir: Path | None) -> tuple[Path, bool]:
     return temp_dir, True
 
 
-def stage_sources(staging_dir: Path, version: str, package: str) -> None:
+def stage_sources(
+    staging_dir: Path,
+    version: str,
+    package: str,
+    selected_platform_packages: list[str],
+) -> None:
     package_json: dict
     package_json_path: Path | None = None
 
@@ -298,8 +319,7 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
                 f"npm:{CODEX_NPM_NAME}@"
                 f"{compute_platform_package_version(version, CODEX_PLATFORM_PACKAGES[platform_package]['npm_tag'])}"
             )
-            for platform_package in PACKAGE_EXPANSIONS["codex"]
-            if platform_package != "codex"
+            for platform_package in selected_platform_packages
         }
 
     elif package == "codex-sdk":
