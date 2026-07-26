@@ -263,8 +263,6 @@ def stage_sources(
         package_json_path = CODEX_CLI_ROOT / "package.json"
     elif package in CODEX_PLATFORM_PACKAGES:
         platform_package = CODEX_PLATFORM_PACKAGES[package]
-        platform_npm_tag = platform_package["npm_tag"]
-        platform_version = compute_platform_package_version(version, platform_npm_tag)
 
         readme_src = REPO_ROOT / "README.md"
         if readme_src.exists():
@@ -274,8 +272,8 @@ def stage_sources(
             codex_package_json = json.load(fh)
 
         package_json = {
-            "name": CODEX_NPM_NAME,
-            "version": platform_version,
+            "name": platform_package["npm_name"],
+            "version": version,
             "license": codex_package_json.get("license", "Apache-2.0"),
             "os": [platform_package["os"]],
             "cpu": [platform_package["cpu"]],
@@ -315,10 +313,7 @@ def stage_sources(
     if package == "codex":
         package_json["files"] = ["bin/codex.js"]
         package_json["optionalDependencies"] = {
-            CODEX_PLATFORM_PACKAGES[platform_package]["npm_name"]: (
-                f"npm:{CODEX_NPM_NAME}@"
-                f"{compute_platform_package_version(version, CODEX_PLATFORM_PACKAGES[platform_package]['npm_tag'])}"
-            )
+            CODEX_PLATFORM_PACKAGES[platform_package]["npm_name"]: version
             for platform_package in selected_platform_packages
         }
 
@@ -336,13 +331,6 @@ def stage_sources(
     with open(staging_dir / "package.json", "w", encoding="utf-8") as out:
         json.dump(package_json, out, indent=2)
         out.write("\n")
-
-
-def compute_platform_package_version(version: str, platform_tag: str) -> str:
-    # npm forbids republishing the same package name/version, so each
-    # platform-specific tarball needs a unique version string.
-    return f"{version}-{platform_tag}"
-
 
 def run_command(cmd: list[str], cwd: Path | None = None) -> None:
     print("+", " ".join(cmd), flush=True)
