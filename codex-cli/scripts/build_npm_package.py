@@ -87,6 +87,22 @@ PACKAGE_TARGET_FILTERS: dict[str, str] = {
 }
 
 PACKAGE_CHOICES = tuple(PACKAGE_NATIVE_COMPONENTS)
+STRIP_TOOL_CANDIDATES = ("llvm-strip", "strip")
+STRIP_ARGS = ("--strip-debug",)
+STRIPPABLE_BINARY_NAMES = frozenset(
+    {
+        "codex",
+        "codex.exe",
+        "codex-code-mode-host",
+        "codex-code-mode-host.exe",
+        "codex-responses-api-proxy",
+        "codex-responses-api-proxy.exe",
+        "codex-command-runner.exe",
+        "codex-windows-sandbox-setup.exe",
+        "rg",
+        "rg.exe",
+    }
+)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build or stage the Codex CLI npm package.")
@@ -187,6 +203,7 @@ def main() -> int:
                 native_components,
                 target_filter={target_filter} if target_filter else None,
             )
+            maybe_strip_staged_platform_binaries(staging_dir, package, version)
 
         if release_version:
             staging_dir_str = str(staging_dir)
@@ -414,6 +431,97 @@ def copy_native_binaries(
         if missing_targets:
             missing_list = ", ".join(missing_targets)
             raise RuntimeError(f"Missing target directories in vendor source: {missing_list}")
+
+
+def is_alpha_prerelease(version: str) -> bool:
+    return "-alpha." in version
+
+
+def maybe_strip_staged_platform_binaries(
+    staging_dir: Path,
+    package: str,
+    version: str,
+) -> None:
+    if package not in CODEX_PLATFORM_PACKAGES or not is_alpha_prerelease(version):
+        return
+
+    strip_tool = find_strip_tool()
+    if strip_tool is None:
+        print(
+            "No strip tool found for staged alpha platform package; skipping strip pass.",
+            flush=True,
+        )
+        return
+
+    staged_binaries = list(iter_strippable_binaries(staging_dir / "vendor"))
+    if not staged_binaries:
+        print(
+            "No staged alpha platform binaries matched the strip allowlist; skipping strip pass.",
+            flush=True,
+        )
+        return
+
+    stripped_count = 0
+    total_before = 0
+    total_after = 0
+
+    for binary_path in staged_binaries:
+        before_size = binary_path.stat().st_size
+        try:
+            subprocess.run(
+                [strip_tool, *STRIP_ARGS, str(binary_path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            stderr = exc.stderr.strip() if exc.stderr else "no stderr"
+            print(
+                "Warning: failed to strip staged binary "
+                f"{binary_path.relative_to(staging_dir)} with {Path(strip_tool).name}: {stderr}",
+                flush=True,
+            )
+            continue
+
+        after_size = binary_path.stat().st_size
+        stripped_count += 1
+        total_before += before_size
+        total_after += after_size
+
+    if stripped_count == 0:
+        print(
+            f"Strip tool {Path(strip_tool).name} was available but no staged binaries were stripped.",
+            flush=True,
+        )
+        return
+
+    saved_bytes = total_before - total_after
+    print(
+        "Stripped staged alpha platform binaries with "
+        f"{Path(strip_tool).name}: {stripped_count} file(s), "
+        f"{total_before} -> {total_after} bytes ({saved_bytes} bytes saved).",
+        flush=True,
+    )
+
+
+def find_strip_tool() -> str | None:
+    for tool_name in STRIP_TOOL_CANDIDATES:
+        tool_path = shutil.which(tool_name)
+        if tool_path:
+            return tool_path
+    return None
+
+
+def iter_strippable_binaries(vendor_dir: Path):
+    if not vendor_dir.exists():
+        return
+
+    for binary_path in sorted(vendor_dir.rglob("*")):
+        if not binary_path.is_file() or binary_path.is_symlink():
+            continue
+        if binary_path.name not in STRIPPABLE_BINARY_NAMES:
+            continue
+        yield binary_path
 
 def run_npm_pack(staging_dir: Path, output_path: Path) -> Path:
     output_path = output_path.resolve()
