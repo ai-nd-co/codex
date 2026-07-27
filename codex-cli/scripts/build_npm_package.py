@@ -295,6 +295,9 @@ def stage_sources(
             "os": [platform_package["os"]],
             "cpu": [platform_package["cpu"]],
             "files": ["vendor"],
+            "publishConfig": {
+                "access": "public",
+            },
             "repository": codex_package_json.get("repository"),
         }
 
