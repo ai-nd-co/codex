@@ -44,6 +44,69 @@ const PROD_AGENT_IDENTITY_AUTHAPI_BASE_URL: &str = "https://auth.openai.com/api/
 const STAGING_AGENT_IDENTITY_AUTHAPI_BASE_URL: &str = "https://auth.api.openai.org/api/accounts";
 const AGENT_IDENTITY_KEY_SEED_BYTES: usize = 64;
 const AGENT_IDENTITY_KEY_DERIVATION_CONTEXT: &[u8] = b"codex-agent-identity-ed25519-v1";
+/// Backend-facing compatibility version advertised by this fork. It is deliberately
+/// decoupled from `CARGO_PKG_VERSION`: OpenAI's `/backend-api/codex/models` endpoint
+/// returns an empty model list for the fork's own `0.1.0` package version.
+pub const DEFAULT_WIRE_COMPAT_VERSION: &str = "0.147.0-alpha.1";
+/// Numeric `MAJOR.MINOR.PATCH` prefix of [`DEFAULT_WIRE_COMPAT_VERSION`]. Kept as a
+/// separate constant so the triple accessor can never yield an empty string, even if
+/// the default were edited into something unparseable. A unit test pins the two together.
+pub const DEFAULT_WIRE_COMPAT_VERSION_TRIPLE: &str = "0.147.0";
+pub const WIRE_VERSION_OVERRIDE_ENV_VAR: &str = "CODEX_WIRE_VERSION_OVERRIDE";
+
+/// Extract the numeric `MAJOR.MINOR.PATCH` prefix of a semver-shaped version string,
+/// dropping any prerelease (`-alpha.1`) or build (`+meta`) suffix.
+///
+/// Returns `None` unless the whole string is header-safe and the prefix is exactly
+/// three non-empty ASCII-digit components. This is the single validation gate for the
+/// wire version, so every backend-facing surface (User-Agent, ABOM, `/models`
+/// `client_version`) either accepts an override together or falls back together.
+fn wire_compat_version_triple_of(value: &str) -> Option<String> {
+    let header_safe = !value.is_empty()
+        && value.bytes().all(|b| {
+            matches!(
+                b,
+                b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'.' | b'-' | b'_' | b'+'
+            )
+        });
+    if !header_safe {
+        return None;
+    }
+
+    let without_build = value.split_once('+').map_or(value, |(before, _)| before);
+    let core = without_build
+        .split_once('-')
+        .map_or(without_build, |(before, _)| before);
+
+    let mut parts = core.split('.');
+    let major = parts.next()?;
+    let minor = parts.next()?;
+    let patch = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    for part in [major, minor, patch] {
+        if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+    }
+    Some(format!("{major}.{minor}.{patch}"))
+}
+
+/// Resolve the override to `(full_version, numeric_triple)`, falling back to the
+/// defaults when it is unset, blank, or not a valid version.
+fn resolve_wire_compat_version() -> (String, String) {
+    if let Ok(value) = std::env::var(WIRE_VERSION_OVERRIDE_ENV_VAR) {
+        let trimmed = value.trim();
+        if let Some(triple) = wire_compat_version_triple_of(trimmed) {
+            return (trimmed.to_string(), triple);
+        }
+    }
+    (
+        DEFAULT_WIRE_COMPAT_VERSION.to_string(),
+        DEFAULT_WIRE_COMPAT_VERSION_TRIPLE.to_string(),
+    )
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ChatGptEnvironment {
@@ -494,9 +557,22 @@ fn agent_identity_authapi_url(agent_identity_authapi_base_url: &str, api_path: &
     format!("{base_url}{api_path}")
 }
 
+/// Full backend compatibility version (may carry a prerelease suffix), for surfaces that
+/// accept an arbitrary version string: the wire User-Agent and the agent identity ABOM.
+pub fn wire_compat_version() -> String {
+    resolve_wire_compat_version().0
+}
+
+/// Numeric `MAJOR.MINOR.PATCH` backend compatibility version, for surfaces that only accept
+/// a whole version: the `client_version` query parameter on `/backend-api/codex/models`.
+/// Never returns an empty string.
+pub fn wire_compat_version_triple() -> String {
+    resolve_wire_compat_version().1
+}
+
 pub fn build_abom(session_source: SessionSource) -> AgentBillOfMaterials {
     AgentBillOfMaterials {
-        agent_version: env!("CARGO_PKG_VERSION").to_string(),
+        agent_version: wire_compat_version(),
         agent_harness_id: match &session_source {
             SessionSource::VSCode => "codex-app".to_string(),
             SessionSource::Cli
@@ -570,10 +646,59 @@ mod tests {
     use jsonwebtoken::EncodingKey;
     use jsonwebtoken::Header;
     use pretty_assertions::assert_eq;
+    use std::ffi::OsString;
+    use std::sync::LazyLock;
+    use std::sync::Mutex;
+    use std::sync::MutexGuard;
+    use std::sync::PoisonError;
 
     use codex_protocol::auth::KnownPlan;
 
     use super::*;
+
+    static WIRE_VERSION_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    /// Serialize the tests that mutate `CODEX_WIRE_VERSION_OVERRIDE`. Poison is recovered so a
+    /// single failing assertion reports one failure instead of cascading into the others.
+    fn lock_wire_version_env() -> MutexGuard<'static, ()> {
+        WIRE_VERSION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, original }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let original = std::env::var_os(key);
+            unsafe {
+                std::env::remove_var(key);
+            }
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.original {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
 
     #[test]
     fn register_task_request_uses_single_run_task_shape() {
@@ -988,6 +1113,134 @@ J1bwkqKZTB5dHolX9A58e/xXnfZ5P8f3Z83+Izap3FwqQulk7b1WO1MQcHuVg2NN
             agent_identity_jwks_url("http://localhost:8080/api/codex/"),
             "http://localhost:8080/api/codex/agent-identities/jwks"
         );
+    }
+
+    #[test]
+    fn wire_compat_version_defaults_when_unset() {
+        let _lock = lock_wire_version_env();
+        let _guard = EnvVarGuard::remove(WIRE_VERSION_OVERRIDE_ENV_VAR);
+        assert_eq!(wire_compat_version(), DEFAULT_WIRE_COMPAT_VERSION);
+    }
+
+    #[test]
+    fn wire_compat_version_uses_override_when_non_empty() {
+        let _lock = lock_wire_version_env();
+        let _guard = EnvVarGuard::set(WIRE_VERSION_OVERRIDE_ENV_VAR, "0.200.0-alpha.1");
+        assert_eq!(wire_compat_version(), "0.200.0-alpha.1");
+    }
+
+    #[test]
+    fn wire_compat_version_falls_back_when_override_is_blank() {
+        let _lock = lock_wire_version_env();
+        let _guard = EnvVarGuard::set(WIRE_VERSION_OVERRIDE_ENV_VAR, "   ");
+        assert_eq!(wire_compat_version(), DEFAULT_WIRE_COMPAT_VERSION);
+    }
+
+    #[test]
+    fn wire_compat_version_falls_back_when_override_is_malformed() {
+        let _lock = lock_wire_version_env();
+        let _guard = EnvVarGuard::set(WIRE_VERSION_OVERRIDE_ENV_VAR, "0.200.0-alpha.1\nbad");
+        assert_eq!(wire_compat_version(), DEFAULT_WIRE_COMPAT_VERSION);
+    }
+
+    #[test]
+    fn default_wire_compat_version_triple_matches_default_version() {
+        // Pins the two constants together so the triple accessor can never disagree with
+        // the full default version, and can never be empty.
+        assert_eq!(
+            wire_compat_version_triple_of(DEFAULT_WIRE_COMPAT_VERSION),
+            Some(DEFAULT_WIRE_COMPAT_VERSION_TRIPLE.to_string())
+        );
+    }
+
+    #[test]
+    fn wire_compat_version_triple_strips_prerelease_and_build_metadata() {
+        assert_eq!(
+            wire_compat_version_triple_of("1.2.3"),
+            Some("1.2.3".to_string())
+        );
+        assert_eq!(
+            wire_compat_version_triple_of("1.2.3-alpha.4"),
+            Some("1.2.3".to_string())
+        );
+        assert_eq!(
+            wire_compat_version_triple_of("1.2.3+build.5"),
+            Some("1.2.3".to_string())
+        );
+        assert_eq!(
+            wire_compat_version_triple_of("1.2.3-alpha.4+build.5"),
+            Some("1.2.3".to_string())
+        );
+    }
+
+    #[test]
+    fn wire_compat_version_triple_rejects_unparseable_values() {
+        for value in [
+            "",
+            "1.2",
+            "1.2.3.4",
+            "1.2.x",
+            "1..3",
+            "v1.2.3",
+            "-1.2.3",
+            "abc",
+            "1.2.3 bad",
+            "1.2.3\nbad",
+        ] {
+            assert_eq!(
+                wire_compat_version_triple_of(value),
+                None,
+                "expected {value:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn wire_compat_version_triple_defaults_when_unset() {
+        let _lock = lock_wire_version_env();
+        let _guard = EnvVarGuard::remove(WIRE_VERSION_OVERRIDE_ENV_VAR);
+        assert_eq!(
+            wire_compat_version_triple(),
+            DEFAULT_WIRE_COMPAT_VERSION_TRIPLE
+        );
+    }
+
+    #[test]
+    fn wire_compat_version_triple_uses_override() {
+        let _lock = lock_wire_version_env();
+        let _guard = EnvVarGuard::set(WIRE_VERSION_OVERRIDE_ENV_VAR, "0.1.0-alpha.20");
+        assert_eq!(wire_compat_version(), "0.1.0-alpha.20");
+        assert_eq!(wire_compat_version_triple(), "0.1.0");
+    }
+
+    #[test]
+    fn wire_compat_version_and_triple_fall_back_together() {
+        // A value that is header-safe but not a version must not leave the full accessor
+        // and the triple accessor disagreeing about which version we advertise.
+        let _lock = lock_wire_version_env();
+        let _guard = EnvVarGuard::set(WIRE_VERSION_OVERRIDE_ENV_VAR, "not-a-version");
+        assert_eq!(wire_compat_version(), DEFAULT_WIRE_COMPAT_VERSION);
+        assert_eq!(
+            wire_compat_version_triple(),
+            DEFAULT_WIRE_COMPAT_VERSION_TRIPLE
+        );
+    }
+
+    #[test]
+    fn wire_compat_version_trims_surrounding_whitespace_in_override() {
+        let _lock = lock_wire_version_env();
+        let _guard = EnvVarGuard::set(WIRE_VERSION_OVERRIDE_ENV_VAR, "  0.200.0  ");
+        assert_eq!(wire_compat_version(), "0.200.0");
+        assert_eq!(wire_compat_version_triple(), "0.200.0");
+    }
+
+    #[test]
+    fn build_abom_uses_wire_compat_version() {
+        let _lock = lock_wire_version_env();
+        let _guard = EnvVarGuard::set(WIRE_VERSION_OVERRIDE_ENV_VAR, "0.200.0-alpha.2");
+        let abom = build_abom(SessionSource::Cli);
+        assert_eq!(abom.agent_version, "0.200.0-alpha.2");
+        assert_eq!(abom.agent_harness_id, "codex-cli");
     }
 
     fn jwt_with_payload(payload: serde_json::Value) -> String {

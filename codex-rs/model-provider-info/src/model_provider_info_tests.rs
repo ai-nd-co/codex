@@ -555,3 +555,49 @@ refresh_interval_ms = 0
     assert_eq!(auth.refresh_interval_ms, 0);
     assert_eq!(auth.refresh_interval(), None);
 }
+
+/// Regression test for OpenAI's model gate: `/responses` rejects `gpt-5.6-terra` with
+/// HTTP 400 "requires a newer version of Codex" when the `version` header carries the
+/// fork's own package version. The header must carry the backend compatibility version.
+#[test]
+fn openai_provider_sends_wire_compat_version_header() {
+    let provider = ModelProviderInfo::create_openai_provider(None);
+    let headers = provider
+        .http_headers
+        .expect("openai provider should send http headers");
+    let version_header = headers
+        .get("version")
+        .expect("openai provider should send a version header");
+
+    assert_eq!(
+        version_header,
+        &codex_agent_identity::wire_compat_version(),
+        "the version header must be the backend wire-compat version"
+    );
+    assert_ne!(
+        version_header.as_str(),
+        env!("CARGO_PKG_VERSION"),
+        "the fork package version must not be sent as the /responses version header"
+    );
+}
+
+/// One level closer to the wire than the struct check above: `to_api_provider()` is what
+/// actually builds the `HeaderMap` attached to outbound `/responses` requests, so assert the
+/// wire-compat `version` header survives that conversion for the ChatGPT auth mode used by
+/// `codex exec`.
+#[test]
+fn openai_api_provider_header_map_carries_wire_compat_version() {
+    let api_provider = ModelProviderInfo::create_openai_provider(None)
+        .to_api_provider(Some(AuthMode::Chatgpt))
+        .expect("openai provider should convert to an api provider");
+
+    let version_header = api_provider
+        .headers
+        .get("version")
+        .expect("outbound headers should include a version header")
+        .to_str()
+        .expect("version header should be valid ascii");
+
+    assert_eq!(version_header, codex_agent_identity::wire_compat_version());
+    assert_ne!(version_header, env!("CARGO_PKG_VERSION"));
+}

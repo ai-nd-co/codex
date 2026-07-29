@@ -1,11 +1,17 @@
 use super::sanitize_user_agent;
 use super::*;
+use codex_agent_identity::DEFAULT_WIRE_COMPAT_VERSION;
+use codex_agent_identity::WIRE_VERSION_OVERRIDE_ENV_VAR;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
+use std::ffi::OsString;
 use std::io;
 use std::io::Write;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::sync::Mutex;
+use std::sync::MutexGuard;
+use std::sync::PoisonError;
 use tracing_subscriber::layer::SubscriberExt;
 
 #[derive(Clone)]
@@ -15,6 +21,50 @@ struct TestLogWriter {
 
 struct TestLogSink {
     buffer: Arc<Mutex<Vec<u8>>>,
+}
+
+static WIRE_VERSION_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+/// Serialize the tests that mutate `CODEX_WIRE_VERSION_OVERRIDE`. Poison is recovered so a
+/// single failing assertion reports one failure instead of cascading into the others.
+fn lock_wire_version_env() -> MutexGuard<'static, ()> {
+    WIRE_VERSION_TEST_LOCK
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
+
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let original = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, original }
+    }
+
+    fn remove(key: &'static str) -> Self {
+        let original = std::env::var_os(key);
+        unsafe {
+            std::env::remove_var(key);
+        }
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.original {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
 }
 
 impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for TestLogWriter {
@@ -44,6 +94,47 @@ fn test_get_codex_user_agent() {
     let originator = originator().value;
     let prefix = format!("{originator}/");
     assert!(user_agent.starts_with(&prefix));
+}
+
+#[test]
+fn test_get_codex_user_agent_ignores_wire_version_override() {
+    let _lock = lock_wire_version_env();
+    let _guard = EnvVarGuard::set(WIRE_VERSION_OVERRIDE_ENV_VAR, "0.200.0-alpha.3");
+    let user_agent = get_codex_user_agent();
+    assert!(user_agent.contains(&format!("/{} (", env!("CARGO_PKG_VERSION"))));
+    assert!(!user_agent.contains("/0.200.0-alpha.3 ("));
+}
+
+#[test]
+fn test_get_codex_wire_compat_user_agent_uses_default_wire_compat_version() {
+    let _lock = lock_wire_version_env();
+    let _guard = EnvVarGuard::remove(WIRE_VERSION_OVERRIDE_ENV_VAR);
+    let user_agent = get_codex_wire_compat_user_agent();
+    assert!(user_agent.contains(&format!("/{DEFAULT_WIRE_COMPAT_VERSION} (")));
+}
+
+#[test]
+fn test_get_codex_wire_compat_user_agent_honors_wire_version_override() {
+    let _lock = lock_wire_version_env();
+    let _guard = EnvVarGuard::set(WIRE_VERSION_OVERRIDE_ENV_VAR, "0.200.0-alpha.3");
+    let user_agent = get_codex_wire_compat_user_agent();
+    assert!(user_agent.contains("/0.200.0-alpha.3 ("));
+}
+
+#[test]
+fn test_get_codex_wire_compat_user_agent_blank_override_falls_back_to_default() {
+    let _lock = lock_wire_version_env();
+    let _guard = EnvVarGuard::set(WIRE_VERSION_OVERRIDE_ENV_VAR, "   ");
+    let user_agent = get_codex_wire_compat_user_agent();
+    assert!(user_agent.contains(&format!("/{DEFAULT_WIRE_COMPAT_VERSION} (")));
+}
+
+#[test]
+fn test_get_codex_wire_compat_user_agent_malformed_override_falls_back_to_default() {
+    let _lock = lock_wire_version_env();
+    let _guard = EnvVarGuard::set(WIRE_VERSION_OVERRIDE_ENV_VAR, "0.200.0-alpha.3\nbad");
+    let user_agent = get_codex_wire_compat_user_agent();
+    assert!(user_agent.contains(&format!("/{DEFAULT_WIRE_COMPAT_VERSION} (")));
 }
 
 #[test]

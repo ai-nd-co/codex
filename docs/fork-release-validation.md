@@ -17,6 +17,82 @@ manifests are intentionally pinned to that exact prerelease version. The
 release workflow now enforces that the pushed tag, `codex-rs/Cargo.toml`, and
 those npm manifests all match exactly.
 
+## Backend wire-version compatibility
+
+The fork publishes as `0.1.0-alpha.N`, but OpenAI gates models on the client
+version the CLI reports, on two independent surfaces:
+
+- `/backend-api/codex/models?client_version=0.1.0` returns HTTP 200 with an
+  **empty** model list, so a fork build is offered no models at all.
+- `/backend-api/codex/responses` rejects `gpt-5.6-terra` with HTTP 400
+  `"The 'gpt-5.6-terra' model requires a newer version of Codex."` when the
+  request carries the `version: 0.1.0-alpha.N` header that the built-in OpenAI
+  provider sends. This is the surface that actually blocks `codex exec`; the
+  outbound `User-Agent` is **not** a gate.
+
+The fork therefore advertises a separate backend-facing compatibility version.
+
+- default backend compatibility version: `0.147.0-alpha.1`
+- numeric form sent where only `MAJOR.MINOR.PATCH` is accepted: `0.147.0`
+- env override: `CODEX_WIRE_VERSION_OVERRIDE`
+
+### Surfaces that use the wire version
+
+| Surface | Value |
+| --- | --- |
+| `version` HTTP header on the built-in OpenAI provider, sent on `/responses` (`ModelProviderInfo::create_openai_provider`) | full version, e.g. `0.147.0-alpha.1` |
+| `client_version` query on `/backend-api/codex/models` (`codex_models_manager::client_version_to_whole`) | numeric triple, e.g. `0.147.0` |
+| models cache freshness key (same helper, so a version change invalidates the cache exactly once) | numeric triple |
+| agent identity ABOM `agent_version` (`x-oai-attestation`) | full version, e.g. `0.147.0-alpha.1` |
+| `backend-client` and `cloud-tasks` outbound User-Agent (`get_codex_wire_compat_user_agent`) | full version |
+
+### Surfaces that keep the fork package version (unchanged)
+
+`codex --version`, npm package versions, release tags, `codex-rs/Cargo.toml`
+versions, the `codex_version` recorded in the local config lock, the default
+`get_codex_user_agent()` (which also feeds app-server `initialize` and MCP
+`serverInfo`), and doctor/update-check messaging.
+
+### Override behaviour
+
+`CODEX_WIRE_VERSION_OVERRIDE` is accepted only when it is header-safe and starts
+with a numeric `MAJOR.MINOR.PATCH` triple (an optional `-prerelease` and
+`+build` suffix is allowed and is stripped for the numeric form). Unset, blank,
+whitespace-only, or otherwise unparseable values fall back to the default on
+every surface at once; nothing panics and the advertised version is never empty.
+
+Set the override **before the process starts**. It is read from the environment
+on each call, but some consumers snapshot the resolved value at construction
+(the OpenAI provider's `version` header, the backend and cloud-task clients'
+User-Agent), so mutating it mid-process can leave one session advertising two
+different versions.
+
+Setting `CODEX_WIRE_VERSION_OVERRIDE=0.1.0-alpha.20` reproduces the pre-fix
+behaviour and is the way to verify the gate is real.
+
+### Keeping the default from going stale
+
+`DEFAULT_WIRE_COMPAT_VERSION` is a hardcoded literal and will drift as upstream
+moves. The guard is the unit test
+`default_wire_compat_version_is_not_behind_the_bundled_model_floors` in
+`codex-rs/models-manager/src/lib.rs`: it fails if the advertised triple ever
+falls below the highest `minimal_client_version` in the bundled catalog
+(`codex-rs/models-manager/models.json`), which is the value upstream raises when
+it ships a model needing a newer client. An upstream merge that raises that
+floor therefore breaks the build instead of silently re-breaking the model gate.
+
+### Known remaining inconsistency (deliberate)
+
+The outbound `User-Agent` from `codex_login::default_client::default_headers()`
+still carries the package version. That covers the agent-identity registration
+and JWKS calls, and the responses/realtime websocket handshakes, so those
+requests advertise the wire version in their body or headers while their
+User-Agent says `0.1.0-alpha.N`. This is intentional: the User-Agent was proven
+not to be a gate (a `/responses` POST with `User-Agent:
+codex_cli_rs/0.1.0-alpha.20` returns HTTP 200), and `default_headers()` also
+feeds doctor, core plugins, and other local surfaces that must keep the package
+version.
+
 ## Current stop conditions on July 23, 2026
 
 Local inspection on July 23, 2026 shows that the manager integration line has

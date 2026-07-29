@@ -4,6 +4,7 @@
 //! Use [`crate::default_client`] or [`codex_login::default_client`] from other crates in this
 //! workspace.
 
+use codex_agent_identity::wire_compat_version;
 use codex_http_client::BuildRouteAwareHttpClientError;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClient;
@@ -156,13 +157,13 @@ pub fn is_first_party_chat_originator(originator_value: &str) -> bool {
     originator_value == "codex_atlas" || originator_value == "codex_chatgpt_desktop"
 }
 
-pub fn get_codex_user_agent() -> String {
-    let build_version = env!("CARGO_PKG_VERSION");
+fn build_codex_user_agent(build_version: &str) -> String {
     let os_info = os_info::get();
     let originator = originator();
     let prefix = format!(
-        "{}/{build_version} ({} {}; {}) {}",
+        "{}/{} ({} {}; {}) {}",
         originator.value.as_str(),
+        build_version,
         os_info.os_type(),
         os_info.version(),
         os_info.architecture().unwrap_or("unknown"),
@@ -180,6 +181,14 @@ pub fn get_codex_user_agent() -> String {
 
     let candidate = format!("{prefix}{suffix}");
     sanitize_user_agent(candidate, &prefix)
+}
+
+pub fn get_codex_user_agent() -> String {
+    build_codex_user_agent(env!("CARGO_PKG_VERSION"))
+}
+
+pub fn get_codex_wire_compat_user_agent() -> String {
+    build_codex_user_agent(&wire_compat_version())
 }
 
 /// Sanitize the user agent string.

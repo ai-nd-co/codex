@@ -337,10 +337,17 @@ impl ModelProviderInfo {
             aws: None,
             wire_api: WireApi::Responses,
             query_params: None,
+            // The `version` header is what OpenAI's `/responses` endpoint gates models on:
+            // with the fork's own package version it answers 400 "requires a newer version
+            // of Codex". Send the backend compatibility version instead. `codex --version`,
+            // npm versions, and release tags are unaffected.
             http_headers: Some(
-                [("version".to_string(), env!("CARGO_PKG_VERSION").to_string())]
-                    .into_iter()
-                    .collect(),
+                [(
+                    "version".to_string(),
+                    codex_agent_identity::wire_compat_version(),
+                )]
+                .into_iter()
+                .collect(),
             ),
             env_http_headers: Some(
                 [

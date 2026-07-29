@@ -81,6 +81,7 @@ struct TestModelsEndpoint {
     responses: Mutex<VecDeque<Vec<ModelInfo>>>,
     fetch_count: AtomicUsize,
     observed_proxy_policy: Mutex<Option<OutboundProxyPolicy>>,
+    observed_client_version: Mutex<Option<String>>,
 }
 
 impl TestModelsEndpoint {
@@ -91,6 +92,7 @@ impl TestModelsEndpoint {
             responses: Mutex::new(responses.into()),
             fetch_count: AtomicUsize::new(0),
             observed_proxy_policy: Mutex::new(None),
+            observed_client_version: Mutex::new(None),
         })
     }
 
@@ -101,6 +103,7 @@ impl TestModelsEndpoint {
             responses: Mutex::new(responses.into()),
             fetch_count: AtomicUsize::new(0),
             observed_proxy_policy: Mutex::new(None),
+            observed_client_version: Mutex::new(None),
         })
     }
 
@@ -113,6 +116,15 @@ impl TestModelsEndpoint {
             .observed_proxy_policy
             .lock()
             .expect("observed proxy policy lock should not be poisoned")
+    }
+
+    /// The `client_version` the manager actually handed to the models endpoint, i.e. the value
+    /// that becomes the `client_version` query parameter on `/backend-api/codex/models`.
+    fn observed_client_version(&self) -> Option<String> {
+        self.observed_client_version
+            .lock()
+            .expect("observed client version lock should not be poisoned")
+            .clone()
     }
 
     async fn list_models(&self) -> CoreResult<(Vec<ModelInfo>, Option<String>)> {
@@ -170,7 +182,7 @@ impl ModelsEndpointClient for TestModelsEndpoint {
 
     fn list_models<'a>(
         &'a self,
-        _client_version: &'a str,
+        client_version: &'a str,
         http_client_factory: HttpClientFactory,
     ) -> ModelsEndpointFuture<'a, CoreResult<(Vec<ModelInfo>, Option<String>)>> {
         Box::pin(async move {
@@ -179,6 +191,11 @@ impl ModelsEndpointClient for TestModelsEndpoint {
                 .lock()
                 .expect("observed proxy policy lock should not be poisoned") =
                 Some(http_client_factory.outbound_proxy_policy());
+            *self
+                .observed_client_version
+                .lock()
+                .expect("observed client version lock should not be poisoned") =
+                Some(client_version.to_string());
             TestModelsEndpoint::list_models(self).await
         })
     }
@@ -675,6 +692,7 @@ async fn refresh_available_models_keeps_merging_for_api_auth() {
         responses: Mutex::new(vec![remote_models.clone()].into()),
         fetch_count: AtomicUsize::new(0),
         observed_proxy_policy: Mutex::new(None),
+        observed_client_version: Mutex::new(None),
     });
     let manager = openai_manager_for_tests_with_auth(
         codex_home.path().to_path_buf(),
@@ -1166,5 +1184,72 @@ fn bundled_models_json_roundtrips() {
     assert!(
         !response.models.is_empty(),
         "bundled models.json should contain at least one model"
+    );
+}
+
+/// Request-level regression test for the OpenAI model gate.
+///
+/// `/backend-api/codex/models?client_version=0.1.0` returns an empty model list, which is what
+/// made this fork unusable. Assert the value the manager actually hands to the models endpoint
+/// (and therefore puts in the query string) is the backend wire-compat version, that the
+/// persisted cache is keyed by that same value so a version change invalidates the cache
+/// exactly once, and that the fork's package version never reaches the wire.
+#[tokio::test]
+async fn refresh_available_models_sends_wire_compat_client_version() {
+    let remote_models = vec![remote_model(
+        "wire-version",
+        "Wire Version",
+        /*priority*/ 5,
+    )];
+    let codex_home = tempdir().expect("temp dir");
+    let endpoint = TestModelsEndpoint::new(vec![remote_models.clone()]);
+    let manager = openai_manager_for_tests(codex_home.path().to_path_buf(), endpoint.clone());
+
+    manager
+        .refresh_available_models(
+            RefreshStrategy::OnlineIfUncached,
+            &DEFAULT_HTTP_CLIENT_FACTORY,
+        )
+        .await
+        .expect("refresh succeeds");
+
+    let sent = endpoint
+        .observed_client_version()
+        .expect("the models endpoint should have been called with a client_version");
+    assert_eq!(
+        sent,
+        codex_agent_identity::DEFAULT_WIRE_COMPAT_VERSION_TRIPLE
+    );
+    assert_eq!(sent, crate::client_version_to_whole());
+
+    let package_triple = format!(
+        "{}.{}.{}",
+        env!("CARGO_PKG_VERSION_MAJOR"),
+        env!("CARGO_PKG_VERSION_MINOR"),
+        env!("CARGO_PKG_VERSION_PATCH")
+    );
+    assert_ne!(
+        sent, package_triple,
+        "the fork package version must not reach the /models client_version query parameter"
+    );
+
+    let cached_version = Arc::new(Mutex::new(None));
+    let observed = Arc::clone(&cached_version);
+    manager
+        .cache_manager
+        .as_ref()
+        .expect("cached model manager")
+        .mutate_cache_for_test(move |cache| {
+            *observed.lock().expect("cache observation lock") = cache.client_version.clone();
+        })
+        .await
+        .expect("cache should have been persisted");
+    assert_eq!(
+        cached_version
+            .lock()
+            .expect("cache observation lock")
+            .as_deref(),
+        Some(sent.as_str()),
+        "the models cache must be keyed by the same version that was sent"
     );
 }
