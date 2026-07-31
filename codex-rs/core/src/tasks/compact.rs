@@ -81,3 +81,41 @@ impl SessionTask for CompactTask {
         Ok(None)
     }
 }
+
+/// Selective ("smart") compaction: summarize the older half, keep the newer half verbatim.
+///
+/// Deliberately a separate task from [`CompactTask`] so `/compact` keeps its exact behaviour on
+/// every backend (token-budget, remote v2, remote, local). Reuses [`TaskKind::Compact`] because the
+/// steering and lifecycle semantics are identical: a compaction turn is not steerable.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct SmartCompactTask;
+
+impl SessionTask for SmartCompactTask {
+    fn kind(&self) -> TaskKind {
+        TaskKind::Compact
+    }
+
+    fn span_name(&self) -> &'static str {
+        "session_task.compact_smart"
+    }
+
+    async fn run(
+        self: Arc<Self>,
+        session: Arc<SessionTaskContext>,
+        ctx: Arc<TurnContext>,
+        _input: Vec<TurnInput>,
+        _cancellation_token: CancellationToken,
+    ) -> SessionTaskResult {
+        let session = session.clone_session();
+        emit_compact_metric(
+            &session.services.session_telemetry,
+            "smart",
+            /*manual*/ true,
+        );
+        let result = crate::compact_smart::run_smart_compact_task(session.clone(), ctx).await;
+        if let Err(err @ CodexErr::TurnAborted) = result {
+            return Err(err);
+        }
+        Ok(None)
+    }
+}

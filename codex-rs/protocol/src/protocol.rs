@@ -652,6 +652,17 @@ pub enum Op {
     /// to generate a summary which will be returned as an AgentMessage event.
     Compact,
 
+    /// Request selective ("smart") compaction of the current conversation.
+    ///
+    /// Unlike [`Op::Compact`], which replaces the whole history with a summary,
+    /// this summarizes only the older part of the conversation and keeps the
+    /// newer part verbatim. The split point is chosen automatically at a
+    /// completed-turn boundary near the token-weighted midpoint.
+    ///
+    /// Gated on the `smart_compact` feature flag; with the flag off this op
+    /// reports an error and leaves history untouched.
+    CompactSmart,
+
     /// Set whether the thread remains eligible for memory generation.
     ///
     /// This persists thread-level memory mode metadata without involving the
@@ -883,6 +894,7 @@ impl Op {
             Self::RefreshMcpServers { .. } => "refresh_mcp_servers",
             Self::ReloadUserConfig => "reload_user_config",
             Self::Compact => "compact",
+            Self::CompactSmart => "compact_smart",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
             Self::ThreadRollback { .. } => "thread_rollback",
             Self::Review { .. } => "review",

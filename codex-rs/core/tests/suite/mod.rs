@@ -56,6 +56,7 @@ mod compact;
 mod compact_remote;
 mod compact_remote_parity;
 mod compact_resume_fork;
+mod compact_smart;
 mod current_time_reminder;
 mod deprecation_notice;
 mod exec;

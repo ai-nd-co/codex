@@ -689,6 +689,9 @@
             "skill_search": {
               "type": "boolean"
             },
+            "smart_compact": {
+              "type": "boolean"
+            },
             "sqlite": {
               "type": "boolean"
             },
@@ -5172,6 +5175,9 @@
           "type": "boolean"
         },
         "skill_search": {
+          "type": "boolean"
+        },
+        "smart_compact": {
           "type": "boolean"
         },
         "sqlite": {

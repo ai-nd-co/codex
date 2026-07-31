@@ -23,6 +23,7 @@ mod codex_thread;
 mod compact_model_fallback;
 mod compact_remote;
 mod compact_remote_v2;
+mod compact_smart;
 mod compact_token_budget;
 mod config_lock;
 pub use codex_thread::BackgroundTerminalInfo;
