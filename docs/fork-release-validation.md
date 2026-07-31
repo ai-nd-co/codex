@@ -4,12 +4,12 @@ This guide is the non-destructive validation playbook for the fork release path.
 It is intentionally limited to dry runs, prerelease checks, and explicit stop
 conditions. It does not authorize a production publish.
 
-## Current prepared prerelease target on July 29, 2026
+## Current prepared prerelease target on July 31, 2026
 
 This branch is prepared for the fork's next npm prerelease:
 
-- release version: `0.1.0-alpha.21`
-- release tag: `rust-v0.1.0-alpha.21`
+- release version: `0.1.0-alpha.22`
+- release tag: `rust-v0.1.0-alpha.22`
 - release model: upstream tag-driven `rust-release.yml`
 
 The checked-in Cargo workspace version and the three checked-in npm package
@@ -265,7 +265,7 @@ Important contract:
 - `rust-release.yml` validates the tag against the checked-in Cargo version and
   the checked-in npm manifest versions.
 - That means the current prep commit can only be tagged as
-  `rust-v0.1.0-alpha.21`.
+  `rust-v0.1.0-alpha.22`.
 - If you want an optional beta smoke first, do it from a separate
   beta-versioned prep commit or worktree where the checked-in versions are
   bumped to the matching beta value before tagging.
@@ -292,8 +292,8 @@ git push origin rust-v0.1.0-beta.1
 Later, for the npm path:
 
 ```bash
-git tag -a rust-v0.1.0-alpha.21 -m "fork dry run alpha"
-git push origin rust-v0.1.0-alpha.21
+git tag -a rust-v0.1.0-alpha.22 -m "fork dry run alpha"
+git push origin rust-v0.1.0-alpha.22
 ```
 
 ## External infrastructure required for the prerelease path
