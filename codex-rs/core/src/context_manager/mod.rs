@@ -1,5 +1,7 @@
 mod history;
 mod normalize;
+/// Turn-boundary split selection and call/output closure validation for selective compaction.
+pub(crate) mod split;
 pub(crate) mod updates;
 
 pub(crate) use history::ContextManager;
