@@ -52,9 +52,7 @@
 //! the candidate, while those already present in the input history are reported and tolerated,
 //! because no choice of split can fix them and `for_prompt` already handles them today.
 
-// This module is the S1 half of selective compaction (task 2026-07-30-103). It is deliberately
-// additive and has no production call site yet; phase S2 (task 2026-07-30-104) is the consumer.
-#![allow(dead_code)]
+// `compact_smart::run_smart_compact_task` is this module's production consumer.
 
 use codex_protocol::models::ResponseItem;
 use std::collections::HashSet;
@@ -102,6 +100,7 @@ impl ClosureViolationKind {
     ///
     /// Both answers are violations that selective compaction must not induce. The silent kinds are
     /// arguably worse: they fabricate an `"aborted"` output that the summarizer then believes.
+    #[cfg(test)]
     pub(crate) fn aborts_debug_builds(self) -> bool {
         match self {
             // Repaired with `info!` and no assertion.
@@ -195,6 +194,7 @@ pub(crate) enum SplitRejection {
 /// `CompactionTrigger` and `Other` additionally fail `history::is_api_message`, so `record_items`
 /// never admits them; they are handled here only because `ContextManager::replace` bypasses that
 /// filter.
+#[cfg(test)]
 pub(crate) fn is_turn_metadata_less(item: &ResponseItem) -> bool {
     matches!(
         item,
@@ -244,6 +244,7 @@ fn boundary_split_pairs(items: &[ResponseItem]) -> Vec<(usize, usize)> {
 
 /// Usable candidate split indices: turn boundaries snapped back over their own pre-turn context items,
 /// keeping only those that leave a non-empty older half, ascending.
+#[cfg(test)]
 pub(crate) fn split_candidates(items: &[ResponseItem]) -> Vec<usize> {
     boundary_split_pairs(items)
         .into_iter()
