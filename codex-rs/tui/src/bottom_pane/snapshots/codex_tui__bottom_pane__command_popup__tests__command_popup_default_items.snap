@@ -23,6 +23,7 @@ expression: commands
 /app - continue this session in the Desktop app
 /init - create an AGENTS.md file with instructions for Codex
 /compact - summarize conversation to prevent hitting the context limit
+/smart-compact - summarize the older half of the conversation and keep the recent half verbatim
 /agent - switch the active agent thread
 /side - start a side conversation in an ephemeral fork
 /copy - copy last response as markdown

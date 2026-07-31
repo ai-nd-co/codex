@@ -38,6 +38,7 @@ pub enum SlashCommand {
     App,
     Init,
     Compact,
+    SmartCompact,
     Plan,
     Goal,
     Agent,
@@ -86,6 +87,9 @@ impl SlashCommand {
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
+            SlashCommand::SmartCompact => {
+                "summarize the older half of the conversation and keep the recent half verbatim"
+            }
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Rename => "rename the current thread",
             SlashCommand::Resume => "resume a saved chat",
@@ -195,6 +199,7 @@ impl SlashCommand {
             | SlashCommand::Fork
             | SlashCommand::Init
             | SlashCommand::Compact
+            | SlashCommand::SmartCompact
             | SlashCommand::Keymap
             | SlashCommand::Vim
             | SlashCommand::ElevateSandbox
@@ -297,6 +302,37 @@ mod tests {
         assert!(SlashCommand::Raw.available_in_side_conversation());
         assert!(SlashCommand::Raw.supports_inline_args());
         assert!(SlashCommand::App.available_during_task());
+    }
+
+    #[test]
+    fn smart_compact_command_is_listed_and_takes_no_inline_args() {
+        assert_eq!(SlashCommand::SmartCompact.command(), "smart-compact");
+        assert_eq!(
+            SlashCommand::from_str("smart-compact"),
+            Ok(SlashCommand::SmartCompact)
+        );
+        // Matches `/compact`: the split point is chosen automatically, so there is nothing to pass.
+        assert!(!SlashCommand::SmartCompact.supports_inline_args());
+        assert!(!SlashCommand::SmartCompact.available_during_task());
+        // Must stay visible even with the `smart_compact` feature off, so the flag-off refusal is
+        // reachable instead of the command silently disappearing.
+        let names = super::built_in_slash_commands()
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>();
+        let compact = names
+            .iter()
+            .position(|name| *name == "compact")
+            .expect("/compact is listed");
+        // Pins the position the `default_command_popup_items_snapshot` fixture encodes. That
+        // snapshot test is `#[cfg(target_os = "macos")]`, so it cannot run on this host; this
+        // assertion is the platform-independent proof that `/smart-compact` belongs on the line
+        // directly after `/compact` there.
+        assert_eq!(
+            names.get(compact + 1).copied(),
+            Some("smart-compact"),
+            "/smart-compact must list immediately after /compact"
+        );
     }
 
     #[test]

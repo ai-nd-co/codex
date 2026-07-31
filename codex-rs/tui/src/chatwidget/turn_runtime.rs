@@ -370,6 +370,14 @@ impl ChatWidget {
         self.maybe_send_next_queued_input();
     }
 
+    /// Surface an app-server rejection of `thread/smartCompact/start` without killing the TUI.
+    ///
+    /// `/smart-compact` arms the spinner optimistically before the request goes out, so a rejection
+    /// must both render the reason and finalize the turn state; otherwise the spinner runs forever.
+    pub(crate) fn handle_smart_compact_rejection(&mut self, message: String) {
+        self.on_error(message);
+    }
+
     pub(crate) fn handle_turn_start_rejection(&mut self, message: String) -> bool {
         if !self.input_queue.user_turn_pending_start {
             return false;

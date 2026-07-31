@@ -629,6 +629,16 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn thread_smart_compact_start(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadSmartCompactStartParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_smart_compact_start_inner(request_id, params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn thread_background_terminals_clean(
         &self,
         request_id: &ConnectionRequestId,
@@ -1846,6 +1856,44 @@ impl ThreadRequestProcessor {
             .await
             .map_err(|err| internal_error(format!("failed to start compaction: {err}")))?;
         Ok(ThreadCompactStartResponse {})
+    }
+
+    /// Submit `Op::CompactSmart`, refusing up front when the feature is off.
+    ///
+    /// The flag is read from the loaded thread (`CodexThread::enabled`), which is the authoritative
+    /// per-thread value, and the refusal is returned on the request's own channel rather than left
+    /// to core.
+    ///
+    /// Core does also refuse (`core/src/session/handlers.rs`, `compact_smart`) and publishes a
+    /// readable `EventMsg::Error`, but that event is emitted with `send_event_raw` outside any turn
+    /// and a live run against the real `codex-app-server` binary showed it never reaching the
+    /// client: the request was acknowledged with `{}` and no `error` notification ever arrived. A
+    /// client would then see neither success nor failure, which contradicts what `README.md`
+    /// promises for this method. Answering on the request channel cannot be lost.
+    ///
+    /// Refusing before `submit_core_op` also keeps the thread clean: an out-of-turn `Error` event is
+    /// recorded into `ThreadState::turn_summary.last_error`, which only a turn completion clears, so
+    /// submitting the op just to have core reject it can make an unrelated later turn report as
+    /// failed.
+    ///
+    /// Core's guard stays as defense-in-depth for any other submitter of `Op::CompactSmart`.
+    async fn thread_smart_compact_start_inner(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadSmartCompactStartParams,
+    ) -> Result<ThreadSmartCompactStartResponse, JSONRPCErrorError> {
+        let ThreadSmartCompactStartParams { thread_id } = params;
+
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        if !thread.enabled(Feature::SmartCompact) {
+            return Err(invalid_request(
+                "smart compaction is not enabled for this thread; enable the `smart_compact` feature to use it",
+            ));
+        }
+        self.submit_core_op(request_id, thread.as_ref(), Op::CompactSmart)
+            .await
+            .map_err(|err| internal_error(format!("failed to start smart compaction: {err}")))?;
+        Ok(ThreadSmartCompactStartResponse {})
     }
 
     async fn thread_background_terminals_clean_inner(

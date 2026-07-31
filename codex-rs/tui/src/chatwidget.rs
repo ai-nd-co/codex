@@ -1662,6 +1662,13 @@ impl ChatWidget {
         self.bottom_pane.is_task_running()
     }
 
+    /// Arm the optimistic spinner the way `/smart-compact` dispatch does, for tests that start at
+    /// the `AppEvent::CodexOp` boundary rather than at the slash command.
+    #[cfg(test)]
+    pub(crate) fn set_task_running_for_test(&mut self, running: bool) {
+        self.bottom_pane.set_task_running(running);
+    }
+
     pub(crate) fn toggle_vim_mode_and_notify(&mut self) {
         let enabled = self.bottom_pane.toggle_vim_enabled();
         let message = if enabled {
@@ -1735,7 +1742,10 @@ impl ChatWidget {
         if self.blocks_direct_input
             && matches!(
                 &op,
-                AppCommand::UserTurn { .. } | AppCommand::Review { .. } | AppCommand::Compact
+                AppCommand::UserTurn { .. }
+                    | AppCommand::Review { .. }
+                    | AppCommand::Compact
+                    | AppCommand::SmartCompact
             )
         {
             self.add_error_message(PARENT_OWNED_INPUT_MESSAGE.to_string());

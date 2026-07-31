@@ -87,6 +87,11 @@ pub(crate) enum AppCommand {
         force_reload: bool,
     },
     Compact,
+    /// Selective compaction: summarize the older half, keep the newer half verbatim.
+    ///
+    /// A separate variant rather than a field on [`AppCommand::Compact`] so `/compact` keeps its
+    /// exact routing and payload; the two map to different app-server methods.
+    SmartCompact,
     SetThreadName {
         name: String,
     },
@@ -225,6 +230,10 @@ impl AppCommand {
 
     pub(crate) fn compact() -> Self {
         Self::Compact
+    }
+
+    pub(crate) fn smart_compact() -> Self {
+        Self::SmartCompact
     }
 
     pub(crate) fn set_thread_name(name: String) -> Self {

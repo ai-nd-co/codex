@@ -33,7 +33,7 @@ fn take_backfill_counts(requests: &Arc<Mutex<Vec<String>>>) -> (usize, usize) {
 }
 
 /// Starts an embedded app server behind a loopback WebSocket proxy that records JSON-RPC methods.
-async fn start_recording_app_server(
+pub(super) async fn start_recording_app_server(
     config: &Config,
 ) -> Result<(
     AppServerSession,

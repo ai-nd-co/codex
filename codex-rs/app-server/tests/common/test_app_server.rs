@@ -105,6 +105,7 @@ use codex_app_server_protocol::ThreadSearchParams;
 use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadShellCommandParams;
+use codex_app_server_protocol::ThreadSmartCompactStartParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadUnarchiveParams;
@@ -549,6 +550,15 @@ impl TestAppServer {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/compact/start", params).await
+    }
+
+    /// Send a `thread/smartCompact/start` JSON-RPC request.
+    pub async fn send_thread_smart_compact_start_request(
+        &mut self,
+        params: ThreadSmartCompactStartParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/smartCompact/start", params).await
     }
 
     /// Send a `thread/shellCommand` JSON-RPC request.

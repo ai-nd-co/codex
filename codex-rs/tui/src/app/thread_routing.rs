@@ -737,6 +737,10 @@ impl App {
                 app_server.thread_compact_start(thread_id).await?;
                 Ok(true)
             }
+            AppCommand::SmartCompact => {
+                app_server.thread_smart_compact_start(thread_id).await?;
+                Ok(true)
+            }
             AppCommand::SetThreadName { name } => {
                 app_server
                     .thread_set_name(thread_id, name.to_string())

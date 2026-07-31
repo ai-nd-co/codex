@@ -423,8 +423,27 @@ impl App {
                     self.chat_widget.pre_draw_tick();
                     self.render_chat_widget_frame(tui)?;
                 }
+                let is_smart_compact = matches!(&op, AppCommand::SmartCompact);
                 self.chat_widget.prepare_local_op_submission(&op);
                 if let Err(err) = self.submit_active_thread_op(app_server, op).await {
+                    // The app server refuses `thread/smartCompact/start` when the `smart_compact`
+                    // feature is off for that thread. That is an ordinary, user-visible outcome, not
+                    // a transport failure, and an unhandled error here terminates the whole TUI.
+                    // Recover: render the server's message and end the optimistic turn state that
+                    // the slash dispatch armed. Transport and deserialization failures still fall
+                    // through and remain fatal.
+                    let smart_compact_rejected = is_smart_compact
+                        && matches!(
+                            err.downcast_ref::<TypedRequestError>(),
+                            Some(TypedRequestError::Server { method, .. })
+                                if method == "thread/smartCompact/start"
+                        );
+                    if smart_compact_rejected {
+                        tracing::warn!(error = ?err, "smart compaction rejected by app server");
+                        self.chat_widget
+                            .handle_smart_compact_rejection(format!("{err:#}"));
+                        return Ok(AppRunControl::Continue);
+                    }
                     let handled = is_user_turn
                         && matches!(
                             err.downcast_ref::<TypedRequestError>(),

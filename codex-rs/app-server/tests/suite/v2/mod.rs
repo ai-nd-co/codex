@@ -69,6 +69,7 @@ mod selected_environment;
 mod session_end;
 mod skills_list;
 mod sleep;
+mod smart_compaction;
 mod thread_archive;
 mod thread_delete;
 mod thread_fork;

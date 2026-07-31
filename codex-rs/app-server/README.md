@@ -164,6 +164,7 @@ Example with notification opt-out:
 - `thread/name/set` — set or update a thread’s user-facing name for either a loaded thread or a persisted rollout; returns `{}` on success and emits `thread/name/updated` to initialized, opted-in clients. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
 - `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success and emits `thread/unarchived`.
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
+- `thread/smartCompact/start` — trigger *selective* ("smart") compaction for a thread: summarize only the older part of the conversation and keep the newer part verbatim (experimental; requires `capabilities.experimentalApi`). When the thread does not have the `smart_compact` feature enabled the request is rejected synchronously with an invalid-request error. Otherwise it returns `{}` immediately and the outcome arrives asynchronously: a `warning` notification on success, or an `error` notification carrying a readable reason when the conversation cannot be split or the summary would not reduce context.
 - `thread/shellCommand` — run a user-initiated `!` shell command against a thread; this runs unsandboxed with full access rather than inheriting the thread sandbox policy. Returns `{}` immediately while progress streams through standard turn/item notifications and any active turn receives the formatted output in its message stream.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
 - `thread/backgroundTerminals/list` — list running background terminals for a loaded thread (experimental; requires `capabilities.experimentalApi`); returns `data` with the running terminal ids.
@@ -728,6 +729,42 @@ While compaction is running, the thread is effectively in a turn so clients shou
 ```json
 { "method": "thread/compact/start", "id": 25, "params": { "threadId": "thr_b" } }
 { "id": 25, "result": {} }
+```
+
+### Example: Trigger selective ("smart") thread compaction
+
+Use `thread/smartCompact/start` to summarize only the **older** part of a thread's history while the
+newer part is kept verbatim. The split point is chosen by the server at a completed-turn boundary
+near the token-weighted midpoint, so the request carries no range. Like `thread/compact/start`, it
+returns immediately with `{}`.
+
+This method is experimental: the connection must have negotiated `capabilities.experimentalApi`, and
+the `smart_compact` feature must be enabled for the thread.
+
+Two refusal shapes, deliberately different:
+
+- **Feature disabled** — rejected *synchronously*, before anything is submitted, with JSON-RPC error
+  code `-32600`. Nothing is queued and no notification follows, so a client that only watches the
+  request channel still learns the outcome.
+- **Cannot compact** — the request is accepted (`{}`) and the reason arrives asynchronously as an
+  `error` notification with human-readable prose, for example when the thread does not yet have two
+  turns to split between, or when the summary would not be smaller than the half it replaces.
+
+On success the same compaction item pair is emitted as for `thread/compact/start`
+(`item/started` / `item/completed` with `item: { "type": "contextCompaction", ... }`), followed by a
+`warning` notification summarizing what was replaced.
+
+```json
+{ "method": "thread/smartCompact/start", "id": 26, "params": { "threadId": "thr_b" } }
+{ "id": 26, "result": {} }
+{ "method": "warning", "params": { "threadId": "thr_b", "message": "Smart compact: summarized the oldest 6 history items (~4200 tokens) and kept the most recent 7 items (~3900 tokens) verbatim." } }
+```
+
+With the feature disabled:
+
+```json
+{ "method": "thread/smartCompact/start", "id": 27, "params": { "threadId": "thr_b" } }
+{ "id": 27, "error": { "code": -32600, "message": "smart compaction is not enabled for this thread; enable the `smart_compact` feature to use it" } }
 ```
 
 ### Example: Run a thread shell command

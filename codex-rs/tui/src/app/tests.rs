@@ -9,6 +9,8 @@ mod safety_buffering;
 #[path = "tests/session_lifecycle_requests.rs"]
 mod session_lifecycle_requests;
 mod session_summary;
+#[path = "tests/smart_compact_routing.rs"]
+mod smart_compact_routing;
 mod startup;
 #[path = "tests/turn_submission.rs"]
 mod turn_submission;

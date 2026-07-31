@@ -167,6 +167,283 @@ async fn slash_compact_eagerly_queues_follow_up_before_turn_start() {
 }
 
 #[tokio::test]
+async fn slash_smart_compact_submits_the_smart_compact_op() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::SmartCompact, /*enabled*/ true);
+
+    chat.dispatch_command(SlashCommand::SmartCompact);
+
+    assert!(chat.bottom_pane.is_task_running());
+    match rx.try_recv() {
+        Ok(AppEvent::CodexOp(Op::SmartCompact)) => {}
+        other => panic!("expected smart compact op to be submitted, got {other:?}"),
+    }
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+/// An app-server rejection must render and clear the optimistic spinner rather than kill the TUI.
+///
+/// Reached when the app server's `smart_compact` state disagrees with the TUI's local config, which
+/// a remote app-server session allows.
+#[tokio::test]
+async fn smart_compact_server_rejection_renders_and_clears_the_spinner() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::SmartCompact, /*enabled*/ true);
+
+    chat.dispatch_command(SlashCommand::SmartCompact);
+    assert!(chat.bottom_pane.is_task_running());
+    let _ = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+
+    chat.handle_smart_compact_rejection(
+        "thread/smartCompact/start failed: smart compaction is not enabled for this thread"
+            .to_string(),
+    );
+
+    assert!(
+        !chat.bottom_pane.is_task_running(),
+        "a server rejection must not leave the spinner running"
+    );
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("smart compaction is not enabled for this thread"),
+        "the server's reason must be shown, got {rendered:?}"
+    );
+}
+
+/// Without a thread the op would reach `App::submit_active_thread_op`, which prints its own error
+/// and returns `Ok(())` without clearing the optimistic task-running state: a spinner that never
+/// stops. Refuse at dispatch instead, before the spinner is armed.
+#[tokio::test]
+async fn slash_smart_compact_before_the_session_starts_refuses_without_arming_the_spinner() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    assert!(chat.thread_id.is_none());
+
+    chat.dispatch_command(SlashCommand::SmartCompact);
+
+    assert!(
+        !chat.bottom_pane.is_task_running(),
+        "no thread means no spinner to leave stuck"
+    );
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Session is still starting"),
+        "expected a readable not-ready message, got {rendered:?}"
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+/// `/smart-compact` must not blank the context readout the way `/compact` does.
+///
+/// Smart compact can refuse before any model request (for example a history with no interior turn
+/// boundary), and those refusal paths never recompute token usage, so clearing here would leave the
+/// context counter empty until the next real turn.
+#[tokio::test]
+async fn slash_smart_compact_keeps_token_usage_visible() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    // Required: without a thread, or with the feature off, the dispatch refuses early and never
+    // reaches the branch under test, which would make this assertion pass vacuously.
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::SmartCompact, /*enabled*/ true);
+    chat.set_token_info(Some(make_token_info(
+        /*total_tokens*/ 1_234, /*context_window*/ 100_000,
+    )));
+
+    chat.dispatch_command(SlashCommand::SmartCompact);
+
+    assert!(
+        chat.bottom_pane.is_task_running(),
+        "the command must have actually run, not been refused early"
+    );
+    assert!(
+        chat.token_info.is_some(),
+        "/smart-compact must not clear token usage"
+    );
+}
+
+/// The `/compact` contrast for the test above: it *does* clear, and that difference is deliberate.
+#[tokio::test]
+async fn slash_compact_still_clears_token_usage() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_token_info(Some(make_token_info(
+        /*total_tokens*/ 1_234, /*context_window*/ 100_000,
+    )));
+
+    chat.dispatch_command(SlashCommand::Compact);
+
+    assert!(
+        chat.token_info.is_none(),
+        "/compact clears token usage because it always replaces the whole history"
+    );
+}
+
+/// A refusal must clear the optimistic spinner and render the reason as prose.
+///
+/// `/smart-compact` arms the spinner before the request goes out, and a refusal arrives as a plain
+/// non-retry error notification with **no** preceding `turn/started`. If that path failed to
+/// finalize the turn, the spinner would spin forever after a refusal.
+#[tokio::test]
+async fn slash_smart_compact_refusal_clears_the_spinner_and_shows_the_reason() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::SmartCompact, /*enabled*/ true);
+
+    chat.dispatch_command(SlashCommand::SmartCompact);
+    assert!(chat.bottom_pane.is_task_running());
+    let _ = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+
+    const REFUSAL: &str =
+        "Smart compact is not enabled. Enable the `smart_compact` feature to use it.";
+    handle_error(&mut chat, REFUSAL, Some(CodexErrorInfo::Other));
+
+    assert!(
+        !chat.bottom_pane.is_task_running(),
+        "a refusal must not leave the spinner running"
+    );
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains(REFUSAL),
+        "the refusal reason must be shown verbatim, got {rendered:?}"
+    );
+}
+
+/// `/smart-compact` typed during a running turn must queue, then dispatch the smart op afterwards,
+/// leaving anything queued behind it untouched.
+///
+/// `/smart-compact` is classified `QueueDrain::Continue`, so the stop here comes from the
+/// task-running check at the top of `queued_command_drain_result` once the dispatch arms the
+/// spinner, not from the classification. That is the point: the classification must not be the
+/// thing that stops the drain, because the refusal paths never arm a spinner - see
+/// `queued_slash_smart_compact_refusal_does_not_strand_the_next_queued_prompt`.
+#[tokio::test]
+async fn queued_slash_smart_compact_dispatches_after_active_turn() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::SmartCompact, /*enabled*/ true);
+    handle_turn_started(&mut chat, "turn-1");
+
+    queue_composer_text_with_tab(&mut chat, "/smart-compact");
+    // A second, ordinary prompt behind it. This is what makes the test able to observe the
+    // `QueueDrain::Stop` classification: with `Continue` the drain would keep going and submit this
+    // prompt as a user turn while compaction is still starting.
+    queue_composer_text_with_tab(&mut chat, "follow-up after smart compact");
+
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 2);
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+
+    complete_turn_with_message(&mut chat, "turn-1", Some("done"));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::CodexOp(Op::SmartCompact))),
+        "expected queued /smart-compact to submit the smart compact op; events: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AppEvent::CodexOp(Op::UserTurn { .. }))),
+        "the drain must stop at /smart-compact and leave the follow-up queued; events: {events:?}"
+    );
+    assert_eq!(
+        chat.input_queue.queued_user_messages.len(),
+        1,
+        "the follow-up prompt must still be queued"
+    );
+    assert_eq!(
+        chat.input_queue
+            .queued_user_messages
+            .front()
+            .expect("follow-up still queued")
+            .text,
+        "follow-up after smart compact"
+    );
+}
+
+/// A server rejection must release whatever was queued behind `/smart-compact`.
+///
+/// The dispatch arms the spinner before the request goes out, which stops the drain. If the
+/// rejection did not finalize the turn, the follow-up prompt would sit in the queue forever with
+/// nothing running and no way for the user to tell.
+#[tokio::test]
+async fn smart_compact_server_rejection_releases_the_queued_follow_up() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    handle_turn_started(&mut chat, "turn-1");
+
+    queue_composer_text_with_tab(&mut chat, "/smart-compact");
+    queue_composer_text_with_tab(&mut chat, "follow-up after a refused smart compact");
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 2);
+
+    complete_turn_with_message(&mut chat, "turn-1", Some("done"));
+    let first_batch = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        first_batch
+            .iter()
+            .any(|event| matches!(event, AppEvent::CodexOp(Op::SmartCompact))),
+        "the queued /smart-compact must be submitted first; events: {first_batch:?}"
+    );
+    assert_eq!(
+        chat.input_queue.queued_user_messages.len(),
+        1,
+        "the follow-up waits while smart compaction is starting"
+    );
+
+    chat.handle_smart_compact_rejection(
+        "thread/smartCompact/start failed: smart compaction is not enabled for this thread"
+            .to_string(),
+    );
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    let ops = std::iter::from_fn(|| op_rx.try_recv().ok()).collect::<Vec<_>>();
+    let user_turns = ops
+        .iter()
+        .chain(events.iter().filter_map(|event| match event {
+            AppEvent::CodexOp(op) => Some(op),
+            _ => None,
+        }))
+        .filter_map(|op| match op {
+            Op::UserTurn { items, .. } => Some(items.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        user_turns.len(),
+        1,
+        "exactly one follow-up turn must be submitted; events: {events:?} ops: {ops:?}"
+    );
+    // Deep-equal the whole payload: filtering to text items would let an unintended image or
+    // mention ride along unnoticed.
+    assert_eq!(
+        user_turns[0],
+        vec![UserInput::Text {
+            text: "follow-up after a refused smart compact".to_string(),
+            text_elements: Vec::new(),
+        }],
+        "the submitted turn must carry exactly the queued follow-up and nothing else"
+    );
+    assert!(
+        chat.input_queue.queued_user_messages.is_empty(),
+        "nothing may stay stranded in the queue"
+    );
+}
+
+#[tokio::test]
 async fn queued_slash_compact_dispatches_after_active_turn() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());

@@ -971,6 +971,34 @@ pub struct ThreadCompactStartParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadCompactStartResponse {}
 
+/// Params for `thread/smartCompact/start`.
+///
+/// Deliberately carries only the thread id, exactly like [`ThreadCompactStartParams`]: the split
+/// point is chosen by core at a completed-turn boundary near the token-weighted midpoint, so there
+/// is no client-supplied range. An explicit checkpoint picker is a separate, later feature and would
+/// add its own params rather than widening these.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSmartCompactStartParams {
+    pub thread_id: String,
+}
+
+/// Response for `thread/smartCompact/start`.
+///
+/// Empty for the same reason [`ThreadCompactStartResponse`] is: the response only acknowledges that
+/// the op was submitted. The outcome (a summary warning, or a readable refusal) arrives
+/// asynchronously as thread notifications, because it can only be decided after the split is
+/// computed and, on some paths, after the summarization turn has run.
+///
+/// One refusal is *not* asynchronous: when the thread does not have the `smart_compact` feature
+/// enabled the request is rejected synchronously with an invalid-request error and this response is
+/// never produced.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSmartCompactStartResponse {}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

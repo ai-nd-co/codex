@@ -264,6 +264,41 @@ impl ChatWidget {
                 }
                 self.app_event_tx.compact();
             }
+            SlashCommand::SmartCompact => {
+                if self.blocks_direct_input {
+                    self.add_error_message(PARENT_OWNED_INPUT_MESSAGE.to_string());
+                    return;
+                }
+                // Refuse before arming the spinner when there is no thread yet. Without this the
+                // op reaches `App::submit_active_thread_op`, which prints "No active thread is
+                // available." and returns `Ok(())` without ever clearing the optimistic
+                // task-running state set below, leaving the spinner up forever. `/app` guards the
+                // same way. (`/compact` has the identical hole; fixing that belongs to a task that
+                // is allowed to change `/compact`.)
+                if self.thread_id.is_none() {
+                    self.add_error_message(
+                        "Session is still starting; try /smart-compact again in a moment."
+                            .to_string(),
+                    );
+                    return;
+                }
+                // No local `smart_compact` feature check here on purpose. The app server owns that
+                // decision and refuses on the request channel, and a remote app server's feature
+                // configuration is independent of this process's config, so a local check would
+                // wrongly block a request the server would have accepted. The rejection is rendered
+                // non-fatally by `App::handle_event` via `handle_smart_compact_rejection`.
+                //
+                // Deliberately no `clear_token_usage()`, unlike `/compact`. `/compact` always
+                // replaces the whole history, so a stale count is guaranteed wrong and the fresh
+                // one always arrives. Smart compact can refuse *before* any model request (an
+                // unsplittable history), and those paths do not recompute token usage, so blanking
+                // the counter here would leave the context readout empty until the next real turn.
+                // On success core calls `recompute_token_usage`, which pushes the new count.
+                if !self.bottom_pane.is_task_running() {
+                    self.bottom_pane.set_task_running(/*running*/ true);
+                }
+                self.app_event_tx.smart_compact();
+            }
             SlashCommand::Review => {
                 self.open_review_popup();
             }
@@ -1073,7 +1108,13 @@ impl ChatWidget {
             | SlashCommand::Diff
             | SlashCommand::App
             | SlashCommand::Rename
-            | SlashCommand::TestApproval => QueueDrain::Continue,
+            | SlashCommand::TestApproval
+            // `Continue`, unlike `/compact`, because `/smart-compact` has refusal paths that
+            // return without starting a task (feature off, no thread yet). `Stop` would leave
+            // anything queued behind it stranded with no turn running to resume the drain. A
+            // *successful* dispatch still stops the drain through the task-running check at the
+            // top of this function, so `Continue` costs nothing in the normal case.
+            | SlashCommand::SmartCompact => QueueDrain::Continue,
             SlashCommand::Feedback
             | SlashCommand::New
             | SlashCommand::Archive

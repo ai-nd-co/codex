@@ -48,6 +48,7 @@ async fn parent_owned_thread_blocks_all_direct_input_entry_points() {
         "/archive",
         "/rename",
         "/agent parent",
+        "/smart-compact",
         "/diff now",
         "!echo blocked",
         " !echo blocked",
@@ -61,6 +62,11 @@ async fn parent_owned_thread_blocks_all_direct_input_entry_points() {
     }
 
     assert!(!chat.submit_op(AppCommand::compact()));
+    assert_no_submit_op(&mut op_rx);
+    // Both smart-compact guards must hold here: the dispatch-level one in `slash_dispatch.rs` and
+    // the `submit_op` one in `chatwidget.rs`. Without either, a parent-owned thread could be
+    // compacted from the child.
+    assert!(!chat.submit_op(AppCommand::smart_compact()));
     assert_no_submit_op(&mut op_rx);
 }
 

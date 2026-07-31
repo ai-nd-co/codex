@@ -92,6 +92,8 @@ use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadSettingsUpdateResponse;
 use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadShellCommandResponse;
+use codex_app_server_protocol::ThreadSmartCompactStartParams;
+use codex_app_server_protocol::ThreadSmartCompactStartResponse;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -1136,6 +1138,21 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/compact/start failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_smart_compact_start(&mut self, thread_id: ThreadId) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadSmartCompactStartResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadSmartCompactStart {
+                request_id,
+                params: ThreadSmartCompactStartParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/smartCompact/start failed in TUI")?;
         Ok(())
     }
 

@@ -594,6 +594,20 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadCompactStartResponse,
     },
+    // Marked experimental because the underlying `smart_compact` feature is
+    // `Stage::UnderDevelopment` and default-off. This keeps the method out of the vendored
+    // stable schema fixtures while it is being evaluated, and matches how every other
+    // under-development method here is gated. The TUI negotiates `experimental_api: true`, so
+    // `/smart-compact` reaches it; a stable client that has not opted in gets the standard
+    // "experimental API required" invalid-request error instead of a method that may change.
+    #[experimental("thread/smartCompact/start")]
+    ThreadSmartCompactStart => "thread/smartCompact/start" {
+        params: v2::ThreadSmartCompactStartParams,
+        // Same serialization scope as `thread/compact/start`: both replace the thread's
+        // model-visible history, so they must not interleave with each other or with a turn.
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadSmartCompactStartResponse,
+    },
     ThreadShellCommand => "thread/shellCommand" {
         params: v2::ThreadShellCommandParams,
         serialization: thread_id(params.thread_id),
