@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "duplicate": {
+      "description": "True when this request repeated an already accepted identical payload.",
+      "type": "boolean"
+    },
+    "turnId": {
+      "description": "Stable future turn id. Duplicate retries return the same id.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "duplicate",
+    "turnId"
+  ],
+  "title": "TurnEnqueueResponse",
+  "type": "object"
+}

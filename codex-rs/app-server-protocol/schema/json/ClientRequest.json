@@ -4649,6 +4649,36 @@
       ],
       "type": "object"
     },
+    "TurnEnqueueParams": {
+      "description": "Queue one user instruction as a distinct future turn.\n\nAccepted entries are held in memory by the loaded thread and are lost when the app-server process or thread shuts down.",
+      "properties": {
+        "clientUserMessageId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "idempotencyKey": {
+          "description": "Caller-owned identity used to make retries idempotent for the lifetime of the loaded thread.",
+          "type": "string"
+        },
+        "input": {
+          "items": {
+            "$ref": "#/definitions/UserInput"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "idempotencyKey",
+        "input",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "TurnEnvironmentParams": {
       "properties": {
         "cwd": {
@@ -6342,6 +6372,30 @@
         "params"
       ],
       "title": "Turn/steerRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "turn/enqueue"
+          ],
+          "title": "Turn/enqueueRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/TurnEnqueueParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Turn/enqueueRequest",
       "type": "object"
     },
     {

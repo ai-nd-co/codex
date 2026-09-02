@@ -1278,6 +1278,9 @@ impl MessageProcessor {
             ClientRequest::TurnSteer { params, .. } => {
                 self.turn_processor.turn_steer(&request_id, params).await
             }
+            ClientRequest::TurnEnqueue { params, .. } => {
+                self.turn_processor.turn_enqueue(&request_id, params).await
+            }
             ClientRequest::TurnInterrupt { params, .. } => {
                 self.turn_processor
                     .turn_interrupt(&request_id, params)

@@ -173,6 +173,7 @@ Example with notification opt-out:
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. `clientUserMessageId` is optional; when supplied, the corresponding `userMessage` item echoes it as `clientId`. Experimental `runtimeWorkspaceRoots` supplies the default roots for newly resolved environment selections. Explicit `environments[].runtimeWorkspaceRoots` override that fallback with environment-native absolute paths. Prefer experimental `permissions` profile selection by id for permission overrides; the legacy `sandboxPolicy` field is still accepted but cannot be combined with `permissions`. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode". Deprecated experimental `multiAgentMode` is ignored; Ultra reasoning effort selects proactive behavior.
 - `thread/inject_items` — append raw Responses API items to a loaded thread’s model-visible history without starting a user turn; returns `{}` on success.
 - `turn/steer` — add user input to an already in-flight regular turn without starting a new turn; returns the active `turnId` that accepted the input. `clientUserMessageId` is optional; when supplied, the corresponding `userMessage` item echoes it as `clientId`. Review and manual compaction turns reject `turn/steer`.
+- `turn/enqueue` — accept one instruction for a distinct future turn without steering or interrupting the active turn. Requests require an `idempotencyKey`; identical retries return the original future `turnId` with `duplicate: true`, while conflicting reuse returns typed error data. Entries run FIFO, start immediately when idle, and remain owned by the loaded thread after the requesting connection closes. The queue and deduplication records are bounded in-memory state and are lost when the thread or app-server shuts down. The most recent 4096 identities are retained for retry safety; when that window fills, the oldest completed identity is evicted, while pending and running identities are never evicted. Retrying an evicted identity is accepted as new work.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
 - `thread/realtime/start` — start a thread-scoped realtime session (experimental); pass `outputModality: "text"` or `outputModality: "audio"` to choose model output, optionally pass `model` and `version` to override configured realtime selection for this session only, pass `includeStartupContext: false` to omit Codex's generated startup context, and optionally pass `initialItems` to seed V3 with complete role-bearing text messages at session creation. Version `"v1"` uses legacy Bidi `conversation.handoff.*`, `"v2"` uses the Realtime Voice API, and `"v3"` preserves V1 Codex Voice behavior while using Frameless Bidi `delegation.*`. For V3 automatic Codex text, `codexResponseHandoffMode` accepts `"thinking"` (the default; all output uses channel-less thinking appends), `"commentary"` (all output uses the commentary channel), or `"bemTags"` (the raw BEM envelope selects the API channel: BEM `analysis` and `commentary` use `commentary`, while BEM `final` and unparsable output use `speakable`). The BEM envelope remains in the appended text for the frontend model to interpret. V1 and V2 ignore this setting. V3 handoffs do not prepend the legacy `"Agent Final Message"` label. Pass `clientManagedHandoffs: true` to disable automatic Codex response delivery so only the client's explicit append calls produce handoffs. Pass `codexResponsesAsItems: true` to send automatic Codex responses as realtime conversation items instead, and optionally pass `codexResponseItemPrefix` to prepend experiment instructions to those items. Returns `{}` and streams `thread/realtime/*` notifications. Omit `transport` for the websocket transport, or pass `{ "type": "webrtc", "sdp": "..." }` to create a Bidi WebRTC session from a browser-generated SDP offer; the remote answer SDP is emitted as `thread/realtime/sdp`. Conversation `version: "v2"` requests remain unsupported for WebRTC.
 - `thread/realtime/appendAudio` — append an input audio chunk to the active realtime session (experimental); returns `{}`.
@@ -1158,6 +1159,25 @@ with an `enteredReviewMode` item so clients can show progress:
   }
 }
 ```
+
+Use `turn/enqueue` when input must run as its own next turn rather than steer the active turn.
+Acknowledgement means the loaded thread owns the entry; the client does not need to stay connected.
+
+```json
+{ "method": "turn/enqueue", "id": 33, "params": {
+  "threadId": "thr_123",
+  "idempotencyKey": "phone-recording-0187",
+  "clientUserMessageId": "phone-recording-0187",
+  "input": [{ "type": "text", "text": "Run this after the current turn" }]
+} }
+{ "id": 33, "result": {
+  "turnId": "019...",
+  "duplicate": false
+} }
+```
+
+Queue-specific invalid requests include typed `error.data.code` values:
+`emptyIdempotencyKey`, `emptyInput`, `idempotencyConflict`, and `capacityExceeded`.
 
 When the reviewer finishes, the server emits `item/started` and `item/completed`
 containing an `exitedReviewMode` item with the final review text:

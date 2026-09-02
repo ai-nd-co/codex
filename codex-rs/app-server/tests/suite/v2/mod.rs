@@ -88,6 +88,7 @@ mod thread_start;
 mod thread_status;
 mod thread_unarchive;
 mod thread_unsubscribe;
+mod turn_enqueue;
 mod turn_interrupt;
 mod turn_start;
 mod turn_start_zsh_fork;

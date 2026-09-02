@@ -203,6 +203,56 @@ pub struct TurnSteerResponse {
     pub turn_id: String,
 }
 
+/// Queue one user instruction as a distinct future turn.
+///
+/// Accepted entries are held in memory by the loaded thread and are lost when
+/// the app-server process or thread shuts down.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnEnqueueParams {
+    pub thread_id: String,
+    /// Caller-owned identity used to make retries idempotent for the lifetime
+    /// of the loaded thread.
+    pub idempotency_key: String,
+    #[ts(optional = nullable)]
+    pub client_user_message_id: Option<String>,
+    pub input: Vec<UserInput>,
+    #[experimental("turn/enqueue.responsesapiClientMetadata")]
+    #[ts(optional = nullable)]
+    pub responsesapi_client_metadata: Option<HashMap<String, String>>,
+    #[experimental("turn/enqueue.additionalContext")]
+    #[ts(optional = nullable)]
+    pub additional_context: Option<HashMap<String, AdditionalContextEntry>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnEnqueueResponse {
+    /// Stable future turn id. Duplicate retries return the same id.
+    pub turn_id: String,
+    /// True when this request repeated an already accepted identical payload.
+    pub duplicate: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum TurnEnqueueErrorCode {
+    EmptyIdempotencyKey,
+    EmptyInput,
+    IdempotencyConflict,
+    CapacityExceeded,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnEnqueueError {
+    pub code: TurnEnqueueErrorCode,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

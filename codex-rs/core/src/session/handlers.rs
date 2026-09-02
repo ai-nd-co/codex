@@ -86,6 +86,7 @@ pub async fn user_input_or_turn(
     op: Op,
     client_user_message_id: Option<String>,
 ) {
+    let _turn_start_guard = sess.turn_start_lock.lock().await;
     user_input_or_turn_inner(sess, sub_id, op, client_user_message_id).await;
 }
 
@@ -180,7 +181,7 @@ pub(super) async fn user_input_or_turn_inner(
     sub_id: String,
     op: Op,
     client_user_message_id: Option<String>,
-) {
+) -> bool {
     let Op::UserInput {
         items,
         final_output_json_schema,
@@ -201,7 +202,7 @@ pub(super) async fn user_input_or_turn_inner(
 
     let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
         // new_turn_with_sub_id already emits the error event.
-        return;
+        return false;
     };
     if emit_thread_settings_applied {
         sess.send_event_raw_without_materializing_rollout(Event {
@@ -267,6 +268,7 @@ pub(super) async fn user_input_or_turn_inner(
             .await;
         }
     }
+    true
 }
 
 /// Queues an inter-agent message, then lets the shared pending-work scheduler

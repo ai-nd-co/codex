@@ -111,6 +111,7 @@ use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::TurnCompletedNotification;
+use codex_app_server_protocol::TurnEnqueueParams;
 use codex_app_server_protocol::TurnEnvironmentParams;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
@@ -1191,6 +1192,15 @@ impl TestAppServer {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("turn/steer", params).await
+    }
+
+    /// Send a `turn/enqueue` JSON-RPC request (v2).
+    pub async fn send_turn_enqueue_request(
+        &mut self,
+        params: TurnEnqueueParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("turn/enqueue", params).await
     }
 
     /// Send a `review/start` JSON-RPC request (v2).

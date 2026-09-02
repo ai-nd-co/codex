@@ -221,6 +221,17 @@ impl TurnRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn turn_enqueue(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: TurnEnqueueParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        validate_user_input_image_urls(&params.input)?;
+        self.turn_enqueue_inner(request_id, params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn turn_interrupt(
         &self,
         request_id: &ConnectionRequestId,
@@ -1023,6 +1034,71 @@ impl TurnRequestProcessor {
                 error
             })?;
         Ok(TurnSteerResponse { turn_id })
+    }
+
+    async fn turn_enqueue_inner(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: TurnEnqueueParams,
+    ) -> Result<TurnEnqueueResponse, JSONRPCErrorError> {
+        let (_, thread) = self
+            .load_thread(&params.thread_id)
+            .await
+            .inspect_err(|error| {
+                self.track_error_response(request_id, error, /*error_type*/ None);
+            })?;
+        self.ensure_direct_input_allowed(request_id, thread.as_ref())
+            .await?;
+        if let Err(error) = Self::validate_v2_input_limit(&params.input) {
+            self.track_error_response(
+                request_id,
+                &error,
+                Some(AnalyticsJsonRpcError::Input(InputError::TooLarge)),
+            );
+            return Err(error);
+        }
+
+        let payload = codex_core::NextTurnPayload {
+            input: params
+                .input
+                .into_iter()
+                .map(V2UserInput::into_core)
+                .collect(),
+            client_user_message_id: params.client_user_message_id,
+            responsesapi_client_metadata: params.responsesapi_client_metadata,
+            additional_context: map_additional_context(params.additional_context),
+        };
+        let outcome = thread
+            .enqueue_next_turn(params.idempotency_key, payload)
+            .await
+            .map_err(|error| {
+                use codex_core::EnqueueNextTurnError;
+                let (message, code) = match error {
+                    EnqueueNextTurnError::EmptyIdempotencyKey => (
+                        "idempotencyKey must not be empty",
+                        TurnEnqueueErrorCode::EmptyIdempotencyKey,
+                    ),
+                    EnqueueNextTurnError::EmptyInput => {
+                        ("input must not be empty", TurnEnqueueErrorCode::EmptyInput)
+                    }
+                    EnqueueNextTurnError::IdempotencyConflict => (
+                        "idempotencyKey was already used with a different payload",
+                        TurnEnqueueErrorCode::IdempotencyConflict,
+                    ),
+                    EnqueueNextTurnError::CapacityExceeded => (
+                        "the loaded thread has reached its accepted next-turn limit",
+                        TurnEnqueueErrorCode::CapacityExceeded,
+                    ),
+                };
+                let mut rpc_error = invalid_request(message);
+                rpc_error.data = serde_json::to_value(TurnEnqueueError { code }).ok();
+                self.track_error_response(request_id, &rpc_error, /*error_type*/ None);
+                rpc_error
+            })?;
+        Ok(TurnEnqueueResponse {
+            turn_id: outcome.turn_id,
+            duplicate: outcome.duplicate,
+        })
     }
 
     async fn prepare_realtime_conversation_thread(

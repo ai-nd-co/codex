@@ -1,6 +1,9 @@
 use crate::agent::AgentStatus;
 use crate::config::ConstraintResult;
 use crate::elicitation::ElicitationRegistration;
+use crate::session::EnqueueNextTurnError;
+use crate::session::EnqueueNextTurnOutcome;
+use crate::session::NextTurnPayload;
 use crate::session::SessionIo;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
@@ -314,6 +317,16 @@ impl CodexThread {
                 client_user_message_id,
                 responsesapi_client_metadata,
             )
+            .await
+    }
+
+    pub async fn enqueue_next_turn(
+        &self,
+        idempotency_key: String,
+        payload: NextTurnPayload,
+    ) -> Result<EnqueueNextTurnOutcome, EnqueueNextTurnError> {
+        self.session
+            .enqueue_next_turn(idempotency_key, payload)
             .await
     }
 

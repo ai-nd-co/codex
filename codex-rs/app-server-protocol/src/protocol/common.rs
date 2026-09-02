@@ -854,6 +854,12 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::TurnSteerResponse,
     },
+    TurnEnqueue => "turn/enqueue" {
+        params: v2::TurnEnqueueParams,
+        inspect_params: true,
+        serialization: thread_id(params.thread_id),
+        response: v2::TurnEnqueueResponse,
+    },
     TurnInterrupt => "turn/interrupt" {
         params: v2::TurnInterruptParams,
         serialization: thread_id(params.thread_id),

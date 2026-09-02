@@ -476,6 +476,10 @@ impl Session {
         self: &Arc<Self>,
         sub_id: String,
     ) {
+        self.maybe_start_queued_next_turn().await;
+        if self.active_turn.lock().await.is_some() {
+            return;
+        }
         if !self.input_queue.has_trigger_turn_mailbox_items().await {
             return;
         }
@@ -514,6 +518,7 @@ impl Session {
         if let Some(turn_context) = turn_context.as_deref() {
             self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref())
                 .await;
+            self.mark_queued_turn_finished(&turn_context.sub_id).await;
         }
         if let Some(active_turn) = active_turn_to_clear {
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
@@ -554,6 +559,7 @@ impl Session {
         if let Some(turn_context) = turn_context.as_deref() {
             self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref())
                 .await;
+            self.mark_queued_turn_finished(&turn_context.sub_id).await;
         }
         // Let interrupted tasks observe cancellation before dropping pending approvals, or an
         // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
@@ -824,6 +830,7 @@ impl Session {
         if let Err(err) = self.flush_rollout().await {
             warn!("failed to flush rollout after emitting terminal turn event: {err}");
         }
+        self.mark_queued_turn_finished(&turn_context.sub_id).await;
         if cleared_active_turn {
             self.maybe_start_turn_for_pending_work().await;
         }

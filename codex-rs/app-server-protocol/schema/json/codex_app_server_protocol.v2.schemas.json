@@ -2615,6 +2615,30 @@
             },
             "method": {
               "enum": [
+                "turn/enqueue"
+              ],
+              "title": "Turn/enqueueRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/TurnEnqueueParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Turn/enqueueRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "turn/interrupt"
               ],
               "title": "Turn/interruptRequestMethod",
@@ -18737,6 +18761,57 @@
         "turnId"
       ],
       "title": "TurnDiffUpdatedNotification",
+      "type": "object"
+    },
+    "TurnEnqueueParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Queue one user instruction as a distinct future turn.\n\nAccepted entries are held in memory by the loaded thread and are lost when the app-server process or thread shuts down.",
+      "properties": {
+        "clientUserMessageId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "idempotencyKey": {
+          "description": "Caller-owned identity used to make retries idempotent for the lifetime of the loaded thread.",
+          "type": "string"
+        },
+        "input": {
+          "items": {
+            "$ref": "#/definitions/UserInput"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "idempotencyKey",
+        "input",
+        "threadId"
+      ],
+      "title": "TurnEnqueueParams",
+      "type": "object"
+    },
+    "TurnEnqueueResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "duplicate": {
+          "description": "True when this request repeated an already accepted identical payload.",
+          "type": "boolean"
+        },
+        "turnId": {
+          "description": "Stable future turn id. Duplicate retries return the same id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "duplicate",
+        "turnId"
+      ],
+      "title": "TurnEnqueueResponse",
       "type": "object"
     },
     "TurnEnvironmentParams": {

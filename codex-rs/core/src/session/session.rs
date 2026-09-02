@@ -1,4 +1,5 @@
 use super::input_queue::InputQueue;
+use super::next_turn_queue::NextTurnQueue;
 use super::*;
 use crate::agents_md_manager::AgentsMdManager;
 use crate::config::ConstraintError;
@@ -41,6 +42,8 @@ pub(crate) struct Session {
     pub(super) pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
+    pub(crate) turn_start_lock: Mutex<()>,
+    pub(crate) next_turn_queue: Mutex<NextTurnQueue>,
     pub(crate) input_queue: InputQueue,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
@@ -1148,6 +1151,8 @@ impl Session {
                 pending_mcp_server_refresh_config: Mutex::new(None),
                 conversation: Arc::new(RealtimeConversationManager::new()),
                 active_turn: Mutex::new(None),
+                turn_start_lock: Mutex::new(()),
+                next_turn_queue: Mutex::new(NextTurnQueue::default()),
                 input_queue: InputQueue::new(),
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
