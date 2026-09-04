@@ -22,6 +22,7 @@ use toml::Value as TomlValue;
 use crate::loader::HostSkillRoot;
 
 const AGENTS_DIR_NAME: &str = ".agents";
+const REPO_SKILL_DIR_NAMES: &[&str] = &[AGENTS_DIR_NAME, ".claude"];
 const SKILLS_DIR_NAME: &str = "skills";
 const MAX_CONCURRENT_ANCESTOR_PROBES: usize = 256;
 
@@ -151,33 +152,38 @@ async fn repo_agents_skill_roots(
         .map(|directory| {
             let repository_file_system = Arc::clone(&repository_file_system);
             async move {
-                let agents_skills = directory.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME);
-                let agents_skills_uri = PathUri::from_abs_path(&agents_skills);
-                let result = repository_file_system
-                    .get_metadata(
-                        &agents_skills_uri,
-                        GetMetadataOptions::default(),
-                        /*sandbox*/ None,
-                    )
-                    .await;
-                (agents_skills, result)
+                let mut results = Vec::with_capacity(REPO_SKILL_DIR_NAMES.len());
+                for name in REPO_SKILL_DIR_NAMES {
+                    let skills = directory.join(*name).join(SKILLS_DIR_NAME);
+                    let result = repository_file_system
+                        .get_metadata(
+                            &PathUri::from_abs_path(&skills),
+                            GetMetadataOptions::default(),
+                            /*sandbox*/ None,
+                        )
+                        .await;
+                    results.push((skills, result));
+                }
+                results
             }
         })
         .buffered(MAX_CONCURRENT_ANCESTOR_PROBES);
-    while let Some((agents_skills, result)) = results.next().await {
-        match result {
-            Ok(metadata) if metadata.is_directory => roots.push(HostSkillRoot::host(
-                agents_skills,
-                SkillScope::Repo,
-                Arc::clone(&repository_file_system),
-            )),
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => {
-                tracing::warn!(
-                    "failed to stat repo skills root {}: {error:#}",
-                    agents_skills.display()
-                );
+    while let Some(directory_results) = results.next().await {
+        for (skills, result) in directory_results {
+            match result {
+                Ok(metadata) if metadata.is_directory => roots.push(HostSkillRoot::host(
+                    skills,
+                    SkillScope::Repo,
+                    Arc::clone(&repository_file_system),
+                )),
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    tracing::warn!(
+                        "failed to stat repo skills root {}: {error:#}",
+                        skills.display()
+                    );
+                }
             }
         }
     }

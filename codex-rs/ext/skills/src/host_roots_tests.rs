@@ -444,6 +444,56 @@ async fn repo_ancestry_stops_at_project_root_and_preserves_root_to_cwd_order() {
 }
 
 #[tokio::test]
+async fn repo_ancestry_discovers_claude_skills_directly() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let repository = absolute(temp_dir.path().join("repo"));
+    fs::create_dir_all(&repository).expect("create repository");
+    fs::write(repository.join(".git"), "gitdir: fake\n").expect("write git marker");
+    fs::create_dir_all(repository.join(".claude/skills")).expect("create Claude skills");
+
+    let roots =
+        repo_agents_skill_roots(Some(Arc::clone(&LOCAL_FS)), &stack(Vec::new()), &repository)
+            .await
+            .into_iter()
+            .map(|root| root.path)
+            .collect::<Vec<_>>();
+
+    assert_eq!(roots, vec![repository.join(".claude/skills")]);
+}
+
+#[tokio::test]
+async fn repo_skill_roots_keep_unique_skills_and_prefer_agents_duplicates() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let repository = absolute(temp_dir.path().join("repo"));
+    fs::create_dir_all(&repository).expect("create repository");
+    fs::write(repository.join(".git"), "gitdir: fake\n").expect("write git marker");
+    let agents_unique = write_skill(&repository.join(".agents/skills"), "agents", "agents-only");
+    let agents_duplicate = write_skill(&repository.join(".agents/skills"), "shared", "shared");
+    let claude_unique = write_skill(&repository.join(".claude/skills"), "claude", "claude-only");
+    write_skill(&repository.join(".claude/skills"), "shared", "shared");
+
+    let roots =
+        repo_agents_skill_roots(Some(Arc::clone(&LOCAL_FS)), &stack(Vec::new()), &repository).await;
+    let outcome = load_and_merge_host_skill_roots(
+        roots,
+        &Semaphore::new(MAX_CONCURRENT_ROOT_SCANS),
+        None,
+        None,
+    )
+    .await;
+
+    assert!(outcome.errors.is_empty());
+    assert_eq!(
+        outcome.skills,
+        vec![
+            expected_skill(agents_unique, "agents-only", SkillScope::Repo),
+            expected_skill(claude_unique, "claude-only", SkillScope::Repo),
+            expected_skill(agents_duplicate, "shared", SkillScope::Repo),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn resolved_project_layer_loads_skill_without_git_marker() {
     let temp_dir = TempDir::new().expect("temp dir");
     let workspace = absolute(temp_dir.path().join("workspace"));

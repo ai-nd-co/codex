@@ -231,6 +231,16 @@ fn merge_host_skill_root_snapshots(snapshots: Vec<HostSkillRootSnapshot>) -> Ski
 
     let mut seen_paths = HashSet::new();
     skills.retain(|skill| seen_paths.insert(skill.path_to_skills_md.clone()));
+    let preferred_repo_names = skills
+        .iter()
+        .filter(|skill| skill.scope == SkillScope::Repo && !is_claude_skill(skill))
+        .map(|skill| skill.name.clone())
+        .collect::<HashSet<_>>();
+    skills.retain(|skill| {
+        skill.scope != SkillScope::Repo
+            || !is_claude_skill(skill)
+            || !preferred_repo_names.contains(&skill.name)
+    });
     let retained_paths = skills
         .iter()
         .map(|skill| skill.path_to_skills_md.clone())
@@ -257,6 +267,14 @@ fn merge_host_skill_root_snapshots(snapshots: Vec<HostSkillRootSnapshot>) -> Ski
         agent_plugin_skill_paths,
         file_systems_by_skill_path,
     )
+}
+
+fn is_claude_skill(skill: &codex_skills::SkillMetadata) -> bool {
+    skill
+        .path_to_skills_md
+        .as_path()
+        .components()
+        .any(|component| component.as_os_str() == ".claude")
 }
 
 fn scope_rank(scope: SkillScope) -> u8 {

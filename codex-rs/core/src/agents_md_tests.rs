@@ -1608,6 +1608,19 @@ async fn agents_md_preferred_over_fallbacks() {
 }
 
 #[tokio::test]
+async fn packaged_fallbacks_prefer_agents_then_claude_then_code() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join("CLAUDE.md"), "claude").unwrap();
+    fs::write(tmp.path().join("CODE.md"), "code").unwrap();
+    let cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+
+    assert_eq!(get_user_instructions(&cfg).await.as_deref(), Some("claude"));
+
+    fs::write(tmp.path().join("AGENTS.md"), "agents").unwrap();
+    assert_eq!(get_user_instructions(&cfg).await.as_deref(), Some("agents"));
+}
+
+#[tokio::test]
 async fn agents_md_directory_is_ignored() {
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::create_dir(tmp.path().join("AGENTS.md")).unwrap();
