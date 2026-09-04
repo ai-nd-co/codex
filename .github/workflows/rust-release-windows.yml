@@ -9,7 +9,9 @@ env:
 jobs:
   build-windows-binaries:
     name: Build Windows binaries - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
-    runs-on: ${{ matrix.runs_on }}
+    runs-on:
+      group: ${{ matrix.runs_on.group }}
+      labels: ${{ matrix.runs_on.labels }}
     # Windows release builds can exceed an hour, so keep the timeout aligned
     # with the top-level release build headroom.
     timeout-minutes: 90
@@ -194,7 +196,9 @@ jobs:
     needs:
       - build-windows-binaries
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
-    runs-on: ${{ matrix.runs_on }}
+    runs-on:
+      group: ${{ matrix.runs_on.group }}
+      labels: ${{ matrix.runs_on.labels }}
     environment:
       name: azure-artifact-signing
       deployment: false
