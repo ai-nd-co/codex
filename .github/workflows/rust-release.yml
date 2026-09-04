@@ -10,6 +10,7 @@
 
 name: rust-release
 on:
+  workflow_dispatch:
   push:
     tags:
       - "rust-v*.*.*"
