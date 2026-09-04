@@ -2,6 +2,9 @@ name: task333-actions-probe
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - diagnostic/task333-actions-baseline
 
 jobs:
   probe:
