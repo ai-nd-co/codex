@@ -132,6 +132,14 @@ fn file_exists(path: &std::path::Path) -> Option<PathBuf> {
     }
 }
 
+#[cfg(windows)]
+fn is_wsl_bash_path(path: &std::path::Path) -> bool {
+    let normalized = path.to_string_lossy().to_lowercase().replace('/', "\\");
+    normalized.ends_with("\\windows\\system32\\bash.exe")
+        || normalized.ends_with("\\windows\\sysnative\\bash.exe")
+        || normalized.ends_with("\\windows\\syswow64\\bash.exe")
+}
+
 // Store PowerShell can be inaccessible to the elevated sandbox account;
 // WindowsApps also contains valid Codex frameworks.
 fn is_inaccessible_windows_apps_powershell_path(path: &std::path::Path) -> bool {
@@ -226,9 +234,43 @@ fn get_zsh_shell() -> Option<DetectedShell> {
     })
 }
 
+#[cfg(windows)]
+const BASH_FALLBACK_PATHS: &[&str] = &[
+    r#"C:\Program Files\Git\bin\bash.exe"#,
+    r#"C:\Program Files\Git\usr\bin\bash.exe"#,
+    r#"C:\Program Files (x86)\Git\bin\bash.exe"#,
+    r#"C:\Program Files (x86)\Git\usr\bin\bash.exe"#,
+];
+#[cfg(not(windows))]
 const BASH_FALLBACK_PATHS: &[&str] = &["/bin/bash", "/usr/bin/bash"];
 
+#[cfg(windows)]
+fn get_windows_git_bash_path<I>(
+    fallback_paths: &[&str],
+    file_exists_fn: impl Fn(&std::path::Path) -> Option<PathBuf>,
+    path_candidates: I,
+) -> Option<PathBuf>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    fallback_paths
+        .iter()
+        .find_map(|path| file_exists_fn(std::path::Path::new(path)))
+        .or_else(|| {
+            path_candidates
+                .into_iter()
+                .find(|path| !is_wsl_bash_path(path))
+        })
+}
+
 fn get_bash_shell() -> Option<DetectedShell> {
+    #[cfg(windows)]
+    let shell_path = get_windows_git_bash_path(
+        BASH_FALLBACK_PATHS,
+        file_exists,
+        which::which_all("bash").into_iter().flatten(),
+    );
+    #[cfg(not(windows))]
     let shell_path = get_shell_path(ShellType::Bash, "bash", BASH_FALLBACK_PATHS);
 
     shell_path.map(|shell_path| DetectedShell {
@@ -344,12 +386,37 @@ pub fn get_shell(shell_type: ShellType) -> Option<DetectedShell> {
 }
 
 pub fn default_user_shell() -> DetectedShell {
-    default_user_shell_from_path(get_user_shell_path())
+    shell_path_override_from_env()
+        .and_then(|path| {
+            detect_shell_type(&path).map(|shell_type| DetectedShell {
+                shell_type,
+                shell_path: path,
+            })
+        })
+        .unwrap_or_else(|| default_user_shell_from_path(get_user_shell_path()))
+}
+
+fn shell_path_override_from_env() -> Option<PathBuf> {
+    shell_path_override(
+        |name| std::env::var_os(name).map(PathBuf::from),
+        file_exists,
+    )
+}
+
+fn shell_path_override(
+    get_var: impl Fn(&str) -> Option<PathBuf>,
+    file_exists_fn: impl Fn(&std::path::Path) -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    ["CODEX_SHELL_PATH", "CODEX_GIT_BASH_PATH"]
+        .into_iter()
+        .find_map(|name| get_var(name).and_then(|path| file_exists_fn(&path)))
 }
 
 pub fn default_user_shell_from_path(user_shell_path: Option<PathBuf>) -> DetectedShell {
     if cfg!(windows) {
-        get_shell(ShellType::PowerShell).unwrap_or_else(ultimate_fallback_shell)
+        get_shell(ShellType::Bash)
+            .or_else(|| get_shell(ShellType::PowerShell))
+            .unwrap_or_else(ultimate_fallback_shell)
     } else {
         let user_default_shell = user_shell_path
             .and_then(|shell| detect_shell_type(&shell))
@@ -491,5 +558,61 @@ mod tests {
             detect_shell_type(PathBuf::from("cmd.exe")),
             Some(ShellType::Cmd)
         );
+    }
+
+    #[test]
+    fn shell_path_override_prefers_general_override_then_git_bash() {
+        let shell = PathBuf::from("shell");
+        let git_bash = PathBuf::from("git-bash");
+        let exists = |path: &std::path::Path| Some(path.to_path_buf());
+
+        assert_eq!(
+            shell_path_override(
+                |name| match name {
+                    "CODEX_SHELL_PATH" => Some(shell.clone()),
+                    "CODEX_GIT_BASH_PATH" => Some(git_bash.clone()),
+                    _ => None,
+                },
+                exists,
+            ),
+            Some(shell),
+        );
+        assert_eq!(
+            shell_path_override(
+                |name| (name == "CODEX_GIT_BASH_PATH").then(|| git_bash.clone()),
+                exists,
+            ),
+            Some(git_bash),
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn git_bash_lookup_skips_wsl_shim_and_keeps_searching_path() {
+        let git_bash = PathBuf::from(r"C:\tools\Git\bin\bash.exe");
+        let found = get_windows_git_bash_path(
+            &[],
+            |_| None,
+            [
+                PathBuf::from(r"C:\Windows\System32\bash.exe"),
+                git_bash.clone(),
+            ],
+        );
+
+        assert_eq!(found, Some(git_bash));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn git_bash_lookup_prefers_native_install_fallback_over_path() {
+        let installed = PathBuf::from(r"C:\Program Files\Git\bin\bash.exe");
+        let path_bash = PathBuf::from(r"C:\tools\Git\bin\bash.exe");
+        let found = get_windows_git_bash_path(
+            &[r"C:\Program Files\Git\bin\bash.exe"],
+            |path| (path == installed).then(|| path.to_path_buf()),
+            [path_bash],
+        );
+
+        assert_eq!(found, Some(installed));
     }
 }
