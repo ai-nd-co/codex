@@ -645,6 +645,15 @@ fn multi_agent_v2_enabled(turn_context: &TurnContext) -> bool {
     turn_context.multi_agent_version == MultiAgentVersion::V2
 }
 
+fn wait_agent_enabled(turn_context: &TurnContext) -> bool {
+    turn_context.config.multi_agent_v2.wait_agent_enabled
+        && !(turn_context
+            .config
+            .multi_agent_v2
+            .automatic_completion_delivery
+            && turn_context.session_source.get_agent_path().is_none())
+}
+
 fn collab_tools_enabled(turn_context: &TurnContext, model_info: &ModelInfo) -> bool {
     match turn_context.multi_agent_version {
         MultiAgentVersion::Disabled => false,
@@ -689,8 +698,7 @@ fn required_child_management_tool_names(
         .iter()
         .map(|name| ToolName::new(namespace.map(str::to_owned), (*name).to_owned()))
         .collect::<Vec<_>>();
-    if multi_agent_v2_enabled(turn_context) && turn_context.config.multi_agent_v2.wait_agent_enabled
-    {
+    if multi_agent_v2_enabled(turn_context) && wait_agent_enabled(turn_context) {
         tools.push(ToolName::new(namespace.map(str::to_owned), "wait_agent"));
     }
     tools
@@ -1324,7 +1332,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 multi_agent_v2_handler(FollowupTaskHandlerV2, tool_namespace),
                 exposure,
             );
-            if turn_context.config.multi_agent_v2.wait_agent_enabled {
+            if wait_agent_enabled(turn_context) {
                 registry.register_trusted_with_exposure(
                     multi_agent_v2_handler(
                         WaitAgentHandlerV2::new(context.wait_agent_timeouts),

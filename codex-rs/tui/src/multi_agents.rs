@@ -223,11 +223,31 @@ pub(crate) fn tool_call_history_cell(
     let prompt = prompt.as_deref().unwrap_or_default();
 
     match tool {
-        // V2 uses SubAgentActivity for display; these variants are analytics-only.
-        CollabAgentTool::SendMessage
-        | CollabAgentTool::FollowupTask
-        | CollabAgentTool::InterruptAgent
-        | CollabAgentTool::ListAgents => None,
+        CollabAgentTool::SendMessage | CollabAgentTool::FollowupTask => {
+            if matches!(status, CollabAgentToolCallStatus::InProgress) {
+                return None;
+            }
+            let action = if matches!(tool, CollabAgentTool::SendMessage) {
+                "Sent message to"
+            } else {
+                "Assigned follow-up to"
+            };
+            let title = if let Some(thread_id) = first_receiver {
+                let metadata = agent_metadata(thread_id);
+                title_with_agent(action, agent_label(thread_id, &metadata), None)
+            } else {
+                title_text(action)
+            };
+            let details = (!prompt.is_empty())
+                .then(|| Line::from(prompt.to_string()))
+                .into_iter()
+                .collect();
+            Some(collab_event(title, details))
+        }
+        CollabAgentTool::InterruptAgent => {
+            Some(collab_event(title_text("Interrupted agent"), Vec::new()))
+        }
+        CollabAgentTool::ListAgents => Some(collab_event(title_text("Listed agents"), Vec::new())),
         CollabAgentTool::SpawnAgent => {
             if matches!(status, CollabAgentToolCallStatus::InProgress) {
                 return None;
@@ -716,6 +736,45 @@ mod tests {
                 is_running_hint: false,
             })
         );
+    }
+
+    #[test]
+    fn v2_message_history_preserves_kind_target_and_full_content() {
+        let sender = ThreadId::new();
+        let receiver = ThreadId::new();
+        let message = "first line\nsecond line with the complete follow-up instruction";
+        let cell = tool_call_history_cell(
+            &ThreadItem::CollabAgentToolCall {
+                id: "call-followup".to_string(),
+                tool: CollabAgentTool::FollowupTask,
+                status: CollabAgentToolCallStatus::Completed,
+                sender_thread_id: sender.to_string(),
+                receiver_thread_ids: vec![receiver.to_string()],
+                prompt: Some(message.to_string()),
+                model: None,
+                reasoning_effort: None,
+                agents_states: HashMap::new(),
+            },
+            None,
+            |_| AgentMetadata::default(),
+        )
+        .expect("follow-up item renders");
+
+        let rendered = cell
+            .display_lines(200)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.into_owned())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Assigned follow-up to"));
+        assert!(rendered.contains(&receiver.to_string()));
+        assert!(rendered.contains("first line"));
+        assert!(rendered.contains("second line with the complete follow-up instruction"));
     }
 
     #[test]

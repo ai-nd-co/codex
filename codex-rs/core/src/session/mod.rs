@@ -2263,12 +2263,19 @@ impl Session {
             .rollout_thread_trace
             .is_enabled()
             .then(|| message.clone());
+        let trigger_turn = automatic_completion_delivery_enabled(
+            &parent_agent_path,
+            turn_context
+                .config
+                .multi_agent_v2
+                .automatic_completion_delivery,
+        );
         let communication = InterAgentCommunication::new(
             child_agent_path.clone(),
             parent_agent_path,
             Vec::new(),
             message,
-            /*trigger_turn*/ false,
+            trigger_turn,
         );
         let context =
             AgentCommunicationContext::new(AgentCommunicationKind::Result, self.thread_id);
@@ -4652,6 +4659,13 @@ impl Session {
     fn show_raw_agent_reasoning(&self) -> bool {
         self.services.show_raw_agent_reasoning
     }
+}
+
+fn automatic_completion_delivery_enabled(
+    parent: &codex_protocol::AgentPath,
+    enabled: bool,
+) -> bool {
+    enabled && parent.is_root()
 }
 
 pub(crate) fn emit_subagent_session_started(

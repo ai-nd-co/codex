@@ -50,6 +50,8 @@ You may also see them addressed as to=/root/..., which indicates your identity i
 const DEFAULT_MULTI_AGENT_V2_MODEL_OVERRIDE_USAGE_HINT_TEXT: &str = "Full-history forks (`fork_turns` omitted or `\"all\"`) inherit the parent model and reasoning effort and do not accept overrides. Only set `model` or `reasoning_effort` when explicitly requested by the user, applicable `AGENTS.md` instructions, or skill instructions; when doing so, set `fork_turns` to `\"none\"` or a positive integer string.";
 const DEFAULT_MULTI_AGENT_V2_WAIT_AGENT_USAGE_HINT_TEXT: &str =
     "When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.";
+const DEFAULT_MULTI_AGENT_V2_AUTOMATIC_COMPLETION_USAGE_HINT_TEXT: &str =
+    "Terminal worker results arrive automatically; use `list_agents` to inspect current state.";
 const DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT: &str = r#"Note that collaboration tools cannot be called from inside `functions.exec`. Call `spawn_agent`, `send_message`, `followup_task`, `wait_agent`, `interrupt_agent`, and `list_agents` only as direct tool calls using the recipient shown in their tool definitions, such as `to=functions.collaboration.spawn_agent`, since they are intentionally absent from the `functions.exec` `tools.*` namespace. Available tools in `functions.exec` are explicitly described with a `tools` namespace in the developer message.
 
 All agents share the same directory. In detail:
@@ -100,7 +102,10 @@ pub(crate) fn resolve_usage_hints(
     catalog: Option<&MultiAgentRoleMessages>,
     omit_update_plan_instructions: bool,
 ) -> ResolvedMultiAgentV2UsageHints {
-    let resolve_role = |configured: Option<&str>, catalog: Option<&str>, bundled: &str| {
+    let resolve_role = |configured: Option<&str>,
+                        catalog: Option<&str>,
+                        bundled: &str,
+                        root: bool| {
         // Configured roles take precedence; empty configured or catalog roles suppress fallback.
         if let Some(configured) = configured {
             return (!configured.is_empty())
@@ -118,7 +123,9 @@ pub(crate) fn resolve_usage_hints(
         };
 
         let max_concurrency = config.max_concurrent_threads_per_session;
-        let wait_agent_guidance = if config.wait_agent_enabled {
+        let wait_agent_guidance = if root && config.automatic_completion_delivery {
+            format!("{DEFAULT_MULTI_AGENT_V2_AUTOMATIC_COMPLETION_USAGE_HINT_TEXT}\n\n")
+        } else if config.wait_agent_enabled {
             format!("{DEFAULT_MULTI_AGENT_V2_WAIT_AGENT_USAGE_HINT_TEXT}\n\n")
         } else {
             String::new()
@@ -143,11 +150,13 @@ pub(crate) fn resolve_usage_hints(
             config.root_agent_usage_hint_text.as_deref(),
             catalog.and_then(|messages| messages.root.as_deref()),
             DEFAULT_MULTI_AGENT_V2_ROOT_AGENT_USAGE_HINT_TEXT,
+            true,
         ),
         subagent: resolve_role(
             config.subagent_usage_hint_text.as_deref(),
             catalog.and_then(|messages| messages.subagent.as_deref()),
             DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT,
+            false,
         ),
     }
 }

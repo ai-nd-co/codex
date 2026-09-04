@@ -156,19 +156,33 @@ fn activity_summary(item: &ThreadItem) -> Option<String> {
                 .unwrap_or_else(|| tool.clone());
             return bounded_summary(&format!("Tool {tool}"));
         }
-        ThreadItem::CollabAgentToolCall { tool, .. } => {
+        ThreadItem::CollabAgentToolCall {
+            tool,
+            receiver_thread_ids,
+            prompt,
+            ..
+        } => {
             let action = match tool {
-                CollabAgentTool::SendMessage
-                | CollabAgentTool::FollowupTask
-                | CollabAgentTool::InterruptAgent
-                | CollabAgentTool::ListAgents => return None,
+                CollabAgentTool::SendMessage => "Sent message",
+                CollabAgentTool::FollowupTask => "Assigned follow-up",
+                CollabAgentTool::InterruptAgent => "Interrupted an agent",
+                CollabAgentTool::ListAgents => "Listed agents",
                 CollabAgentTool::SpawnAgent => "Spawned an agent",
                 CollabAgentTool::SendInput => "Sent input to an agent",
                 CollabAgentTool::ResumeAgent => "Resumed an agent",
                 CollabAgentTool::Wait => "Waited for an agent",
                 CollabAgentTool::CloseAgent => "Closed an agent",
             };
-            return Some(action.to_string());
+            let target = receiver_thread_ids
+                .first()
+                .map(|target| format!(" to {target}"))
+                .unwrap_or_default();
+            let prompt = prompt
+                .as_deref()
+                .filter(|prompt| !prompt.is_empty())
+                .map(|prompt| format!(": {prompt}"))
+                .unwrap_or_default();
+            return bounded_summary(&format!("{action}{target}{prompt}"));
         }
         ThreadItem::SubAgentActivity {
             kind, agent_path, ..

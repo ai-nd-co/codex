@@ -2866,6 +2866,39 @@ async fn multi_agent_v2_can_disable_wait_agent() {
 }
 
 #[tokio::test]
+async fn automatic_completion_delivery_hides_wait_only_from_root() {
+    let wait_agent = ToolName::namespaced(MULTI_AGENT_V2_NAMESPACE, "wait_agent").to_string();
+    let root = probe(|turn| {
+        set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
+        update_config(turn, |config| {
+            config.multi_agent_v2.automatic_completion_delivery = true;
+        });
+    })
+    .await;
+    root.assert_registered_lacks(&[&wait_agent]);
+
+    let child = probe(|turn| {
+        set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
+        update_config(turn, |config| {
+            config.multi_agent_v2.automatic_completion_delivery = true;
+        });
+        update_turn_settings_for_test(turn, |settings| {
+            Arc::make_mut(&mut settings.model_info).multi_agent_version =
+                Some(MultiAgentVersion::V2);
+        });
+        turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: ThreadId::new(),
+            depth: 1,
+            agent_path: Some(AgentPath::try_from("/root/worker").expect("valid agent path")),
+            agent_nickname: None,
+            agent_role: None,
+        });
+    })
+    .await;
+    child.assert_registered_contains(&[&wait_agent]);
+}
+
+#[tokio::test]
 async fn tool_mode_selector_overrides_feature_flags() {
     let direct = probe(|turn| {
         set_features(turn, &[Feature::CodeMode, Feature::CodeModeOnly]);

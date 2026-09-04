@@ -11696,6 +11696,20 @@ max_concurrent_threads_per_session = 17
 }
 
 #[test]
+fn automatic_completion_delivery_changes_only_root_guidance() {
+    let mut config = resolve_multi_agent_v2_config(&ConfigToml::default());
+    config.automatic_completion_delivery = true;
+    let hints = resolve_usage_hints(&config, None, false);
+    let root = hints.root.expect("root hint").body();
+    let child = hints.subagent.expect("child hint").body();
+
+    assert!(root.contains("Terminal worker results arrive automatically"));
+    assert!(!root.contains("When calling `wait_agent`"));
+    assert!(!child.contains("Terminal worker results arrive automatically"));
+    assert!(child.contains("When calling `wait_agent`"));
+}
+
+#[test]
 fn multi_agent_v2_model_override_exposure_preserves_configured_usage_hints() {
     let config_toml = toml::from_str(
         r###"[features.multi_agent_v2]

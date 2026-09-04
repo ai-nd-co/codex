@@ -12011,6 +12011,16 @@ async fn queue_only_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
     );
 }
 
+#[test]
+fn automatic_completion_delivery_is_opt_in_and_root_only() {
+    let root = AgentPath::root();
+    let child = AgentPath::try_from("/root/manager").expect("child path");
+
+    assert!(!automatic_completion_delivery_enabled(&root, false));
+    assert!(automatic_completion_delivery_enabled(&root, true));
+    assert!(!automatic_completion_delivery_enabled(&child, true));
+}
+
 #[tokio::test]
 async fn trigger_turn_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
