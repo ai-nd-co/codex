@@ -9,11 +9,13 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use tokio::sync::Notify;
 
 #[derive(Default)]
 pub(super) struct AgentExecutionLimiter {
     active: AtomicUsize,
     max_threads: OnceLock<usize>,
+    capacity_available: Notify,
 }
 
 pub(crate) struct AgentExecutionGuard {
@@ -23,6 +25,7 @@ pub(crate) struct AgentExecutionGuard {
 impl Drop for AgentExecutionGuard {
     fn drop(&mut self) {
         self.limiter.active.fetch_sub(1, Ordering::AcqRel);
+        self.limiter.capacity_available.notify_waiters();
     }
 }
 
@@ -36,7 +39,7 @@ impl AgentControl {
             .await
     }
 
-    pub(super) async fn ensure_execution_capacity_for_turn_start(
+    pub(crate) async fn ensure_execution_capacity_for_turn_start(
         &self,
         thread_id: ThreadId,
         starts_turn: bool,
@@ -79,6 +82,29 @@ impl AgentControl {
     ) -> Option<AgentExecutionGuard> {
         is_execution_limited(multi_agent_version, session_source)
             .then(|| Arc::clone(&self.agent_execution_limiter).guard())
+    }
+
+    pub(crate) async fn wait_for_execution_capacity_for_turn_start(
+        &self,
+        thread_id: ThreadId,
+    ) -> CodexResult<()> {
+        loop {
+            let notified = self.agent_execution_limiter.capacity_available.notified();
+            match self
+                .ensure_execution_capacity_for_turn_start(thread_id, /*starts_turn*/ true)
+                .await
+            {
+                Ok(()) => return Ok(()),
+                Err(CodexErr::AgentLimitReached { .. }) => notified.await,
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
+    pub(crate) fn notify_execution_capacity_waiters(&self) {
+        self.agent_execution_limiter
+            .capacity_available
+            .notify_waiters();
     }
 }
 

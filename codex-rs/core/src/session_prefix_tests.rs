@@ -18,3 +18,16 @@ fn error_completion_message_stays_below_manual_review_threshold() {
     assert!(approx_token_count(&message) < COMPLETION_MESSAGE_MAX_TOKENS);
     assert!(message.contains(ERROR_NEXT_ACTION));
 }
+
+#[test]
+fn interrupted_completion_message_is_actionable() {
+    let message = format_inter_agent_completion_message(
+        AgentPath::root(),
+        AgentPath::try_from("/root/worker").expect("valid agent path"),
+        &AgentStatus::Interrupted,
+    )
+    .expect("interrupted status should produce a completion message");
+
+    assert!(message.contains("/root/worker"));
+    assert!(message.contains("Agent was interrupted."));
+}

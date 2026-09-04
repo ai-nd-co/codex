@@ -39,6 +39,8 @@ use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FileSystemAccessMode;
 use codex_protocol::protocol::FileSystemPath;
@@ -1959,6 +1961,23 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         )
         .await;
 
+    // Replayed terminal delivery for the same child turn must be ignored.
+    thread
+        .session
+        .send_event(
+            first_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: first_turn.sub_id.clone(),
+                started_at: None,
+                last_agent_message: Some("first done".to_string()),
+                error: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            }),
+        )
+        .await;
+
     FollowupTaskHandlerV2
         .handle(invocation(
             session,
@@ -2027,7 +2046,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
                                 if communication.author == worker_path
                                     && communication.recipient == AgentPath::root()
                                     && communication.other_recipients.is_empty()
-                                    && !communication.trigger_turn =>
+                                    && communication.trigger_turn =>
                             {
                                 Some(communication.content)
                             }
@@ -2109,7 +2128,7 @@ async fn multi_agent_v2_followup_task_rejects_legacy_items_field() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_interrupted_turn_does_not_notify_parent() {
+async fn multi_agent_v2_interrupted_turn_notifies_parent_and_requests_continuation() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     let root = manager
@@ -2162,6 +2181,60 @@ async fn multi_agent_v2_interrupted_turn_does_not_notify_parent() {
         )
         .await;
 
+    let failed_turn = thread.session.new_default_turn().await;
+    thread
+        .session
+        .send_event(
+            failed_turn.as_ref(),
+            EventMsg::Error(ErrorEvent {
+                message: "worker failure".to_string(),
+                codex_error_info: None,
+            }),
+        )
+        .await;
+
+    let non_terminal_error_turn = thread.session.new_default_turn().await;
+    thread
+        .session
+        .send_event(
+            non_terminal_error_turn.as_ref(),
+            EventMsg::Error(ErrorEvent {
+                message: "ignored rollback warning".to_string(),
+                codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+            }),
+        )
+        .await;
+    thread
+        .session
+        .send_event(
+            non_terminal_error_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: non_terminal_error_turn.sub_id.clone(),
+                started_at: None,
+                last_agent_message: Some("recovered".to_string()),
+                error: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            }),
+        )
+        .await;
+    thread
+        .session
+        .send_event(
+            failed_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: failed_turn.sub_id.clone(),
+                started_at: None,
+                last_agent_message: None,
+                error: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            }),
+        )
+        .await;
+
     let notifications = manager
         .captured_ops()
         .into_iter()
@@ -2173,7 +2246,7 @@ async fn multi_agent_v2_interrupted_turn_does_not_notify_parent() {
                         if communication.author.as_str() == "/root/worker"
                             && communication.recipient == AgentPath::root()
                             && communication.other_recipients.is_empty()
-                            && !communication.trigger_turn =>
+                            && communication.trigger_turn =>
                     {
                         Some(communication.content)
                     }
@@ -2182,7 +2255,27 @@ async fn multi_agent_v2_interrupted_turn_does_not_notify_parent() {
         })
         .collect::<Vec<_>>();
 
-    assert_eq!(notifications, Vec::<String>::new());
+    assert_eq!(notifications.len(), 3);
+    assert!(
+        notifications
+            .iter()
+            .any(|message| message.contains("interrupted"))
+    );
+    assert!(
+        notifications
+            .iter()
+            .any(|message| message.contains("worker failure"))
+    );
+    assert!(
+        notifications
+            .iter()
+            .any(|message| message.contains("recovered"))
+    );
+    assert!(
+        !notifications
+            .iter()
+            .any(|message| message.contains("ignored rollback warning"))
+    );
 }
 
 #[tokio::test]

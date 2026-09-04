@@ -58,3 +58,25 @@ fn execution_guards_ignore_root_and_v1_turns() {
             .is_none()
     );
 }
+
+#[tokio::test]
+async fn execution_guard_release_wakes_capacity_waiters() {
+    let control = control_with_limit(/*max_threads*/ 1);
+    let source = SessionSource::SubAgent(SubAgentSource::Other("worker".to_string()));
+    let guard = control
+        .execution_guard(MultiAgentVersion::V2, &source)
+        .expect("v2 subagent execution should be counted");
+    let notified = control
+        .agent_execution_limiter
+        .capacity_available
+        .notified();
+
+    drop(guard);
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), notified)
+        .await
+        .expect("dropping the final child execution slot should wake pending continuation work");
+    control
+        .ensure_execution_capacity(MultiAgentVersion::V2, &source)
+        .expect("capacity should be available after the wake-up");
+}

@@ -182,6 +182,25 @@ impl AgentControl {
         .await
     }
 
+    /// Deliver a terminal child result before attempting its synthetic parent turn.
+    /// Capacity is enforced by the shared pending-work scheduler, so a child's final
+    /// execution slot cannot cause its only completion signal to be dropped.
+    pub(crate) async fn send_terminal_inter_agent_communication(
+        &self,
+        agent_id: ThreadId,
+        communication: InterAgentCommunication,
+        agent_communication_context: AgentCommunicationContext,
+    ) -> CodexResult<String> {
+        let state = self.upgrade()?;
+        self.send_inter_agent_communication_after_capacity_check(
+            agent_id,
+            &state,
+            communication,
+            agent_communication_context,
+        )
+        .await
+    }
+
     async fn send_inter_agent_communication_after_capacity_check(
         &self,
         agent_id: ThreadId,
@@ -468,6 +487,15 @@ impl AgentControl {
             let Ok(state) = control.upgrade() else {
                 return;
             };
+            let delivery_key = (parent_thread_id, child_thread_id);
+            if !state
+                .completion_watcher_deliveries
+                .write()
+                .await
+                .insert(delivery_key)
+            {
+                return;
+            }
             let child_thread = state.get_thread(child_thread_id).await.ok();
             let child_uses_multi_agent_v2 = match child_thread.as_ref() {
                 Some(child_thread) => {
@@ -498,22 +526,48 @@ impl AgentControl {
                     parent_agent_path,
                     Vec::new(),
                     message,
-                    /*trigger_turn*/ false,
+                    /*trigger_turn*/ true,
                 );
                 let context =
                     AgentCommunicationContext::new(AgentCommunicationKind::Result, child_thread_id);
-                let _ = control
-                    .send_inter_agent_communication(parent_thread_id, communication, context)
-                    .await;
+                if control
+                    .send_terminal_inter_agent_communication(
+                        parent_thread_id,
+                        communication,
+                        context,
+                    )
+                    .await
+                    .is_err()
+                {
+                    state
+                        .completion_watcher_deliveries
+                        .write()
+                        .await
+                        .remove(&delivery_key);
+                }
                 return;
             }
             let message = format_subagent_notification_message(child_reference.as_str(), &status);
-            let Ok(parent_thread) = state.get_thread(parent_thread_id).await else {
-                return;
-            };
-            parent_thread
-                .inject_user_message_without_turn(message)
-                .await;
+            let communication = InterAgentCommunication::new(
+                AgentPath::root(),
+                AgentPath::root(),
+                Vec::new(),
+                message,
+                /*trigger_turn*/ true,
+            );
+            let context =
+                AgentCommunicationContext::new(AgentCommunicationKind::Result, child_thread_id);
+            if control
+                .send_terminal_inter_agent_communication(parent_thread_id, communication, context)
+                .await
+                .is_err()
+            {
+                state
+                    .completion_watcher_deliveries
+                    .write()
+                    .await
+                    .remove(&delivery_key);
+            }
         });
     }
 

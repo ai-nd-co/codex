@@ -1775,10 +1775,7 @@ impl Session {
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
         let legacy_source = msg.clone();
         if let EventMsg::Error(error) = &legacy_source
-            && error
-                .codex_error_info
-                .as_ref()
-                .is_some_and(CodexErrorInfo::affects_turn_status)
+            && error.affects_turn_status()
         {
             turn_context
                 .terminal_error
@@ -1853,17 +1850,33 @@ impl Session {
                 status
             }
         };
-        if !is_final(&status) {
+        if !is_final(&status) && status != AgentStatus::Interrupted {
             return;
         }
 
-        self.forward_child_completion_to_parent(
-            turn_context,
-            *parent_thread_id,
-            child_agent_path,
-            status,
-        )
-        .await;
+        if !self
+            .delivered_parent_completion_turns
+            .lock()
+            .await
+            .insert(turn_context.sub_id.clone())
+        {
+            return;
+        }
+
+        if !self
+            .forward_child_completion_to_parent(
+                turn_context,
+                *parent_thread_id,
+                child_agent_path,
+                status,
+            )
+            .await
+        {
+            self.delivered_parent_completion_turns
+                .lock()
+                .await
+                .remove(&turn_context.sub_id);
+        }
     }
 
     /// Sends the standard completion envelope from a spawned MultiAgentV2 child to its parent.
@@ -1873,13 +1886,13 @@ impl Session {
         parent_thread_id: ThreadId,
         child_agent_path: &codex_protocol::AgentPath,
         status: AgentStatus,
-    ) {
+    ) -> bool {
         let Some(parent_agent_path) = child_agent_path
             .as_str()
             .rsplit_once('/')
             .and_then(|(parent, _)| codex_protocol::AgentPath::try_from(parent).ok())
         else {
-            return;
+            return false;
         };
 
         let Some(message) = format_inter_agent_completion_message(
@@ -1887,7 +1900,7 @@ impl Session {
             child_agent_path.clone(),
             &status,
         ) else {
-            return;
+            return false;
         };
         // `communication` owns the message. Keep a second copy only when the
         // recorder will actually need it after parent delivery succeeds.
@@ -1901,18 +1914,18 @@ impl Session {
             parent_agent_path,
             Vec::new(),
             message,
-            /*trigger_turn*/ false,
+            /*trigger_turn*/ true,
         );
         let context =
             AgentCommunicationContext::new(AgentCommunicationKind::Result, self.thread_id);
         if let Err(err) = self
             .services
             .agent_control
-            .send_inter_agent_communication(parent_thread_id, communication, context)
+            .send_terminal_inter_agent_communication(parent_thread_id, communication, context)
             .await
         {
             debug!("failed to notify parent thread {parent_thread_id}: {err}");
-            return;
+            return false;
         }
         if let Some(message) = trace_message {
             self.services
@@ -1927,6 +1940,7 @@ impl Session {
                     },
                 );
         }
+        true
     }
 
     async fn maybe_mirror_event_text_to_realtime(&self, msg: &EventMsg) {

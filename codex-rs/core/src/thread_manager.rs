@@ -267,6 +267,9 @@ pub(crate) struct ThreadManagerState {
     analytics_events_client: Option<AnalyticsEventsClient>,
     // Captures submitted ops for testing purpose when test mode is enabled.
     ops_log: Option<SharedCapturedOps>,
+    /// Completion watchers are best-effort and may be reattached. Keep their terminal delivery
+    /// single-shot for the lifetime of this manager.
+    pub(crate) completion_watcher_deliveries: RwLock<HashSet<(ThreadId, ThreadId)>>,
 }
 
 pub fn build_models_manager(
@@ -372,6 +375,7 @@ impl ThreadManager {
                 analytics_events_client,
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
+                completion_watcher_deliveries: RwLock::new(HashSet::new()),
             }),
             _test_codex_home_guard: None,
         }
@@ -490,6 +494,7 @@ impl ThreadManager {
                 analytics_events_client: None,
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
+                completion_watcher_deliveries: RwLock::new(HashSet::new()),
             }),
             _test_codex_home_guard: None,
         }
@@ -1220,7 +1225,17 @@ impl ThreadManagerState {
 
     /// Remove a thread from the manager by ID, returning it when present.
     pub(crate) async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
-        self.threads.write().await.remove(thread_id)
+        let removed = self.threads.write().await.remove(thread_id);
+        if removed.is_some() {
+            removed
+                .as_ref()
+                .expect("removed thread should exist")
+                .session
+                .services
+                .agent_control
+                .notify_execution_capacity_waiters();
+        }
+        removed
     }
 
     pub(crate) async fn effective_multi_agent_version_for_spawn(

@@ -483,6 +483,29 @@ impl Session {
         if !self.input_queue.has_trigger_turn_mailbox_items().await {
             return;
         }
+        if let Err(err) = self
+            .services
+            .agent_control
+            .ensure_execution_capacity_for_turn_start(self.thread_id, /*starts_turn*/ true)
+            .await
+        {
+            if matches!(err, CodexErr::AgentLimitReached { .. }) {
+                let session = Arc::downgrade(self);
+                let agent_control = self.services.agent_control.clone();
+                let thread_id = self.thread_id;
+                tokio::spawn(async move {
+                    if agent_control
+                        .wait_for_execution_capacity_for_turn_start(thread_id)
+                        .await
+                        .is_ok()
+                        && let Some(session) = session.upgrade()
+                    {
+                        session.maybe_start_turn_for_pending_work().await;
+                    }
+                });
+            }
+            return;
+        }
 
         {
             let mut active_turn = self.active_turn.lock().await;

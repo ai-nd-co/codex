@@ -2185,7 +2185,7 @@ async fn resume_agent_releases_slot_after_resume_failure() {
 #[tokio::test]
 async fn spawn_child_completion_notifies_parent_history() {
     let harness = AgentControlHarness::new().await;
-    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let (parent_thread_id, _parent_thread) = harness.start_thread().await;
 
     let child_thread_id = harness
         .control
@@ -2213,7 +2213,24 @@ async fn spawn_child_completion_notifies_parent_history() {
         .await
         .expect("child shutdown should submit");
 
-    assert_eq!(wait_for_subagent_notification(&parent_thread).await, true);
+    timeout(Duration::from_secs(10), async {
+        loop {
+            if harness.manager.captured_ops().iter().any(|(id, op)| {
+                *id == parent_thread_id
+                    && matches!(
+                        op,
+                        Op::InterAgentCommunication { communication }
+                            if communication.trigger_turn
+                                && communication.content.contains("subagent_notification")
+                    )
+            }) {
+                break;
+            }
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("legacy completion should request a parent continuation");
 }
 
 #[tokio::test]
@@ -2358,6 +2375,18 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
         tester_path.to_string(),
         Some(tester_path.clone()),
     );
+    harness.control.maybe_start_completion_watcher(
+        tester_thread_id,
+        Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: worker_thread_id,
+            depth: 2,
+            agent_path: Some(tester_path.clone()),
+            agent_nickname: None,
+            agent_role: Some("explorer".to_string()),
+        })),
+        tester_path.to_string(),
+        Some(tester_path.clone()),
+    );
     let tester_turn = tester_thread.session.new_default_turn().await;
     tester_thread
         .session
@@ -2389,7 +2418,7 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
                 worker_path.clone(),
                 Vec::new(),
                 expected_message.clone(),
-                /*trigger_turn*/ false,
+                /*trigger_turn*/ true,
             ),
         },
     );
@@ -2410,6 +2439,17 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
     .await
     .expect("completion watcher should queue a direct-parent message");
 
+    assert_eq!(
+        harness
+            .manager
+            .captured_ops()
+            .into_iter()
+            .filter(|entry| *entry == expected)
+            .count(),
+        1,
+        "reattached completion watchers must deliver exactly once"
+    );
+
     let root_history_items = root_thread
         .session
         .clone_history()
@@ -2423,7 +2463,7 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
             AgentPath::root(),
             Vec::new(),
             expected_message,
-            /*trigger_turn*/ false,
+            /*trigger_turn*/ true,
         )
     ));
 }

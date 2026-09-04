@@ -45,6 +45,9 @@ pub(crate) struct Session {
     pub(crate) turn_start_lock: Mutex<()>,
     pub(crate) next_turn_queue: Mutex<NextTurnQueue>,
     pub(crate) input_queue: InputQueue,
+    /// Child turn IDs whose terminal result has already been delivered to the parent.
+    /// This is intentionally in-memory: restart durability is not part of the first release.
+    pub(crate) delivered_parent_completion_turns: Mutex<HashSet<String>>,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     pub(super) git_enrichment_policy: GitEnrichmentPolicy,
@@ -1154,6 +1157,7 @@ impl Session {
                 turn_start_lock: Mutex::new(()),
                 next_turn_queue: Mutex::new(NextTurnQueue::default()),
                 input_queue: InputQueue::new(),
+                delivered_parent_completion_turns: Mutex::new(HashSet::new()),
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
                 git_enrichment_policy,
