@@ -26,10 +26,6 @@ concurrency:
 jobs:
   tag-check:
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.fork_beta.outputs.version }}
-      npm_tag: ${{ steps.fork_beta.outputs.npm_tag }}
-      fork_beta: ${{ steps.fork_beta.outputs.fork_beta }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -62,22 +58,8 @@ jobs:
           echo "✅  Tag, Cargo.toml, and npm package agree (${tag_ver})"
           echo "::endgroup::"
 
-      - name: Detect ai-nd-co beta release
-        id: fork_beta
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="${GITHUB_REF_NAME#rust-v}"
-          if [[ "${GITHUB_REPOSITORY}" != "openai/codex" ]]; then
-            python scripts/fork_beta_release.py "${version}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=${version}" >> "$GITHUB_OUTPUT"
-            echo "npm_tag=" >> "$GITHUB_OUTPUT"
-            echo "fork_beta=false" >> "$GITHUB_OUTPUT"
-          fi
-
   build:
-    if: ${{ needs.tag-check.outputs.fork_beta != 'true' }}
+    if: ${{ github.repository == 'openai/codex' || !startsWith(github.ref_name, 'rust-v0.1.0-beta.') }}
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
@@ -499,7 +481,7 @@ jobs:
             codex-rs/dist/${{ matrix.target }}/*
 
   build-fork-beta-linux:
-    if: ${{ needs.tag-check.outputs.fork_beta == 'true' }}
+    if: ${{ github.repository == 'ai-nd-co/codex' && startsWith(github.ref_name, 'rust-v0.1.0-beta.') }}
     needs: tag-check
     name: Build fork beta Linux x64
     runs-on: ubuntu-24.04
@@ -569,7 +551,7 @@ jobs:
           if-no-files-found: error
 
   build-fork-beta-windows:
-    if: ${{ needs.tag-check.outputs.fork_beta == 'true' }}
+    if: ${{ github.repository == 'ai-nd-co/codex' && startsWith(github.ref_name, 'rust-v0.1.0-beta.') }}
     needs: tag-check
     name: Build fork beta Windows x64
     runs-on: windows-2025
@@ -619,7 +601,7 @@ jobs:
           if-no-files-found: error
 
   publish-fork-beta-npm:
-    if: ${{ needs.tag-check.outputs.fork_beta == 'true' }}
+    if: ${{ github.repository == 'ai-nd-co/codex' && startsWith(github.ref_name, 'rust-v0.1.0-beta.') }}
     needs:
       - tag-check
       - build-fork-beta-linux
@@ -648,8 +630,9 @@ jobs:
           pattern: "x86_64-{unknown-linux-musl,pc-windows-msvc}"
       - name: Stage beta packages
         env:
-          RELEASE_VERSION: ${{ needs.tag-check.outputs.version }}
+          RELEASE_VERSION: ${{ github.ref_name }}
         run: |
+          RELEASE_VERSION="${RELEASE_VERSION#rust-v}"
           ./scripts/stage_npm_packages.py \
             --release-version "$RELEASE_VERSION" \
             --workflow-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
@@ -659,12 +642,13 @@ jobs:
             --target x86_64-pc-windows-msvc
       - name: Publish platform packages before root wrapper
         env:
-          VERSION: ${{ needs.tag-check.outputs.version }}
-          NPM_TAG: ${{ needs.tag-check.outputs.npm_tag }}
+          RELEASE_TAG: ${{ github.ref_name }}
           NPM_PUBLISH_USE_TOKEN_FALLBACK: ${{ vars.NPM_PUBLISH_USE_TOKEN_FALLBACK }}
           FALLBACK_NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
+          VERSION="${RELEASE_TAG#rust-v}"
+          NPM_TAG=beta
           if [[ "${NPM_PUBLISH_USE_TOKEN_FALLBACK:-}" == "true" ]]; then
             [[ -n "${FALLBACK_NPM_TOKEN:-}" ]] || { echo "NPM_TOKEN fallback requested but unavailable"; exit 1; }
             auth_file="${RUNNER_TEMP}/npm-publishrc"
@@ -1384,13 +1368,13 @@ jobs:
           if-no-files-found: error
 
   build-windows:
-    if: ${{ needs.tag-check.outputs.fork_beta != 'true' }}
+    if: ${{ github.repository == 'openai/codex' || !startsWith(github.ref_name, 'rust-v0.1.0-beta.') }}
     needs: tag-check
     uses: ./.github/workflows/rust-release-windows.yml
     secrets: inherit
 
   argument-comment-lint-release-assets:
-    if: ${{ needs.tag-check.outputs.fork_beta != 'true' }}
+    if: ${{ github.repository == 'openai/codex' || !startsWith(github.ref_name, 'rust-v0.1.0-beta.') }}
     name: argument-comment-lint release assets
     needs: tag-check
     uses: ./.github/workflows/rust-release-argument-comment-lint.yml
