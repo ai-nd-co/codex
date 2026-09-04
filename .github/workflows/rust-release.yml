@@ -211,16 +211,19 @@ jobs:
             "dist/npm/codex-npm-${version}.tgz"; do
             package_name="$(tar -xOf "$tarball" package/package.json | node -e \
               'let data=""; process.stdin.on("data", chunk => data += chunk).on("end", () => console.log(JSON.parse(data).name))')"
+            beta_error_file="$(mktemp "${RUNNER_TEMP}/npm-view-beta.XXXXXX")"
             set +e
-            beta_output="$(npm view "${package_name}@beta" version 2>&1)"
+            current_beta="$(npm view "${package_name}@beta" version 2>"$beta_error_file")"
             beta_status=$?
             set -e
             if [[ $beta_status -eq 0 ]]; then
-              current_beta="$beta_output"
-            elif grep -qiE "E404|No match found for version beta|is not in this registry" <<< "$beta_output"; then
+              rm -f "$beta_error_file"
+            elif grep -qiE "E404|No match found for version beta|is not in this registry" "$beta_error_file"; then
+              rm -f "$beta_error_file"
               current_beta=""
             else
-              echo "$beta_output" >&2
+              cat "$beta_error_file" >&2
+              rm -f "$beta_error_file"
               exit "$beta_status"
             fi
             if [[ -n "$current_beta" ]]; then
