@@ -435,8 +435,9 @@ def run_npm_pack(staging_dir: Path, output_path: Path) -> Path:
         env = os.environ.copy()
         env["NPM_CONFIG_CACHE"] = str(npm_cache_dir)
         env["NPM_CONFIG_LOGS_DIR"] = str(npm_logs_dir)
+        npm = shutil.which("npm.cmd" if os.name == "nt" else "npm") or "npm"
         stdout = subprocess.check_output(
-            ["npm", "pack", "--json", "--pack-destination", str(pack_dir)],
+            [npm, "pack", "--json", "--pack-destination", str(pack_dir)],
             cwd=staging_dir,
             env=env,
             text=True,

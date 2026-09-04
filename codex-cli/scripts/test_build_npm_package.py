@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).with_name("build_npm_package.py")
@@ -13,6 +14,27 @@ SPEC.loader.exec_module(MODULE)
 
 
 class PackageMetadataTest(unittest.TestCase):
+    def test_windows_npm_pack_uses_command_shim(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            stage = Path(temp_dir) / "stage"
+            output = Path(temp_dir) / "out.tgz"
+            stage.mkdir()
+            with (
+                mock.patch.object(MODULE.os, "name", "nt"),
+                mock.patch.object(MODULE.shutil, "which", return_value="npm.cmd") as which,
+                mock.patch.object(
+                    MODULE.subprocess,
+                    "check_output",
+                    side_effect=lambda command, **_kwargs: (
+                        (Path(command[-1]) / "package.tgz").write_bytes(b"package"),
+                        '[{"filename":"package.tgz"}]',
+                    )[1],
+                ) as check_output,
+            ):
+                MODULE.run_npm_pack(stage, output)
+        which.assert_called_once_with("npm.cmd")
+        self.assertEqual(check_output.call_args.args[0][0], "npm.cmd")
+
     def test_root_uses_selected_fork_platform_dependencies(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             stage = Path(temp_dir)

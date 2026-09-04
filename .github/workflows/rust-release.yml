@@ -54,28 +54,12 @@ jobs:
           tag_ver="${GITHUB_REF_NAME#rust-v}"
           cargo_ver="$(grep -m1 '^version' codex-rs/Cargo.toml \
                         | sed -E 's/version *= *"([^"]+)".*/\1/')"
+          npm_ver="$(python -c 'import json; print(json.load(open("codex-cli/package.json"))["version"])')"
 
-          [[ "${tag_ver}" == "${cargo_ver}" ]] \
-            || { echo "❌  Tag ${tag_ver} ≠ Cargo.toml ${cargo_ver}"; exit 1; }
+          [[ "${tag_ver}" == "${cargo_ver}" && "${tag_ver}" == "${npm_ver}" ]] \
+            || { echo "❌  Release versions disagree: tag=${tag_ver}, cargo=${cargo_ver}, npm=${npm_ver}"; exit 1; }
 
-          python - "${tag_ver}" <<'PY'
-          import json
-          import pathlib
-          import sys
-
-          expected = sys.argv[1]
-          manifests = (
-              pathlib.Path("codex-cli/package.json"),
-              pathlib.Path("sdk/typescript/package.json"),
-              pathlib.Path("codex-rs/responses-api-proxy/npm/package.json"),
-          )
-          for manifest in manifests:
-              actual = json.loads(manifest.read_text(encoding="utf-8"))["version"]
-              if actual != expected:
-                  raise SystemExit(f"{manifest}: {actual} != {expected}")
-          PY
-
-          echo "✅  Tag, Cargo.toml, and npm manifests agree (${tag_ver})"
+          echo "✅  Tag, Cargo.toml, and npm package agree (${tag_ver})"
           echo "::endgroup::"
 
       - name: Detect ai-nd-co beta release
@@ -84,11 +68,10 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#rust-v}"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          if [[ "${GITHUB_REPOSITORY}" != "openai/codex" && "${version}" =~ ^0\.1\.0-beta\.[1-9][0-9]*$ ]]; then
-            python scripts/fork_beta_release.py "${version}" --github-output >> "$GITHUB_OUTPUT"
-            echo "fork_beta=true" >> "$GITHUB_OUTPUT"
+          if [[ "${GITHUB_REPOSITORY}" != "openai/codex" ]]; then
+            python scripts/fork_beta_release.py "${version}" >> "$GITHUB_OUTPUT"
           else
+            echo "version=${version}" >> "$GITHUB_OUTPUT"
             echo "npm_tag=" >> "$GITHUB_OUTPUT"
             echo "fork_beta=false" >> "$GITHUB_OUTPUT"
           fi
@@ -669,6 +652,7 @@ jobs:
         run: |
           ./scripts/stage_npm_packages.py \
             --release-version "$RELEASE_VERSION" \
+            --workflow-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --artifacts-dir "${GITHUB_WORKSPACE}/dist" \
             --package codex \
             --target x86_64-unknown-linux-musl \

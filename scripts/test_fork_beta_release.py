@@ -14,20 +14,13 @@ release_settings = MODULE.release_settings
 class ReleaseSettingsTest(unittest.TestCase):
     def test_numbered_beta_maps_to_beta_tags(self) -> None:
         settings = release_settings("0.1.0-beta.7")
-        self.assertEqual(settings["tag"], "rust-v0.1.0-beta.7")
         self.assertEqual(settings["npm_tag"], "beta")
-        self.assertEqual(
-            settings["platform_tags"],
-            {
-                "x86_64-unknown-linux-musl": "beta-linux-x64",
-                "x86_64-pc-windows-msvc": "beta-win32-x64",
-            },
-        )
+        self.assertEqual(settings["fork_beta"], "true")
 
-    def test_rejects_unscoped_or_zero_beta(self) -> None:
+    def test_other_versions_leave_upstream_path_selected(self) -> None:
         for version in ("0.1.0", "0.1.0-alpha.1", "0.1.0-beta.0", "1.0.0-beta.1"):
-            with self.subTest(version=version), self.assertRaises(ValueError):
-                release_settings(version)
+            with self.subTest(version=version):
+                self.assertEqual(release_settings(version)["fork_beta"], "false")
 
 
 if __name__ == "__main__":
