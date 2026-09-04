@@ -395,9 +395,14 @@ impl ModelProviderInfo {
             wire_api: WireApi::Responses,
             query_params: None,
             http_headers: Some(
-                [("version".to_string(), env!("CARGO_PKG_VERSION").into())]
-                    .into_iter()
-                    .collect(),
+                [(
+                    "version".to_string(),
+                    codex_protocol::wire_version::wire_version()
+                        .into_owned()
+                        .into(),
+                )]
+                .into_iter()
+                .collect(),
             ),
             env_http_headers: Some(
                 [

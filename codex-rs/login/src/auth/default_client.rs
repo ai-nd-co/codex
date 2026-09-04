@@ -162,7 +162,14 @@ pub fn is_first_party_chat_originator(originator_value: &str) -> bool {
 }
 
 pub fn get_codex_user_agent() -> String {
-    let build_version = env!("CARGO_PKG_VERSION");
+    build_codex_user_agent(env!("CARGO_PKG_VERSION"))
+}
+
+pub fn get_codex_wire_user_agent() -> String {
+    build_codex_user_agent(&codex_protocol::wire_version::wire_version())
+}
+
+fn build_codex_user_agent(build_version: &str) -> String {
     let os_info = os_info::get();
     let originator = originator();
     let prefix = format!(

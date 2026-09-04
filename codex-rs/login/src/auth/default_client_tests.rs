@@ -47,6 +47,18 @@ fn test_get_codex_user_agent() {
 }
 
 #[test]
+fn local_and_wire_user_agents_keep_separate_versions() {
+    let local = build_codex_user_agent(env!("CARGO_PKG_VERSION"));
+    let wire = build_codex_user_agent(codex_protocol::wire_version::DEFAULT_WIRE_VERSION);
+
+    assert!(local.contains(&format!("/{} ", env!("CARGO_PKG_VERSION"))));
+    assert!(wire.contains(&format!(
+        "/{} ",
+        codex_protocol::wire_version::DEFAULT_WIRE_VERSION
+    )));
+}
+
+#[test]
 fn is_first_party_originator_matches_known_values() {
     assert_eq!(is_first_party_originator(DEFAULT_ORIGINATOR), true);
     assert_eq!(is_first_party_originator("codex-tui"), true);
