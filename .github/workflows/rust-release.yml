@@ -209,6 +209,23 @@ jobs:
             "dist/npm/codex-npm-linux-x64-${version}.tgz" \
             "dist/npm/codex-npm-win32-x64-${version}.tgz" \
             "dist/npm/codex-npm-${version}.tgz"; do
+            package_name="$(tar -xOf "$tarball" package/package.json | node -e \
+              'let data=""; process.stdin.on("data", chunk => data += chunk).on("end", () => console.log(JSON.parse(data).name))')"
+            current_beta="$(npm view "${package_name}@beta" version 2>/dev/null || true)"
+            if [[ -n "$current_beta" ]]; then
+              node -e '
+                const parse = value => {
+                  const match = /^0\.1\.0-beta\.([1-9][0-9]*)$/.exec(value);
+                  if (!match) throw new Error(`Unexpected beta version: ${value}`);
+                  return Number(match[1]);
+                };
+                if (parse(process.argv[1]) < parse(process.argv[2])) process.exit(1);
+              ' "$version" "$current_beta" || {
+                echo "Refusing to move ${package_name}@beta backward from ${current_beta} to ${version}" >&2
+                exit 1
+              }
+            fi
+
             set +e
             output="$(npm publish "$tarball" --access public --tag beta 2>&1)"
             status=$?
@@ -221,8 +238,6 @@ jobs:
               exit "$status"
             fi
 
-            package_name="$(tar -xOf "$tarball" package/package.json | node -e \
-              'let data=""; process.stdin.on("data", chunk => data += chunk).on("end", () => console.log(JSON.parse(data).name))')"
             registry_integrity="$(npm view "${package_name}@${version}" dist.integrity)"
             local_integrity="$(node -e \
               'const fs=require("fs"),crypto=require("crypto"); const data=fs.readFileSync(process.argv[1]); console.log("sha512-"+crypto.createHash("sha512").update(data).digest("base64"))' \
@@ -231,6 +246,13 @@ jobs:
               echo "Published ${package_name}@${version} does not match the staged tarball" >&2
               exit 1
             }
+            if [[ "$current_beta" == "$version" ]]; then
+              continue
+            fi
+            if [[ "${NPM_PUBLISH_USE_TOKEN_FALLBACK:-}" != "true" ]]; then
+              echo "${package_name}@${version} exists but its beta tag requires authenticated repair" >&2
+              exit 1
+            fi
             npm dist-tag add "${package_name}@${version}" beta
           done
       - name: Publish GitHub prerelease
