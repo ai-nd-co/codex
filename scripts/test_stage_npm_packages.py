@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -36,6 +37,34 @@ class TargetSelectionTest(unittest.TestCase):
             MODULE.TARGET_TO_PLATFORM_PACKAGE["x86_64-pc-windows-msvc"],
             "codex-win32-x64",
         )
+
+    def test_codex_expansion_excludes_unselected_platforms(self) -> None:
+        packages = MODULE.expand_packages(
+            ["codex"],
+            ["x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"],
+        )
+        self.assertEqual(
+            packages,
+            ["codex", "codex-linux-x64", "codex-win32-x64"],
+        )
+
+    def test_local_artifacts_do_not_query_or_download_workflow(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            with (
+                mock.patch.object(MODULE, "install_from_local_artifacts") as local,
+                mock.patch.object(MODULE, "install_from_workflow_artifacts") as remote,
+            ):
+                MODULE.install_native_components(
+                    None,
+                    {MODULE.CODEX_PACKAGE_COMPONENT},
+                    root / "vendor-root",
+                    root / "artifacts",
+                    ["x86_64-pc-windows-msvc"],
+                )
+
+        local.assert_called_once()
+        remote.assert_not_called()
 
 
 if __name__ == "__main__":

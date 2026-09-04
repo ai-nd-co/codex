@@ -35,6 +35,7 @@ _BUILD_MODULE = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_BUILD_MODULE)
 PACKAGE_NATIVE_COMPONENTS = getattr(_BUILD_MODULE, "PACKAGE_NATIVE_COMPONENTS", {})
 PACKAGE_EXPANSIONS = getattr(_BUILD_MODULE, "PACKAGE_EXPANSIONS", {})
+PACKAGE_TARGET_FILTERS = getattr(_BUILD_MODULE, "PACKAGE_TARGET_FILTERS", {})
 CODEX_PLATFORM_PACKAGES = getattr(_BUILD_MODULE, "CODEX_PLATFORM_PACKAGES", {})
 CODEX_PACKAGE_COMPONENT = getattr(
     _BUILD_MODULE, "CODEX_PACKAGE_COMPONENT", "codex-package"
@@ -146,10 +147,14 @@ def collect_native_component_sets(packages: list[str]) -> list[tuple[str, ...]]:
     return component_sets
 
 
-def expand_packages(packages: list[str]) -> list[str]:
+def expand_packages(packages: list[str], selected_targets: Sequence[str]) -> list[str]:
+    allowed_targets = set(selected_targets)
     expanded: list[str] = []
     for package in packages:
         for expanded_package in PACKAGE_EXPANSIONS.get(package, [package]):
+            required_target = PACKAGE_TARGET_FILTERS.get(expanded_package)
+            if required_target is not None and required_target not in allowed_targets:
+                continue
             if expanded_package in expanded:
                 continue
             expanded.append(expanded_package)
@@ -191,7 +196,7 @@ def resolve_workflow_url(version: str, override: str | None) -> tuple[str, str |
 
 
 def install_native_components(
-    workflow_url: str,
+    workflow_url: str | None,
     components: set[str],
     vendor_root: Path,
     artifacts_dir: Path,
@@ -203,18 +208,44 @@ def install_native_components(
     vendor_dir = vendor_root / "vendor"
     vendor_dir.mkdir(parents=True, exist_ok=True)
 
-    workflow_id = workflow_url.rstrip("/").split("/")[-1]
-    print(f"Downloading native artifacts from workflow {workflow_id}...", flush=True)
-    with _gha_group(f"Download native artifacts from workflow {workflow_id}"):
-        artifacts_dir.mkdir(parents=True, exist_ok=True)
-        install_from_workflow_artifacts(
-            workflow_id,
-            artifacts_dir,
-            sorted(components),
-            vendor_dir,
-            targets,
-        )
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    if workflow_url is None:
+        print(f"Using local native artifacts from {artifacts_dir}", flush=True)
+        with _gha_group(f"Install native artifacts from {artifacts_dir}"):
+            install_from_local_artifacts(
+                artifacts_dir,
+                sorted(components),
+                vendor_dir,
+                targets,
+            )
+    else:
+        workflow_id = workflow_url.rstrip("/").split("/")[-1]
+        print(f"Downloading native artifacts from workflow {workflow_id}...", flush=True)
+        with _gha_group(f"Download native artifacts from workflow {workflow_id}"):
+            install_from_workflow_artifacts(
+                workflow_id,
+                artifacts_dir,
+                sorted(components),
+                vendor_dir,
+                targets,
+            )
     print(f"Installed native dependencies into {vendor_dir}", flush=True)
+
+
+def install_from_local_artifacts(
+    artifacts_dir: Path,
+    components: Sequence[str],
+    vendor_dir: Path,
+    targets: Sequence[str],
+) -> None:
+    if CODEX_PACKAGE_COMPONENT in components:
+        install_codex_package_archives(artifacts_dir, vendor_dir, targets)
+    install_binary_components(
+        artifacts_dir,
+        vendor_dir,
+        [BINARY_COMPONENTS[name] for name in components if name in BINARY_COMPONENTS],
+        targets,
+    )
 
 
 def install_from_workflow_artifacts(
@@ -507,7 +538,7 @@ def main() -> int:
 
     runner_temp = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir()))
 
-    packages = expand_packages(list(args.packages))
+    packages = expand_packages(list(args.packages), selected_targets)
     native_component_sets = collect_native_component_sets(packages)
     print("Expanded packages: " + ", ".join(packages), flush=True)
     print("Selected targets: " + ", ".join(selected_targets), flush=True)
@@ -529,14 +560,15 @@ def main() -> int:
 
     try:
         if native_component_sets:
-            workflow_url, resolved_head_sha = resolve_workflow_url(
-                args.release_version, args.workflow_url
-            )
-            print(f"Using native artifacts from {workflow_url}", flush=True)
             if args.artifacts_dir is not None:
+                workflow_url = None
                 artifacts_temp_root = args.artifacts_dir.resolve()
                 artifacts_temp_root.mkdir(parents=True, exist_ok=True)
             else:
+                workflow_url, resolved_head_sha = resolve_workflow_url(
+                    args.release_version, args.workflow_url
+                )
+                print(f"Using native artifacts from {workflow_url}", flush=True)
                 artifacts_temp_root = Path(
                     tempfile.mkdtemp(prefix="npm-native-artifacts-", dir=runner_temp)
                 )

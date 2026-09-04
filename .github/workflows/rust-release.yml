@@ -6,8 +6,11 @@ on:
       - "rust-v0.1.0-beta.*"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}
   cancel-in-progress: false
+
+env:
+  CODEX_REPO_ROOT: ${{ github.workspace }}
 
 jobs:
   tag-check:
@@ -82,6 +85,9 @@ jobs:
           export AWS_LC_SYS_NO_JITTER_ENTROPY=1
           export AWS_LC_SYS_NO_JITTER_ENTROPY_X86_64_UNKNOWN_LINUX_MUSL=1
           cargo build --target x86_64-unknown-linux-musl --release --bin codex --bin codex-code-mode-host
+          strip --strip-debug --strip-unneeded \
+            target/x86_64-unknown-linux-musl/release/codex \
+            target/x86_64-unknown-linux-musl/release/codex-code-mode-host
       - name: Build package archive
         shell: bash
         run: |
@@ -136,7 +142,7 @@ jobs:
           bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
             --target x86_64-pc-windows-msvc \
             --bundle primary \
-            --entrypoint-dir target/x86_64-pc-windows-msvc/release \
+            --entrypoint-dir "${CARGO_TARGET_DIR}/x86_64-pc-windows-msvc/release" \
             --archive-dir dist/x86_64-pc-windows-msvc
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -178,7 +184,6 @@ jobs:
           version="${RELEASE_TAG#rust-v}"
           ./scripts/stage_npm_packages.py \
             --release-version "$version" \
-            --workflow-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --artifacts-dir "${GITHUB_WORKSPACE}/dist" \
             --package codex \
             --target x86_64-unknown-linux-musl \
@@ -209,9 +214,24 @@ jobs:
             status=$?
             set -e
             echo "$output"
-            if [[ $status -ne 0 ]] && ! grep -qiE "previously published|cannot publish over|version already exists" <<< "$output"; then
+            if [[ $status -eq 0 ]]; then
+              continue
+            fi
+            if ! grep -qiE "previously published|cannot publish over|version already exists" <<< "$output"; then
               exit "$status"
             fi
+
+            package_name="$(tar -xOf "$tarball" package/package.json | node -e \
+              'let data=""; process.stdin.on("data", chunk => data += chunk).on("end", () => console.log(JSON.parse(data).name))')"
+            registry_integrity="$(npm view "${package_name}@${version}" dist.integrity)"
+            local_integrity="$(node -e \
+              'const fs=require("fs"),crypto=require("crypto"); const data=fs.readFileSync(process.argv[1]); console.log("sha512-"+crypto.createHash("sha512").update(data).digest("base64"))' \
+              "$tarball")"
+            [[ "$registry_integrity" == "$local_integrity" ]] || {
+              echo "Published ${package_name}@${version} does not match the staged tarball" >&2
+              exit 1
+            }
+            npm dist-tag add "${package_name}@${version}" beta
           done
       - name: Publish GitHub prerelease
         uses: softprops/action-gh-release@6cbd405e2c4e67a21c47fa9e383d020e4e28b836 # v2.6.1
