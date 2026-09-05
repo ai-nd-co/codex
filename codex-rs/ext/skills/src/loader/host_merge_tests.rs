@@ -27,8 +27,11 @@ use crate::loader::MAX_CONCURRENT_ROOT_SCANS;
 use crate::loader::io_test_support::ManifestMetadataBehavior;
 use crate::loader::io_test_support::RecordingFileSystem;
 
+use crate::host_service::RequestSkillRootSnapshots;
+
 use super::HostSkillRoot;
 use super::load_and_merge_host_skill_roots;
+use super::load_and_merge_host_skill_roots_with_request_snapshots;
 
 #[derive(Default)]
 struct TestPluginSkillSnapshots {
@@ -266,6 +269,69 @@ async fn reuses_owner_managed_plugin_root_snapshots() {
     assert_eq!(
         cached_outcome.skills[0].remote_plugin_id.as_deref(),
         Some("remote-sample")
+    );
+}
+
+#[tokio::test]
+async fn request_snapshot_replay_preserves_claude_root_provenance() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let repository = AbsolutePathBuf::from_absolute_path_checked(temp_dir.path())
+        .expect("absolute repository path");
+    let agents_root = repository.join(".agents/skills");
+    let claude_root = repository.join(".claude/skills");
+    write_skill(&agents_root, "agents", "agents", "agents only");
+    write_skill(&agents_root, "shared", "shared", "shared agents");
+    write_skill(&claude_root, "claude", "claude", "claude only");
+    write_skill(&claude_root, "shared", "shared", "shared claude");
+
+    let roots = || {
+        vec![
+            HostSkillRoot::host(agents_root.clone(), SkillScope::Repo, Arc::clone(&LOCAL_FS)),
+            HostSkillRoot::host(claude_root.clone(), SkillScope::Repo, Arc::clone(&LOCAL_FS)),
+        ]
+    };
+    let snapshots = RequestSkillRootSnapshots::default();
+    let first_outcome = load_and_merge_host_skill_roots_with_request_snapshots(
+        roots(),
+        &Semaphore::new(2),
+        /*restriction_product*/ None,
+        /*plugin_skill_snapshots*/ None,
+        Some(&snapshots),
+    )
+    .await;
+    write_skill(&agents_root, "shared", "shared", "shared agents updated");
+
+    let replayed_outcome = load_and_merge_host_skill_roots_with_request_snapshots(
+        roots(),
+        &Semaphore::new(2),
+        /*restriction_product*/ None,
+        /*plugin_skill_snapshots*/ None,
+        Some(&snapshots),
+    )
+    .await;
+
+    let expected = vec![
+        ("agents", "agents only"),
+        ("claude", "claude only"),
+        ("shared", "shared agents"),
+    ];
+    assert_eq!(
+        first_outcome
+            .skills
+            .iter()
+            .map(|skill| (skill.name.as_str(), skill.description.as_str()))
+            .collect::<Vec<_>>(),
+        expected
+    );
+    // The replay must serve the cached snapshots (claude provenance included),
+    // not a rescan that loses the flag and resurrects the dropped duplicate.
+    assert_eq!(
+        replayed_outcome
+            .skills
+            .iter()
+            .map(|skill| (skill.name.as_str(), skill.description.as_str()))
+            .collect::<Vec<_>>(),
+        expected
     );
 }
 

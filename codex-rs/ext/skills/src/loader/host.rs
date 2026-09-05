@@ -118,6 +118,7 @@ pub(crate) struct HostSkillRootSnapshot {
     pub(crate) errors: Vec<SkillError>,
     pub(crate) file_system: Arc<dyn ExecutorFileSystem>,
     pub(crate) is_agent_plugin: bool,
+    pub(crate) is_claude_host_root: bool,
 }
 
 struct ResolvedDiscoveredSkill {
@@ -128,6 +129,7 @@ struct ResolvedDiscoveredSkill {
 
 pub(crate) async fn load_host_skill_root(root: HostSkillRoot) -> HostSkillRootSnapshot {
     let is_agent_plugin = root.discovery_mode() == SkillDiscoveryMode::DirectChildren;
+    let is_claude_host_root = is_claude_host_root(&root.path);
     let canonical_root =
         canonicalize_for_skill_identity(root.file_system.as_ref(), &root.path).await;
     let (skills, skill_discovery_path_by_path, errors) =
@@ -139,7 +141,24 @@ pub(crate) async fn load_host_skill_root(root: HostSkillRoot) -> HostSkillRootSn
         errors,
         file_system: root.file_system,
         is_agent_plugin,
+        is_claude_host_root,
     }
+}
+
+fn is_claude_host_root(path: &AbsolutePathBuf) -> bool {
+    let components = path
+        .as_path()
+        .components()
+        .map(|component| component.as_os_str())
+        .collect::<Vec<_>>();
+    components
+        .windows(2)
+        .rev()
+        .find_map(|pair| {
+            (pair[1] == "skills" && (pair[0] == ".agents" || pair[0] == ".claude"))
+                .then_some(pair[0] == ".claude")
+        })
+        .unwrap_or(false)
 }
 
 async fn load_skills_under_root(

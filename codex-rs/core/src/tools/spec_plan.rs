@@ -79,6 +79,8 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::MultiAgentVersion;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
@@ -646,12 +648,20 @@ fn multi_agent_v2_enabled(turn_context: &TurnContext) -> bool {
 }
 
 fn wait_agent_enabled(turn_context: &TurnContext) -> bool {
+    let is_pathless_child = matches!(
+        turn_context.session_source,
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            agent_path: None,
+            ..
+        })
+    );
     turn_context.config.multi_agent_v2.wait_agent_enabled
         && !(turn_context
             .config
             .multi_agent_v2
             .automatic_completion_delivery
-            && turn_context.session_source.get_agent_path().is_none())
+            && turn_context.session_source.get_agent_path().is_none()
+            && !is_pathless_child)
 }
 
 fn collab_tools_enabled(turn_context: &TurnContext, model_info: &ModelInfo) -> bool {

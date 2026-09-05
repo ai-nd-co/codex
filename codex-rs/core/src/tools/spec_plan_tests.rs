@@ -2896,6 +2896,26 @@ async fn automatic_completion_delivery_hides_wait_only_from_root() {
     })
     .await;
     child.assert_registered_contains(&[&wait_agent]);
+
+    let pathless_child = probe(|turn| {
+        set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
+        update_config(turn, |config| {
+            config.multi_agent_v2.automatic_completion_delivery = true;
+        });
+        update_turn_settings_for_test(turn, |settings| {
+            Arc::make_mut(&mut settings.model_info).multi_agent_version =
+                Some(MultiAgentVersion::V2);
+        });
+        turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: ThreadId::new(),
+            depth: 1,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: None,
+        });
+    })
+    .await;
+    pathless_child.assert_registered_contains(&[&wait_agent]);
 }
 
 #[tokio::test]
