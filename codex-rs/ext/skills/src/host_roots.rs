@@ -26,27 +26,11 @@ const REPO_SKILL_DIR_NAMES: &[&str] = &[AGENTS_DIR_NAME, ".claude"];
 const SKILLS_DIR_NAME: &str = "skills";
 const MAX_CONCURRENT_ANCESTOR_PROBES: usize = 256;
 
-pub(crate) async fn resolve_skill_roots(
-    repository_file_system: Option<Arc<dyn ExecutorFileSystem>>,
-    config_layer_stack: &ConfigLayerStack,
-    cwd: &AbsolutePathBuf,
-    plugin_skill_roots: Vec<PluginSkillRoot>,
-    extra_skill_roots: Vec<AbsolutePathBuf>,
-) -> Vec<HostSkillRoot> {
-    let home_dir =
-        home_dir().and_then(|path| AbsolutePathBuf::from_absolute_path_checked(path).ok());
-    resolve_skill_roots_with_home_dir(
-        repository_file_system,
-        config_layer_stack,
-        cwd,
-        home_dir.as_ref(),
-        plugin_skill_roots,
-        extra_skill_roots,
-    )
-    .await
+pub(crate) fn user_home_dir() -> Option<AbsolutePathBuf> {
+    home_dir().and_then(|path| AbsolutePathBuf::from_absolute_path_checked(path).ok())
 }
 
-async fn resolve_skill_roots_with_home_dir(
+pub(crate) async fn resolve_skill_roots_with_home_dir(
     repository_file_system: Option<Arc<dyn ExecutorFileSystem>>,
     config_layer_stack: &ConfigLayerStack,
     cwd: &AbsolutePathBuf,

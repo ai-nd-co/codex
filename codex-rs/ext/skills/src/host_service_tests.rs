@@ -188,7 +188,8 @@ async fn skills_for_config_reuses_cache_for_same_effective_config() {
     let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
-    );
+    )
+    .with_home_dir(codex_home.path().abs());
 
     write_user_skill(&codex_home, "a", "skill-a", "from a");
     let outcome1 =
@@ -228,7 +229,8 @@ async fn skills_for_config_bounds_plugin_generations_and_preserves_live_snapshot
     let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ false,
-    );
+    )
+    .with_home_dir(codex_home.path().abs());
     let mut generations = Vec::new();
     let mut recent = None;
     let mut held_snapshot = None;
@@ -311,7 +313,8 @@ async fn watchable_skill_root_paths_exclude_plugin_and_system_roots() {
     let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
-    );
+    )
+    .with_home_dir(codex_home.path().abs());
 
     let watchable_paths = skills_service
         .watchable_skill_root_paths(&input, Arc::clone(&LOCAL_FS))
@@ -346,7 +349,8 @@ async fn snapshot_for_config_merges_extension_host_and_legacy_plugin_roots() {
     let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ false,
-    );
+    )
+    .with_home_dir(codex_home.path().abs());
 
     let snapshot = skills_service
         .snapshot_for_config(&input, Some(Arc::clone(&LOCAL_FS)))
@@ -390,7 +394,8 @@ async fn snapshot_for_config_preserves_host_precedence_for_symlinked_plugin_root
     let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ false,
-    );
+    )
+    .with_home_dir(codex_home.path().abs());
 
     let outcome = skills_for_config_with_stack(
         &skills_service,
@@ -432,7 +437,8 @@ async fn skills_list_snapshots_share_host_roots_only_within_one_request() {
     let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
-    );
+    )
+    .with_home_dir(codex_home.path().abs());
     let request = skills_service.for_request();
     let input = |cwd: &TempDir, config_layer_stack| {
         HostSkillsLoadInput::new(cwd.path().abs(), Vec::new(), config_layer_stack)
@@ -502,7 +508,8 @@ async fn skills_for_config_refreshes_cache_when_remote_plugin_id_changes() {
     let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
-    );
+    )
+    .with_home_dir(codex_home.path().abs());
 
     let plugin_input = HostSkillsLoadInput::new(
         cwd.path().abs(),
@@ -575,7 +582,8 @@ async fn set_extra_roots_replaces_runtime_roots_and_clears_cache() {
     let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
-    );
+    )
+    .with_home_dir(codex_home.path().abs());
 
     let skills_input =
         HostSkillsLoadInput::new(cwd.path().abs(), Vec::new(), config_layer_stack.clone());
@@ -649,7 +657,8 @@ async fn set_extra_roots_applies_to_config_loads_and_empty_clears() {
     let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
-    );
+    )
+    .with_home_dir(codex_home.path().abs());
 
     let empty_outcome =
         skills_for_config_with_stack(&skills_service, &cwd, &config_layer_stack, &[]).await;
@@ -711,7 +720,8 @@ async fn skills_for_config_disables_plugin_skills_by_name() {
     let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
-    );
+    )
+    .with_home_dir(codex_home.path().abs());
 
     let outcome = skills_for_config_with_stack(
         &skills_service,
@@ -773,7 +783,8 @@ async fn skills_for_cwd_loads_repo_and_user_roots_with_local_fs() {
     let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
-    );
+    )
+    .with_home_dir(codex_home.path().abs());
 
     let snapshot = skills_service
         .for_request()
@@ -840,7 +851,8 @@ async fn skills_for_cwd_without_fs_skips_repo_roots() {
     let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
-    );
+    )
+    .with_home_dir(codex_home.path().abs());
 
     let snapshot = skills_service
         .for_request()
@@ -877,7 +889,8 @@ async fn skills_for_config_excludes_bundled_skills_when_disabled_in_config() {
     let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ false,
-    );
+    )
+    .with_home_dir(codex_home.path().abs());
 
     let outcome =
         skills_for_config_with_stack(&skills_service, &cwd, &config_layer_stack, &[]).await;
@@ -903,7 +916,8 @@ async fn skills_for_cwd_uses_cached_result_until_force_reload() {
     let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
-    );
+    )
+    .with_home_dir(codex_home.path().abs());
     let base_input =
         HostSkillsLoadInput::new(cwd.path().abs(), Vec::new(), config_layer_stack.clone());
     let config_input = base_input
@@ -985,7 +999,8 @@ async fn skills_for_config_ignores_cwd_cache_when_session_flags_reenable_skill()
     let skills_service = HostSkillsService::new(
         codex_home.path().abs(),
         /*bundled_skills_enabled*/ true,
-    );
+    )
+    .with_home_dir(codex_home.path().abs());
     let parent_input = HostSkillsLoadInput::new(cwd.path().abs(), Vec::new(), parent_stack.clone());
 
     let parent_snapshot = skills_service
