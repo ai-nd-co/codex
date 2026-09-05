@@ -12,11 +12,23 @@ pub fn wire_version_triple() -> String {
 }
 
 fn resolve_wire_version(value: Option<&str>) -> Cow<'static, str> {
-    value
-        .map(str::trim)
-        .filter(|value| version_triple(value).is_some())
-        .map(|value| Cow::Owned(value.to_string()))
-        .unwrap_or(Cow::Borrowed(DEFAULT_WIRE_VERSION))
+    let trimmed = value.map(str::trim);
+    match trimmed.filter(|value| version_triple(value).is_some()) {
+        Some(value) => Cow::Owned(value.to_string()),
+        None => {
+            if let Some(invalid) = trimmed {
+                tracing::warn!("{}", invalid_override_warning(invalid));
+            }
+            Cow::Borrowed(DEFAULT_WIRE_VERSION)
+        }
+    }
+}
+
+fn invalid_override_warning(invalid: &str) -> String {
+    format!(
+        "ignoring invalid {WIRE_VERSION_OVERRIDE_ENV_VAR} value {invalid:?}; \
+         using default wire version {DEFAULT_WIRE_VERSION:?}"
+    )
 }
 
 fn version_triple(value: &str) -> Option<String> {
@@ -96,5 +108,27 @@ mod tests {
             version_triple("1.2.3-beta.4+build.5").as_deref(),
             Some("1.2.3")
         );
+    }
+
+    #[test]
+    fn valid_override_still_wins_over_default() {
+        assert_eq!(resolve_wire_version(Some("0.200.0")), "0.200.0");
+        assert_ne!(resolve_wire_version(Some("0.200.0")), DEFAULT_WIRE_VERSION);
+    }
+
+    #[test]
+    fn invalid_override_falls_back_and_names_the_value_in_the_warning() {
+        for invalid in ["01.2.3", "1.2.x", "not-semver"] {
+            assert_eq!(resolve_wire_version(Some(invalid)), DEFAULT_WIRE_VERSION);
+            let warning = invalid_override_warning(invalid.trim());
+            assert!(warning.contains(WIRE_VERSION_OVERRIDE_ENV_VAR));
+            assert!(warning.contains(invalid.trim()));
+            assert!(warning.contains(DEFAULT_WIRE_VERSION));
+        }
+    }
+
+    #[test]
+    fn missing_override_uses_default() {
+        assert_eq!(resolve_wire_version(None), DEFAULT_WIRE_VERSION);
     }
 }
