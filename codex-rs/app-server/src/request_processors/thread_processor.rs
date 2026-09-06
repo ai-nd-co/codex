@@ -2228,7 +2228,10 @@ impl ThreadRequestProcessor {
             )
             .await?;
         let (thread_history, resume_source_thread) = self
-            .load_resume_initial_history_from_stored_thread(stored_thread)
+            .load_resume_initial_history_from_stored_thread(
+                stored_thread,
+                /*requested_path*/ None,
+            )
             .await?;
         let response_history = thread_history.clone();
         let NewThread {
@@ -3694,7 +3697,7 @@ impl ThreadRequestProcessor {
                 .await
                 .map(|thread_history| (thread_history, None))
         } else if let Some(stored_thread) = stored_thread_from_running_probe {
-            self.load_resume_initial_history_from_stored_thread(*stored_thread)
+            self.load_resume_initial_history_from_stored_thread(*stored_thread, path.as_ref())
                 .await
                 .map(|(thread_history, stored_thread)| (thread_history, Some(stored_thread)))
         } else {
@@ -3707,7 +3710,7 @@ impl ThreadRequestProcessor {
                 .await
             {
                 Ok(stored_thread) => self
-                    .load_resume_initial_history_from_stored_thread(stored_thread)
+                    .load_resume_initial_history_from_stored_thread(stored_thread, path.as_ref())
                     .await
                     .map(|(thread_history, stored_thread)| (thread_history, Some(stored_thread))),
                 Err(error) => Err(error),
@@ -4474,6 +4477,7 @@ impl ThreadRequestProcessor {
     async fn load_resume_initial_history_from_stored_thread(
         &self,
         stored_thread: StoredThread,
+        requested_path: Option<&PathBuf>,
     ) -> Result<(InitialHistory, StoredThread), JSONRPCErrorError> {
         if matches!(stored_thread.history_mode, ThreadHistoryMode::Paginated) {
             let model_context = self
@@ -4493,11 +4497,11 @@ impl ThreadRequestProcessor {
         }
 
         let thread_id = stored_thread.thread_id.to_string();
-        let rollout_path = stored_thread.rollout_path.clone();
+        // Only a caller-supplied path bypasses the store's verified ID resolution.
         let mut stored_thread = self
             .read_stored_thread_for_resume(
                 &thread_id,
-                rollout_path.as_ref(),
+                requested_path,
                 /*include_history*/ true,
             )
             .await?;
