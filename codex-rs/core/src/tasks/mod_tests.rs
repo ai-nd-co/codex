@@ -19,6 +19,10 @@ use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 
 #[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "The test holds the active-turn lock to exercise a blocked scheduler."
+)]
 async fn automatic_manager_progress_consumed_while_scheduler_waits_does_not_start_empty_turn() {
     use codex_protocol::AgentPath;
     use codex_protocol::protocol::InterAgentCommunication;
