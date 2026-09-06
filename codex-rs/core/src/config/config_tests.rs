@@ -11703,9 +11703,9 @@ fn automatic_completion_delivery_changes_only_root_guidance() {
     let root = hints.root.expect("root hint").body();
     let child = hints.subagent.expect("child hint").body();
 
-    assert!(root.contains("Terminal worker results arrive automatically"));
+    assert!(root.contains("Worker progress and terminal results arrive automatically"));
     assert!(!root.contains("When calling `wait_agent`"));
-    assert!(!child.contains("Terminal worker results arrive automatically"));
+    assert!(!child.contains("Worker progress and terminal results arrive automatically"));
     assert!(child.contains("When calling `wait_agent`"));
 }
 

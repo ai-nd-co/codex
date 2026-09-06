@@ -1,7 +1,8 @@
 //! Shared argument parsing and dispatch for the v2 agent messaging tools.
 //!
 //! `send_message` and `followup_task` share the same submission path and differ only in whether the
-//! resulting `InterAgentCommunication` should wake the target immediately.
+//! resulting `InterAgentCommunication` requests a turn. The receiving root may also wake for
+//! queued messages when automatic notifications are enabled.
 
 use super::analytics::ToolCallAnalytics;
 use super::*;

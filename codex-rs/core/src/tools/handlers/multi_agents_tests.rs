@@ -3325,8 +3325,10 @@ async fn wait_agent_returns_final_status_without_timeout() {
     assert_eq!(success, None);
 }
 
+#[test_case::test_case(false; "queue_only")]
+#[test_case::test_case(true; "automatic_manager_progress")]
 #[tokio::test]
-async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
+async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity(trigger_turn: bool) {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     let root = manager
@@ -3395,7 +3397,7 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
                 AgentPath::root(),
                 Vec::new(),
                 "completed".to_string(),
-                /*trigger_turn*/ false,
+                trigger_turn,
             ),
             Default::default(),
         )
@@ -3416,6 +3418,17 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
         }
     );
     assert_eq!(success, None);
+    // The wait reports activity; the running turn consumes the same mailbox.
+    let (mail, _) = session
+        .input_queue
+        .get_pending_input(&session.active_turn)
+        .await;
+    assert_eq!(mail.len(), 1);
+    session
+        .maybe_start_turn_for_pending_work_with_sub_id("after-wait".to_string())
+        .await;
+    assert!(session.active_turn.lock().await.is_none());
+    assert!(!session.input_queue.has_pending_mailbox_items().await);
 }
 
 #[tokio::test]

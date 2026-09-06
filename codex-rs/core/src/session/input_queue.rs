@@ -86,7 +86,14 @@ pub(crate) struct InputQueue {
 struct PendingMailboxCommunication {
     communication: InterAgentCommunication,
     start_options: TurnStartOptions,
+    wake_turn: bool,
     _diagnostics_guard: GaugeGuard,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MailboxWakePolicy {
+    FromMessage,
+    NotifyRoot,
 }
 
 impl InputQueue {
@@ -126,12 +133,30 @@ impl InputQueue {
         communication: InterAgentCommunication,
         start_options: TurnStartOptions,
     ) {
+        self.enqueue_mailbox_communication_with_policy(
+            communication,
+            start_options,
+            MailboxWakePolicy::FromMessage,
+        )
+        .await;
+    }
+
+    pub(crate) async fn enqueue_mailbox_communication_with_policy(
+        &self,
+        communication: InterAgentCommunication,
+        start_options: TurnStartOptions,
+        wake_policy: MailboxWakePolicy,
+    ) {
+        // Wake eligibility is separate from message kind: encrypted messages use
+        // trigger_turn to distinguish MESSAGE from NEW_TASK in model input.
+        let wake_turn = communication.trigger_turn || wake_policy == MailboxWakePolicy::NotifyRoot;
         self.mailbox_pending_mails
             .lock()
             .await
             .push_back(PendingMailboxCommunication {
                 communication,
                 start_options,
+                wake_turn,
                 _diagnostics_guard: PENDING_MAILBOX_MESSAGES.track(),
             });
         self.activity_tx.send_replace(InputQueueActivity::Mailbox);
@@ -141,12 +166,13 @@ impl InputQueue {
         !self.mailbox_pending_mails.lock().await.is_empty()
     }
 
+    /// Includes automatic root notifications without changing the envelope's task semantics.
     pub(crate) async fn has_trigger_turn_mailbox_items(&self) -> bool {
         self.mailbox_pending_mails
             .lock()
             .await
             .iter()
-            .any(|mail| mail.communication.trigger_turn)
+            .any(|mail| mail.wake_turn)
     }
 
     pub(crate) async fn drain_mailbox_input_items(&self) -> (Vec<TurnInput>, TurnStartOptions) {

@@ -84,10 +84,36 @@ pub async fn inter_agent_communication(
     communication: InterAgentCommunication,
     start_options: codex_protocol::turn_input::TurnStartOptions,
 ) {
-    let trigger_turn = communication.trigger_turn;
-    sess.input_queue
-        .enqueue_mailbox_communication(communication, start_options)
-        .await;
+    let notify_root = if !communication.trigger_turn
+        && communication.recipient.is_root()
+        && !communication.author.is_root()
+    {
+        // The receiving root owns notification policy, including when a worker has
+        // different settings. Keep the payload and worker lifecycle unchanged.
+        let state = sess.state.lock().await;
+        let configuration = &state.session_configuration;
+        !configuration.session_source.is_non_root_agent()
+            && configuration
+                .original_config_do_not_use
+                .multi_agent_v2
+                .automatic_completion_delivery
+    } else {
+        false
+    };
+    let trigger_turn = communication.trigger_turn || notify_root;
+    if notify_root {
+        sess.input_queue
+            .enqueue_mailbox_communication_with_policy(
+                communication,
+                start_options,
+                super::input_queue::MailboxWakePolicy::NotifyRoot,
+            )
+            .await;
+    } else {
+        sess.input_queue
+            .enqueue_mailbox_communication(communication, start_options)
+            .await;
+    }
     crate::agent_communication::emit_agent_communication_receive(&sub_id);
     if trigger_turn || sess.has_outstanding_durable_sleep() {
         sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)

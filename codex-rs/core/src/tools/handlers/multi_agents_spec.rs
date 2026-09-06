@@ -197,7 +197,7 @@ pub fn create_send_message_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "send_message".to_string(),
-        description: "Send a message to an existing agent. The message will be delivered promptly. Does not trigger a new turn."
+        description: "Send a message to an existing agent. The message will be delivered promptly without interrupting active work. An idle root with automatic notifications enabled starts a turn; other idle agents keep the message queued."
             .to_string(),
         strict: false,
         defer_loading: None,

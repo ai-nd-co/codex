@@ -2320,7 +2320,7 @@
       "additionalProperties": false,
       "properties": {
         "automatic_completion_delivery": {
-          "description": "Deliver terminal subagent completions to idle root agents without polling.",
+          "description": "Deliver worker progress and terminal completions to idle root agents without polling.",
           "type": "boolean"
         },
         "default_wait_timeout_ms": {

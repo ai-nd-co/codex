@@ -425,6 +425,227 @@ async fn wait_for_turn_complete(codex: &CodexThread) {
     wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 }
 
+#[test_case(false; "plaintext")]
+#[test_case(true; "encrypted")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn automatic_manager_progress_wakes_idle_root_once(encrypted: bool) -> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let response = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            ev_response_created("progress"),
+            ev_completed("progress"),
+        ]),
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.multi_agent_v2.automatic_completion_delivery = true;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    let mut communication = InterAgentCommunication::new(
+        AgentPath::try_from("/root/worker").expect("worker"),
+        AgentPath::root(),
+        Vec::new(),
+        "worker is still testing".to_string(),
+        /*trigger_turn*/ false,
+    );
+    if encrypted {
+        communication.content.clear();
+        communication.encrypted_content = Some("opaque encrypted progress".to_string());
+    }
+    test.codex
+        .submit(Op::InterAgentCommunication {
+            communication,
+            start_options: Default::default(),
+        })
+        .await?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        wait_for_turn_complete(test.codex.as_ref()),
+    )
+    .await
+    .expect("idle manager must wake for progress without owner input");
+    let request = response.single_request();
+    let mail = request.inputs_of_type("agent_message");
+    assert_eq!(mail.len(), 1);
+    assert_eq!(mail[0]["author"], "/root/worker");
+    if encrypted {
+        assert_eq!(
+            mail[0]["content"][0]["text"],
+            "Message Type: MESSAGE\nTask name: /root\nSender: /root/worker\nPayload:\n"
+        );
+        assert_eq!(
+            mail[0]["content"][1]["encrypted_content"],
+            "opaque encrypted progress"
+        );
+    } else {
+        assert_eq!(mail[0]["content"][0]["text"], "worker is still testing");
+    }
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            wait_for_event(test.codex.as_ref(), |event| matches!(
+                event,
+                EventMsg::TurnStarted(_)
+            ))
+        )
+        .await
+        .is_err(),
+        "consumed progress must not start an empty duplicate turn"
+    );
+    assert_eq!(response.requests().len(), 1);
+    Ok(())
+}
+
+#[test_case(false, false; "progress_during_reasoning")]
+#[test_case(true, false; "progress_after_answer_boundary")]
+#[test_case(false, true; "completion_during_reasoning")]
+#[test_case(true, true; "completion_after_answer_boundary")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn automatic_manager_progress_coalesces_with_completion_without_steer(
+    after_answer: bool,
+    completion: bool,
+) {
+    let (release_tx, release_rx) = oneshot::channel();
+    let mut initial = vec![chunk(ev_response_created("busy"))];
+    if after_answer {
+        initial.push(chunk(responses::ev_assistant_message(
+            "answer",
+            "initial answer",
+        )));
+    } else {
+        initial.push(chunk(ev_reasoning_item_added(
+            "thinking",
+            &["still thinking"],
+        )));
+    }
+    initial.push(gated_chunk(release_rx, vec![ev_completed("busy")]));
+    let (server, _) =
+        start_streaming_sse_server(vec![initial, response_completed_chunks("mail")]).await;
+    let codex = test_codex()
+        .with_config(|config| config.multi_agent_v2.automatic_completion_delivery = true)
+        .build_with_streaming_server(&server)
+        .await
+        .expect("build manager")
+        .codex;
+    submit_user_input(&codex, "keep working").await;
+    if after_answer {
+        wait_for_agent_message(&codex, "initial answer").await;
+    } else {
+        wait_for_reasoning_item_started(&codex).await;
+    }
+    for text in ["progress one", "progress two"] {
+        submit_queue_only_agent_mail(&codex, text).await;
+    }
+    if completion {
+        codex
+            .submit(Op::InterAgentCommunication {
+                communication: InterAgentCommunication::new(
+                    AgentPath::try_from("/root/worker").expect("worker path"),
+                    AgentPath::root(),
+                    Vec::new(),
+                    "FINAL_ANSWER: finished".to_string(),
+                    /*trigger_turn*/ true,
+                ),
+                start_options: Default::default(),
+            })
+            .await
+            .expect("completion");
+    }
+    assert_eq!(server.requests().await.len(), 1);
+    release_tx.send(()).expect("busy turn was not cancelled");
+    wait_for_turn_complete(&codex).await;
+    if after_answer {
+        wait_for_turn_complete(&codex).await;
+    }
+    let requests = server.requests().await;
+    assert_eq!(requests.len(), 2);
+    let last: Value = from_slice(&requests[1]).expect("mail request");
+    let mail = last["input"]
+        .as_array()
+        .expect("input")
+        .iter()
+        .filter(|item| item["type"] == "agent_message")
+        .map(|item| item["content"][0]["text"].clone())
+        .collect::<Vec<_>>();
+    let mut expected = vec![json!("progress one"), json!("progress two")];
+    if completion {
+        expected.push(json!("FINAL_ANSWER: finished"));
+    }
+    assert_eq!(mail, expected);
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            wait_for_event(&codex, |event| matches!(
+                event,
+                EventMsg::TurnStarted(_) | EventMsg::TurnAborted(_)
+            )),
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(server.requests().await.len(), 2);
+    server.shutdown().await;
+}
+
+#[test_case(false, "/root", "/root/worker"; "disabled")]
+#[test_case(true, "/root/worker", "/root/sibling"; "non_root_recipient")]
+#[test_case(true, "/root", "/root"; "root_author")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn automatic_manager_progress_preserves_queue_only_messages(
+    enabled: bool,
+    recipient: &str,
+    author: &str,
+) -> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let response = responses::mount_sse_once(&server, responses::sse_completed("owner")).await;
+    let test = test_codex()
+        .with_config(move |config| config.multi_agent_v2.automatic_completion_delivery = enabled)
+        .build_with_auto_env(&server)
+        .await?;
+    test.codex
+        .submit(Op::InterAgentCommunication {
+            communication: InterAgentCommunication::new(
+                AgentPath::try_from(author).expect("author"),
+                AgentPath::try_from(recipient).expect("recipient"),
+                Vec::new(),
+                "queued progress".to_string(),
+                /*trigger_turn*/ false,
+            ),
+            start_options: Default::default(),
+        })
+        .await?;
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            wait_for_event(test.codex.as_ref(), |event| matches!(
+                event,
+                EventMsg::TurnStarted(_)
+            )),
+        )
+        .await
+        .is_err()
+    );
+    assert!(response.requests().is_empty());
+    test.codex
+        .start_turn_if_idle(TurnInputRequest::new(TurnInput::ResponseItem(
+            responses::user_message_item("read queued mail"),
+        )))
+        .await?;
+    wait_for_turn_complete(test.codex.as_ref()).await;
+    let request = response.single_request();
+    assert_eq!(
+        request.inputs_of_type("agent_message").len(),
+        1,
+        "{}",
+        request.body_json()
+    );
+    Ok(())
+}
+
 async fn wait_for_sleep_item_started(codex: &CodexThread, call_id: &str, duration_ms: u64) {
     let event = wait_for_event(codex, |event| {
         matches!(
@@ -632,8 +853,10 @@ async fn steer_interrupts_wait_agent_and_is_sent_in_follow_up_request() {
     server.shutdown().await;
 }
 
+#[test_case(false; "queue_only")]
+#[test_case(true; "automatic_manager_progress")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn any_new_input_interrupts_sleep() {
+async fn any_new_input_interrupts_sleep(automatic_delivery: bool) {
     const FIRST_SLEEP_CALL_ID: &str = "sleep-call-1";
     const SECOND_SLEEP_CALL_ID: &str = "sleep-call-2";
     const SLEEP_DURATION_MS: u64 = 3_600_000;
@@ -669,11 +892,12 @@ async fn any_new_input_interrupts_sleep() {
     .await;
     let codex = test_codex()
         .with_model("gpt-5.4")
-        .with_config(|config| {
+        .with_config(move |config| {
             config
                 .features
                 .enable(Feature::CurrentTimeReminder)
                 .expect("test config should allow current-time reminders");
+            config.multi_agent_v2.automatic_completion_delivery = automatic_delivery;
             config.current_time_reminder = Some(CurrentTimeReminderConfig {
                 sleep_tool: true,
                 ..CurrentTimeReminderConfig::default()

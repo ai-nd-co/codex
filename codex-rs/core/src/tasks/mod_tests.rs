@@ -18,6 +18,70 @@ use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 
+#[tokio::test]
+async fn automatic_manager_progress_consumed_while_scheduler_waits_does_not_start_empty_turn() {
+    use codex_protocol::AgentPath;
+    use codex_protocol::protocol::InterAgentCommunication;
+
+    let (session, _, _) = crate::session::tests::make_session_and_context_with_rx().await;
+    let mail = InterAgentCommunication::new(
+        AgentPath::try_from("/root/worker").expect("worker"),
+        AgentPath::root(),
+        Vec::new(),
+        "progress".to_string(),
+        /*trigger_turn*/ true,
+    );
+    session
+        .input_queue
+        .enqueue_mailbox_communication(mail.clone(), Default::default())
+        .await;
+    let active = session.active_turn.lock().await;
+    let wake = session.maybe_start_turn_for_pending_work_with_sub_id("stale-wakeup".to_string());
+    tokio::pin!(wake);
+    assert!(futures::poll!(&mut wake).is_pending());
+    assert_eq!(
+        session.input_queue.drain_mailbox_input_items().await.0,
+        vec![crate::session::TurnInput::InterAgentCommunication(mail)],
+    );
+    drop(active);
+    wake.await;
+    assert!(session.active_turn.lock().await.is_none());
+    assert!(!session.input_queue.has_pending_mailbox_items().await);
+}
+
+#[tokio::test]
+async fn automatic_manager_progress_busy_to_idle_keeps_pending_wakeup() {
+    use codex_protocol::AgentPath;
+    use codex_protocol::protocol::InterAgentCommunication;
+
+    let (session, _, _) = crate::session::tests::make_session_and_context_with_rx().await;
+    *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+    let mail = InterAgentCommunication::new(
+        AgentPath::try_from("/root/worker").expect("worker"),
+        AgentPath::root(),
+        Vec::new(),
+        "progress".to_string(),
+        /*trigger_turn*/ true,
+    );
+    session
+        .input_queue
+        .enqueue_mailbox_communication(mail, Default::default())
+        .await;
+    session
+        .maybe_start_turn_for_pending_work_with_sub_id("busy".to_string())
+        .await;
+    assert!(session.input_queue.has_trigger_turn_mailbox_items().await);
+    *session.active_turn.lock().await = None;
+    session
+        .maybe_start_turn_for_pending_work_with_sub_id("idle".to_string())
+        .await;
+    assert!(session.active_turn.lock().await.is_some());
+    assert!(!session.input_queue.has_pending_mailbox_items().await);
+    session
+        .abort_all_tasks(codex_protocol::protocol::TurnAbortReason::Replaced)
+        .await;
+}
+
 fn test_session_telemetry() -> SessionTelemetry {
     let exporter = InMemoryMetricExporter::default();
     let metrics = MetricsClient::new(

@@ -421,8 +421,8 @@ impl Session {
 
     /// Starts a regular turn when the session is idle and pending work is waiting.
     ///
-    /// Pending work includes mailbox mail marked with `trigger_turn`, or any mailbox mail while
-    /// an outstanding durable sleep is attached to the thread.
+    /// Pending work includes explicit task mail, automatic root notifications, or any mailbox
+    /// mail while an outstanding durable sleep is attached to the thread.
     ///
     /// This helper generates a fresh sub-id for the synthetic turn before delegating to the
     /// explicit-sub-id variant.
@@ -440,28 +440,31 @@ impl Session {
     ///
     /// The turn is created only when the session is idle and mailbox mail either requests a turn
     /// or can wake an outstanding durable sleep.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "idle reservation and mailbox consumption must remain atomic"
+    )]
     pub(crate) async fn maybe_start_turn_for_pending_work_with_sub_id(
         self: &Arc<Self>,
         sub_id: String,
     ) {
-        if !self.input_queue.has_pending_mailbox_items().await
-            || (!self.input_queue.has_trigger_turn_mailbox_items().await
-                && !self.has_outstanding_durable_sleep())
-        {
-            return;
-        }
-
-        let turn_state = {
+        let (turn_state, input, mut start_options) = {
             let mut active_turn = self.active_turn.lock().await;
-            if active_turn.is_some() {
+            if active_turn.is_some()
+                || (!self.input_queue.has_trigger_turn_mailbox_items().await
+                    && !self.has_outstanding_durable_sleep())
+            {
+                return;
+            }
+            // A busy turn or another wakeup may have consumed the mail while we
+            // waited for this lock. Claim only the mail that still exists.
+            let (input, start_options) = self.input_queue.drain_mailbox_input_items().await;
+            if input.is_empty() {
                 return;
             }
             let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
-            Arc::clone(&active_turn.turn_state)
+            (Arc::clone(&active_turn.turn_state), input, start_options)
         };
-
-        let (input, mut start_options) =
-            self.input_queue.get_pending_input(&self.active_turn).await;
         if !input.iter().any(
             |item| matches!(item, TurnInput::InterAgentCommunication(mail) if mail.trigger_turn),
         ) {
